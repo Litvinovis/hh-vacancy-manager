@@ -1,0 +1,30 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: hh-vacancy-manager
+  datasource:
+    url: jdbc:sqlite:${user.dir}/data/vacancies.db
+    driver-class-name: org.sqlite.JDBC
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema.sql
+  web:
+    resources:
+      static-locations: classpath:/static/
+      cache:
+        period: 0
+
+app:
+  data-dir: ${user.dir}/data
+  scoring:
+    rules-file: ${user.dir}/config/rules.yaml
+  search:
+    profiles-dir: ${user.dir}/config/profiles
+
+logging:
+  level:
+    com.hh.gui: DEBUG
+    org.springframework.jdbc: DEBUG

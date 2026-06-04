@@ -1,0 +1,90 @@
+package com.hh.gui.model;
+
+import java.time.Instant;
+
+public class Vacancy {
+    private Long id;
+    private String hhId;
+    private String title;
+    private String company;
+    private Integer salaryFrom;
+    private Integer salaryTo;
+    private String currency;
+    private String address;
+    private String district;
+    private String url;
+    private Integer aiScore;
+    private String aiVerdict;
+    private String aiReason;
+    private String description;
+    private String status;
+    private String rejectionReason;
+    private String notes;
+    private String appliedAt;
+    private String createdAt;
+    private String updatedAt;
+
+    // Default constructor
+    public Vacancy() {}
+
+    // Getters and Setters
+    public Long getId() { return id; }
+    public void setId(Long id) { this.id = id; }
+
+    public String getHhId() { return hhId; }
+    public void setHhId(String hhId) { this.hhId = hhId; }
+
+    public String getTitle() { return title; }
+    public void setTitle(String title) { this.title = title; }
+
+    public String getCompany() { return company; }
+    public void setCompany(String company) { this.company = company; }
+
+    public Integer getSalaryFrom() { return salaryFrom; }
+    public void setSalaryFrom(Integer salaryFrom) { this.salaryFrom = salaryFrom; }
+
+    public Integer getSalaryTo() { return salaryTo; }
+    public void setSalaryTo(Integer salaryTo) { this.salaryTo = salaryTo; }
+
+    public String getCurrency() { return currency; }
+    public void setCurrency(String currency) { this.currency = currency; }
+
+    public String getAddress() { return address; }
+    public void setAddress(String address) { this.address = address; }
+
+    public String getDistrict() { return district; }
+    public void setDistrict(String district) { this.district = district; }
+
+    public String getUrl() { return url; }
+    public void setUrl(String url) { this.url = url; }
+
+    public Integer getAiScore() { return aiScore; }
+    public void setAiScore(Integer aiScore) { this.aiScore = aiScore; }
+
+    public String getAiVerdict() { return aiVerdict; }
+    public void setAiVerdict(String aiVerdict) { this.aiVerdict = aiVerdict; }
+
+    public String getAiReason() { return aiReason; }
+    public void setAiReason(String aiReason) { this.aiReason = aiReason; }
+
+    public String getDescription() { return description; }
+    public void setDescription(String description) { this.description = description; }
+
+    public String getStatus() { return status; }
+    public void setStatus(String status) { this.status = status; }
+
+    public String getRejectionReason() { return rejectionReason; }
+    public void setRejectionReason(String rejectionReason) { this.rejectionReason = rejectionReason; }
+
+    public String getNotes() { return notes; }
+    public void setNotes(String notes) { this.notes = notes; }
+
+    public String getAppliedAt() { return appliedAt; }
+    public void setAppliedAt(String appliedAt) { this.appliedAt = appliedAt; }
+
+    public String getCreatedAt() { return createdAt; }
+    public void setCreatedAt(String createdAt) { this.createdAt = createdAt; }
+
+    public String getUpdatedAt() { return updatedAt; }
+    public void setUpdatedAt(String updatedAt) { this.updatedAt = updatedAt; }
+}
