@@ -1,0 +1,15 @@
+[Unit]
+Description=HH Vacancy Manager
+After=network.target
+
+[Service]
+Type=simple
+User=clawd
+WorkingDirectory=/opt/hh-gui
+ExecStart=/usr/bin/java -jar /opt/hh-gui/hh-gui.jar
+Restart=always
+RestartSec=10
+Environment=SPRING_CONFIG_LOCATION=file:/opt/hh-gui/config/
+
+[Install]
+WantedBy=multi-user.target

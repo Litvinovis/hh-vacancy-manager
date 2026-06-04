@@ -1,0 +1,107 @@
+name: Build & Deploy — HH Vacancy Manager
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Build & Test
+        run: cd backend && mvn package -B
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hh-gui-jar
+          path: backend/target/hh-gui-*.jar
+          retention-days: 7
+
+  deploy:
+    needs: build-and-test
+    if: github.event_name != 'pull_request'
+    runs-on: self-hosted
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        run: |
+          echo "JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64" >> $GITHUB_ENV
+          echo "/usr/lib/jvm/java-25-openjdk-amd64/bin" >> $GITHUB_PATH
+
+      - name: Build
+        run: cd backend && mvn package -B -DskipTests
+
+      - name: Deploy
+        run: |
+          DEPLOY_DIR=/opt/hh-gui
+          JAR_NAME=hh-gui.jar
+          SERVICE=hh-gui
+
+          sudo mkdir -p ${DEPLOY_DIR}
+
+          # Backup
+          sudo cp ${DEPLOY_DIR}/${JAR_NAME} ${DEPLOY_DIR}/${JAR_NAME}.backup.$(date +%Y%m%d_%H%M) 2>/dev/null || true
+
+          # Deploy
+          sudo cp backend/target/hh-gui-*.jar ${DEPLOY_DIR}/${JAR_NAME}
+
+          # Copy config if not exists
+          if [ ! -f "${DEPLOY_DIR}/config/rules.yaml" ]; then
+            sudo cp -r config ${DEPLOY_DIR}/
+          fi
+
+          # Restart
+          sudo systemctl restart ${SERVICE}
+
+      - name: Smoke test
+        run: |
+          echo "Waiting for app to start..."
+          sleep 10
+          STATUS=$(sudo systemctl is-active hh-gui)
+          if [ "$STATUS" != "active" ]; then
+            echo "❌ App failed to start, rolling back..."
+            LATEST_BACKUP=$(ls -t /opt/hh-gui/hh-gui.jar.backup.* 2>/dev/null | sed -n '2p')
+            if [ -n "$LATEST_BACKUP" ]; then
+              sudo cp "$LATEST_BACKUP" /opt/hh-gui/hh-gui.jar
+              sudo systemctl restart hh-gui
+            fi
+            exit 1
+          fi
+          echo "✅ HH Vacancy Manager is running"
+
+          # HTTP check
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/api/stats)
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "❌ HTTP check failed (code: $HTTP_CODE)"
+            exit 1
+          fi
+          echo "✅ HTTP check passed (code: $HTTP_CODE)"
+
+      - name: Notify Telegram
+        if: always() && github.event_name != 'pull_request'
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            MSG="✅ *HH Vacancy Manager* задеплоен%0Aветка: \`${{ github.ref_name }}\`%0Aкоммит: ${{ github.sha }}"
+          else
+            MSG="❌ *HH Vacancy Manager* — деплой упал%0Aсмотри: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          fi
+          curl -s "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}&text=${MSG}&parse_mode=Markdown" > /dev/null
