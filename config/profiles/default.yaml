@@ -129,7 +129,7 @@ sources:
 
   # Авито Работа
   avito:
-    enabled: true
+    enabled: false
     type: "web"
     base_url: "https://www.avito.ru"
     delay: 2.0

@@ -331,7 +331,7 @@ def send_telegram_report(db: sqlite3.Connection, config: dict, profile: str):
 def main():
     parser = argparse.ArgumentParser(description="Единый пайплайн сбора вакансий")
     parser.add_argument("--profile", default="mom", help="Профиль поиска")
-    parser.add_argument("--sources", default="hh,avito", help="Источники (hh,avito,telegram)")
+    parser.add_argument("--sources", default="hh", help="Источники (hh,avito,telegram)")
     parser.add_argument("--dry-run", action="store_true", help="Тест без сохранения")
     parser.add_argument("--no-notify", action="store_true", help="Не отправлять уведомления")
     args = parser.parse_args()
