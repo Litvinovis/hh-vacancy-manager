@@ -1,0 +1,18 @@
+# Environment
+.env
+
+# Build
+backend/target/
+*.class
+
+# Data
+data/
+*.db
+
+# IDE
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db

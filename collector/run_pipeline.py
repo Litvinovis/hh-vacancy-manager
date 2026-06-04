@@ -238,6 +238,21 @@ def send_telegram_report(db: sqlite3.Connection, config: dict, profile: str):
     min_score = notif_cfg.get("min_score", 60)
     max_per_day = notif_cfg.get("max_per_day", 10)
 
+    # Поддержка переменных окружения в значениях конфига
+    if chat_id.startswith("${") and chat_id.endswith("}"):
+        env_var = chat_id[2:-1]
+        chat_id = os.environ.get(env_var, "")
+
+    # Если не задан — берём из Hermes .env
+    if not chat_id:
+        hermes_env = Path.home() / ".hermes" / ".env"
+        if hermes_env.exists():
+            with open(hermes_env) as f:
+                for line in f:
+                    if line.strip().startswith("TELEGRAM_CHAT_ID="):
+                        chat_id = line.strip().split("=", 1)[1]
+                        break
+
     if not chat_id:
         print("⚠️ Не указан telegram_chat_id", file=sys.stderr)
         return
@@ -275,6 +290,15 @@ def send_telegram_report(db: sqlite3.Connection, config: dict, profile: str):
 
     # Отправляем через Telegram Bot API
     bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    if not bot_token:
+        # Пробуем прочитать из ~/.hermes/.env
+        hermes_env = Path.home() / ".hermes" / ".env"
+        if hermes_env.exists():
+            with open(hermes_env) as f:
+                for line in f:
+                    if line.strip().startswith("TELEGRAM_BOT_TOKEN="):
+                        bot_token = line.strip().split("=", 1)[1]
+                        break
     if bot_token:
         import urllib.request
         import urllib.parse
