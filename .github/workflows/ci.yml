@@ -1,4 +1,4 @@
-name: CI
+name: Build & Test
 
 on:
   push:
@@ -26,18 +26,9 @@ jobs:
       - name: Run tests
         run: cd backend && mvn test
 
-  lint:
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Upload JAR artifact
+        uses: actions/upload-artifact@v4
         with:
-          python-version: '3.11'
-
-      - name: Lint Python collector
-        run: |
-          pip install flake8
-          flake8 collector/ --max-line-length=120 --ignore=E501,W503 || true
+          name: hh-gui-jar
+          path: backend/target/hh-gui-*.jar
+          retention-days: 7
