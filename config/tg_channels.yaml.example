@@ -1,0 +1,17 @@
+# Telegram — настройки парсинга каналов
+# Получить api_id и api_hash: https://my.telegram.org
+
+api_id: null  # Заменить на свой
+api_hash: null  # Заменить на свой
+
+# Каналы для мониторинга (username без @)
+channels:
+  - "ufa_rabota"
+  - "avito_rabota_ufa"
+  - "ufa_vacancies"
+  - "rabota_ufa"
+  - "ufa_job"
+
+# Лимиты
+limit: 100        # Макс. постов с канала
+days_back: 7      # Сколько дней назад смотреть
