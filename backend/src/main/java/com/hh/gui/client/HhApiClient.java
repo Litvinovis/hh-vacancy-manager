@@ -1,13 +1,14 @@
 package com.hh.gui.client;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hh.gui.model.Vacancy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+import org.w3c.dom.NodeList;
 
+import javax.xml.parsers.DocumentBuilderFactory;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
@@ -16,117 +17,92 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
- * HH.ru Search API client with pagination.
- * Replaces RSS parser — fetches ALL vacancies matching query, not just 20 latest.
+ * HH.ru client — uses RSS for collection (works without API token).
+ * HH Search API is optional (requires registered app / whitelisted IP).
  */
 @Component
 public class HhApiClient {
 
     private static final Logger log = LoggerFactory.getLogger(HhApiClient.class);
-    private static final String API_BASE = "https://api.hh.ru/vacancies";
-    private static final int PER_PAGE = 100;
-    private static final int MAX_PAGES = 20;
+    private static final String RSS_BASE = "https://hh.ru/search/vacancy/rss";
     private static final int REQUEST_DELAY_MS = 1500;
 
-    private final ObjectMapper mapper;
-
-    public HhApiClient() {
-        this.mapper = new ObjectMapper();
-        this.mapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
-    }
-
     /**
-     * Fetch all vacancies for a query with full pagination.
+     * Fetch vacancies via RSS for a single query.
+     * RSS returns up to 20 latest vacancies per query.
      */
-    public List<Vacancy> fetchAll(String query, int area, String schedule, int salaryMin) {
-        List<Vacancy> all = new ArrayList<>();
-        int page = 0;
-        int totalPages = 1;
-        int totalFound = 0;
-
-        while (page < totalPages && page < MAX_PAGES) {
-            try {
-                String url = buildUrl(query, area, schedule, salaryMin, page);
-                log.debug("HH API: page {}/{} — {}", page + 1, totalPages, url);
-
-                String json = httpGet(url);
-                if (json == null) break;
-
-                Map<String, Object> response = mapper.readValue(json, new TypeReference<Map<String, Object>>() {});
-
-                if (page == 0) {
-                    totalFound = getInt(response, "found");
-                    totalPages = getInt(response, "pages");
-                    log.info("HH API: '{}' — found {} vacancies, {} pages", query, totalFound, totalPages);
-                }
-
-                List<Map<String, Object>> items = getList(response, "items");
-                if (items == null || items.isEmpty()) break;
-
-                for (Map<String, Object> item : items) {
-                    Vacancy v = parseVacancy(item);
-                    if (v != null) {
-                        v.setSource("hh");
-                        v.setSourceQuery(query);
-                        v.setRemote("remote".equals(schedule));
-                        all.add(v);
-                    }
-                }
-
-                page++;
-                if (page < totalPages) {
-                    Thread.sleep(REQUEST_DELAY_MS);
-                }
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                break;
-            } catch (Exception e) {
-                log.error("HH API error on page {}: {}", page, e.getMessage());
-                break;
+    public List<Vacancy> fetchRss(String query, int area, String schedule, int salaryMin) {
+        List<Vacancy> results = new ArrayList<>();
+        try {
+            StringBuilder url = new StringBuilder(RSS_BASE);
+            url.append("?text=").append(URLEncoder.encode(query, StandardCharsets.UTF_8));
+            url.append("&area=").append(area);
+            url.append("&per_page=20");
+            if (schedule != null && !schedule.isEmpty()) {
+                url.append("&schedule=").append(schedule);
             }
-        }
+            if (salaryMin > 0) {
+                url.append("&salary=").append(salaryMin);
+            }
 
-        log.info("HH API: fetched {} vacancies for '{}' (area={}, schedule={})", all.size(), query, area, schedule);
-        return all;
+            log.debug("HH RSS: {}", url);
+
+            String xml = httpGet(url.toString());
+            if (xml == null) return results;
+
+            Document doc = DocumentBuilderFactory.newInstance()
+                .newDocumentBuilder()
+                .parse(new java.io.ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8)));
+
+            NodeList items = doc.getElementsByTagName("item");
+            for (int i = 0; i < items.getLength(); i++) {
+                Element item = (Element) items.item(i);
+                Vacancy v = parseRssItem(item);
+                if (v != null) {
+                    v.setSource("hh");
+                    v.setSourceQuery(query);
+                    v.setRemote("remote".equals(schedule));
+                    results.add(v);
+                }
+            }
+
+            log.info("HH RSS: fetched {} vacancies for '{}' (area={}, schedule={})", results.size(), query, area, schedule);
+        } catch (Exception e) {
+            log.error("HH RSS error for '{}': {}", query, e.getMessage());
+        }
+        return results;
     }
 
     /**
      * Fetch vacancies for multiple queries, deduplicating by HH ID.
      */
-    public List<Vacancy> fetchMultiple(List<String> queries, int area, String schedule, int salaryMin) {
+    public List<Vacancy> fetchMultipleRss(List<String> queries, int area, String schedule, int salaryMin) {
         Map<String, Vacancy> seen = new LinkedHashMap<>();
         for (String query : queries) {
-            List<Vacancy> batch = fetchAll(query, area, schedule, salaryMin);
+            List<Vacancy> batch = fetchRss(query, area, schedule, salaryMin);
             for (Vacancy v : batch) {
                 seen.putIfAbsent(v.getHhId(), v);
             }
+            try {
+                Thread.sleep(REQUEST_DELAY_MS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
         }
         return new ArrayList<>(seen.values());
-    }
-
-    private String buildUrl(String query, int area, String schedule, int salaryMin, int page) {
-        StringBuilder sb = new StringBuilder(API_BASE);
-        sb.append("?text=").append(URLEncoder.encode(query, StandardCharsets.UTF_8));
-        sb.append("&area=").append(area);
-        sb.append("&per_page=").append(PER_PAGE);
-        sb.append("&page=").append(page);
-        if (schedule != null && !schedule.isEmpty()) {
-            sb.append("&schedule=").append(schedule);
-        }
-        if (salaryMin > 0) {
-            sb.append("&salary=").append(salaryMin);
-        }
-        return sb.toString();
     }
 
     private String httpGet(String urlStr) throws Exception {
         URL url = new URL(urlStr);
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         conn.setRequestMethod("GET");
-        conn.setRequestProperty("User-Agent", "HHVacancyManager/1.0 (igrlitvinv11022@gmail.com)");
-        conn.setRequestProperty("Accept", "application/json");
+        conn.setRequestProperty("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+        conn.setRequestProperty("Accept", "application/rss+xml");
         conn.setConnectTimeout(15000);
         conn.setReadTimeout(30000);
 
@@ -140,50 +116,61 @@ public class HhApiClient {
             StringBuilder sb = new StringBuilder();
             String line;
             while ((line = reader.readLine()) != null) {
-                sb.append(line);
+                sb.append(line).append("\n");
             }
             return sb.toString();
         }
     }
 
-    @SuppressWarnings("unchecked")
-    private Vacancy parseVacancy(Map<String, Object> item) {
+    private Vacancy parseRssItem(Element item) {
         try {
             Vacancy v = new Vacancy();
 
-            String id = (String) item.get("id");
-            if (id == null || id.isEmpty()) return null;
-            v.setHhId(id);
-            v.setTitle((String) item.getOrDefault("name", ""));
+            String title = getText(item, "title");
+            String link = getText(item, "link");
+            String guid = getText(item, "guid");
+            String pubDate = getText(item, "pubDate");
+            String description = getText(item, "description");
 
-            Map<String, Object> employer = (Map<String, Object>) item.get("employer");
-            if (employer != null) {
-                v.setCompany((String) employer.getOrDefault("name", ""));
+            if (title == null || link == null) return null;
+
+            // Extract HH ID from link
+            String hhId = link.replaceAll(".*/vacancy/(\\d+).*", "$1");
+            if (hhId.isEmpty()) hhId = guid;
+
+            v.setHhId(hhId);
+            v.setTitle(title);
+            v.setUrl(link);
+            v.setPublishedAt(pubDate);
+
+            // Parse company from description
+            String descClean = description != null ? description.replaceAll("<[^>]+>", "").trim() : "";
+            v.setDescription(descClean.length() > 600 ? descClean.substring(0, 600) : descClean);
+
+            // Extract company
+            Pattern companyPattern = Pattern.compile("Вакансия компании:\\s*(.+?)(?:\\n|Создана|$)");
+            Matcher m = companyPattern.matcher(descClean);
+            if (m.find()) {
+                v.setCompany(m.group(1).trim());
             }
 
-            Map<String, Object> salary = (Map<String, Object>) item.get("salary");
-            if (salary != null) {
-                Object from = salary.get("from");
-                Object to = salary.get("to");
-                if (from instanceof Number) v.setSalaryFrom(((Number) from).intValue());
-                if (to instanceof Number) v.setSalaryTo(((Number) to).intValue());
-                v.setCurrency((String) salary.getOrDefault("currency", "RUR"));
+            // Extract salary
+            Pattern salaryPattern = Pattern.compile("от\\s*([\\d\\s]+)(?:\\s*до\\s*([\\d\\s]+))?\\s*([₽$€]|[A-Z]{3})");
+            m = salaryPattern.matcher(descClean);
+            if (m.find()) {
+                String from = m.group(1).replaceAll("\\s", "");
+                String to = m.group(2) != null ? m.group(2).replaceAll("\\s", "") : null;
+                String currency = m.group(3);
+                try { v.setSalaryFrom(Integer.parseInt(from)); } catch (NumberFormatException ignored) {}
+                if (to != null) try { v.setSalaryTo(Integer.parseInt(to)); } catch (NumberFormatException ignored) {}
+                v.setCurrency(currency);
             }
 
-            Map<String, Object> address = (Map<String, Object>) item.get("address");
-            if (address != null) {
-                v.setAddress((String) address.getOrDefault("raw", ""));
-            }
-
-            v.setUrl((String) item.getOrDefault("alternate_url", "https://hh.ru/vacancy/" + id));
-            v.setPublishedAt((String) item.getOrDefault("published_at", ""));
-
-            Map<String, Object> snippet = (Map<String, Object>) item.get("snippet");
-            if (snippet != null) {
-                String req = (String) snippet.getOrDefault("requirement", "");
-                String resp = (String) snippet.getOrDefault("responsibility", "");
-                String desc = (req != null ? req : "") + "\n" + (resp != null ? resp : "");
-                v.setDescription(desc.length() > 600 ? desc.substring(0, 600) : desc);
+            // Extract address/region
+            Pattern regionPattern = Pattern.compile("Регион:\\s*(.+?)(?:\\n|$)");
+            m = regionPattern.matcher(descClean);
+            if (m.find()) {
+                v.setAddress(m.group(1).trim());
             }
 
             v.setStatus("new");
@@ -193,22 +180,16 @@ public class HhApiClient {
 
             return v;
         } catch (Exception e) {
-            log.warn("Failed to parse vacancy: {}", e.getMessage());
+            log.warn("Failed to parse RSS item: {}", e.getMessage());
             return null;
         }
     }
 
-    @SuppressWarnings("unchecked")
-    private int getInt(Map<String, Object> map, String key) {
-        Object val = map.get(key);
-        if (val instanceof Number) return ((Number) val).intValue();
-        return 0;
-    }
-
-    @SuppressWarnings("unchecked")
-    private List<Map<String, Object>> getList(Map<String, Object> map, String key) {
-        Object val = map.get(key);
-        if (val instanceof List) return (List<Map<String, Object>>) val;
+    private String getText(Element parent, String tagName) {
+        NodeList nodes = parent.getElementsByTagName(tagName);
+        if (nodes.getLength() > 0) {
+            return nodes.item(0).getTextContent();
+        }
         return null;
     }
 }

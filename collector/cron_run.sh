@@ -19,7 +19,7 @@ LOG_FILE="$LOG_DIR/pipeline-$(date +%Y%m%d-%H%M%S).log"
   
   # Загружаем env из Hermes если .env проекта не содержит токен
   if grep -q '^# TELEGRAM_BOT_TOKEN=' "$PROJECT_DIR/.env" 2>/dev/null; then
-    export TELEGRAM_BOT_TOKEN=$(grep '^TELEGRAM_BOT_TOKEN=*** "$HOME/.hermes/.env" 2>/dev/null | head -1 | cut -d= -f2-)
+    export TELEGRAM_BOT_TOKEN=$(grep '^TELEGRAM_BOT_TOKEN=' "$HOME/.hermes/.env" 2>/dev/null | head -1 | cut -d= -f2-)
     export TELEGRAM_CHAT_ID=$(grep '^TELEGRAM_CHAT_ID=' "$HOME/.hermes/.env" 2>/dev/null | head -1 | cut -d= -f2-)
   fi
   

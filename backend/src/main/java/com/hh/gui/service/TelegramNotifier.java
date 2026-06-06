@@ -49,7 +49,7 @@ public class TelegramNotifier {
 
             String body = "chat_id=" + URLEncoder.encode(chatId, StandardCharsets.UTF_8)
                 + "&text=" + URLEncoder.encode(message, StandardCharsets.UTF_8)
-                + "&parse_mode=Markdown&disable_web_page_preview=true";
+                + "&parse_mode=HTML&disable_web_page_preview=true";
 
             try (OutputStream os = conn.getOutputStream()) {
                 os.write(body.getBytes(StandardCharsets.UTF_8));

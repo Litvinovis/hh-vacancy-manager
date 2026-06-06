@@ -58,8 +58,8 @@ public class VacancyPipelineService {
         int analyzed = analyzePending(profile);
         log.info("Step 3: {} vacancies AI-analyzed", analyzed);
 
-        // Step 4: Get approved for notification
-        List<Vacancy> approved = vacancyRepo.findUnnotifiedApproved(profile.salaryMin, 20);
+        // Step 4: Get approved for notification (min AI score = 50, max 10 per batch)
+        List<Vacancy> approved = vacancyRepo.findUnnotifiedApproved(50, 10);
         log.info("Step 4: {} approved unnotified vacancies", approved.size());
 
         // Step 5: Send Telegram report
@@ -84,7 +84,7 @@ public class VacancyPipelineService {
         // Local search (Ufa)
         if (profile.localQueries != null && !profile.localQueries.isEmpty()) {
             for (String query : profile.localQueries) {
-                List<Vacancy> batch = hhApiClient.fetchAll(query, profile.area, profile.schedule, profile.salaryMin);
+                List<Vacancy> batch = hhApiClient.fetchRss(query, profile.area, profile.schedule, profile.salaryMin);
                 for (Vacancy v : batch) {
                     v.setSourceQuery(query);
                     v.setRemote(false);
@@ -96,7 +96,7 @@ public class VacancyPipelineService {
         // Remote search (Russia)
         if (profile.remoteQueries != null && !profile.remoteQueries.isEmpty()) {
             for (String query : profile.remoteQueries) {
-                List<Vacancy> batch = hhApiClient.fetchAll(query, profile.remoteArea, "remote", profile.salaryMin);
+                List<Vacancy> batch = hhApiClient.fetchRss(query, profile.remoteArea, "remote", profile.salaryMin);
                 for (Vacancy v : batch) {
                     v.setSourceQuery(query);
                     v.setRemote(true);
@@ -177,10 +177,10 @@ public class VacancyPipelineService {
         List<Vacancy> remote = vacancies.stream().filter(Vacancy::isRemote).collect(Collectors.toList());
 
         StringBuilder sb = new StringBuilder();
-        sb.append("🔍 *Новые вакансии для ").append(profile.city).append("*\n\n");
+        sb.append("🔍 <b>Новые вакансии для ").append(escapeHtml(profile.city)).append("</b>\n\n");
 
         if (!local.isEmpty()) {
-            sb.append("🏢 Найдено ").append(local.size()).append(" вакансий в ").append(profile.city).append(":\n\n");
+            sb.append("🏢 Найдено ").append(local.size()).append(" вакансий в ").append(escapeHtml(profile.city)).append(":\n\n");
             for (int i = 0; i < local.size(); i++) {
                 appendVacancy(sb, i + 1, local.get(i));
             }
@@ -200,13 +200,22 @@ public class VacancyPipelineService {
         int score = v.getAiScore() != null ? v.getAiScore() : 0;
         String emoji = score >= 80 ? "🟢" : score >= 60 ? "🟡" : "🟠";
         String salary = formatSalary(v);
-        String company = v.getCompany() != null ? v.getCompany() : "компания не указана";
-        String reason = v.getAiReason() != null ? v.getAiReason() : "";
+        String company = v.getCompany() != null ? escapeHtml(v.getCompany()) : "компания не указана";
+        String reason = v.getAiReason() != null ? escapeHtml(v.getAiReason()) : "";
 
-        sb.append(String.format("%d. %s *[%d%%]* %s\n", num, emoji, score, v.getTitle()));
+        sb.append(String.format("%d. %s <b>[%d%%]</b> %s\n", num, emoji, score, escapeHtml(v.getTitle())));
         sb.append(String.format("   🏢 %s | 💰 %s\n", company, salary));
         sb.append(String.format("   💡 %s\n", reason));
         sb.append(String.format("   🔗 %s\n\n", v.getUrl()));
+    }
+
+    private String escapeHtml(String text) {
+        if (text == null) return "";
+        return text
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\"", "&quot;");
     }
 
     private String formatSalary(Vacancy v) {
