@@ -39,3 +39,13 @@ docker-run:
 
 collect:
 	cd collector && python3 rss_parser.py
+
+# ─── Полный пайплайн (сбор + AI + уведомления) ───
+
+pipeline:
+	cd backend && java -jar target/hh-gui-*.jar --spring.profiles.active=pipeline
+
+# ─── Запуск с профилем ───
+
+run-mom:
+	cd backend && java -jar target/hh-gui-*.jar --app.pipeline.profile=mom

@@ -45,13 +45,19 @@ public class VacancyRepository {
             v.setAppliedAt(rs.getString("applied_at"));
             v.setCreatedAt(rs.getString("created_at"));
             v.setUpdatedAt(rs.getString("updated_at"));
+            v.setSource(rs.getString("source"));
+            v.setSourceQuery(rs.getString("source_query"));
+            v.setRemote(rs.getInt("is_remote") == 1);
+            v.setNotified(rs.getInt("notified") == 1);
+            v.setPublishedAt(rs.getString("published_at"));
+            v.setFoundByScan(rs.getInt("found_by_scan"));
             return v;
         };
     }
 
     public List<Vacancy> findAll(String status, String district, Integer minSalary,
                                   Integer minScore, String search, String tag,
-                                  String sort, int offset, int limit) {
+                                  Boolean remote, String sort, int offset, int limit) {
         StringBuilder sql = new StringBuilder("SELECT v.* FROM vacancies v");
         List<Object> params = new ArrayList<>();
 
@@ -86,6 +92,10 @@ public class VacancyRepository {
             params.add(s);
             params.add(s);
         }
+        if (remote != null) {
+            conditions.add("v.is_remote = ?");
+            params.add(remote ? 1 : 0);
+        }
 
         if (!conditions.isEmpty()) {
             sql.append(" WHERE ").append(String.join(" AND ", conditions));
@@ -110,7 +120,7 @@ public class VacancyRepository {
     }
 
     public int countAll(String status, String district, Integer minSalary,
-                         Integer minScore, String search, String tag) {
+                         Integer minScore, String search, String tag, Boolean remote) {
         StringBuilder sql = new StringBuilder("SELECT COUNT(*) FROM vacancies v");
         List<Object> params = new ArrayList<>();
 
@@ -145,6 +155,10 @@ public class VacancyRepository {
             params.add(s);
             params.add(s);
         }
+        if (remote != null) {
+            conditions.add("v.is_remote = ?");
+            params.add(remote ? 1 : 0);
+        }
 
         if (!conditions.isEmpty()) {
             sql.append(" WHERE ").append(String.join(" AND ", conditions));
@@ -170,8 +184,9 @@ public class VacancyRepository {
         String sql = """
             INSERT INTO vacancies (hh_id, title, company, salary_from, salary_to, currency,
                 address, district, url, ai_score, ai_verdict, ai_reason, description, status,
-                rejection_reason, notes, applied_at, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                rejection_reason, notes, applied_at, created_at, updated_at,
+                source, source_query, is_remote, notified, published_at, found_by_scan)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """;
 
         KeyHolder keyHolder = new GeneratedKeyHolder();
@@ -196,6 +211,12 @@ public class VacancyRepository {
             ps.setString(17, v.getAppliedAt());
             ps.setString(18, v.getCreatedAt());
             ps.setString(19, v.getUpdatedAt());
+            ps.setString(20, v.getSource());
+            ps.setString(21, v.getSourceQuery());
+            ps.setInt(22, v.isRemote() ? 1 : 0);
+            ps.setInt(23, v.isNotified() ? 1 : 0);
+            ps.setString(24, v.getPublishedAt());
+            ps.setInt(25, v.getFoundByScan());
             return ps;
         }, keyHolder);
 
@@ -211,7 +232,8 @@ public class VacancyRepository {
             UPDATE vacancies SET hh_id=?, title=?, company=?, salary_from=?, salary_to=?,
                 currency=?, address=?, district=?, url=?, ai_score=?, ai_verdict=?,
                 ai_reason=?, description=?, status=?, rejection_reason=?, notes=?,
-                applied_at=?, updated_at=?
+                applied_at=?, updated_at=?, source=?, source_query=?, is_remote=?,
+                notified=?, published_at=?, found_by_scan=?
             WHERE id=?
             """;
 
@@ -223,7 +245,60 @@ public class VacancyRepository {
             v.getAiScore() != null ? v.getAiScore() : 0,
             v.getAiVerdict(), v.getAiReason(), v.getDescription(),
             v.getStatus(), v.getRejectionReason(), v.getNotes(),
-            v.getAppliedAt(), v.getUpdatedAt(), v.getId());
+            v.getAppliedAt(), v.getUpdatedAt(),
+            v.getSource(), v.getSourceQuery(),
+            v.isRemote() ? 1 : 0,
+            v.isNotified() ? 1 : 0,
+            v.getPublishedAt(), v.getFoundByScan(),
+            v.getId());
+    }
+
+    /**
+     * Update AI analysis result for a vacancy.
+     */
+    public void updateAiResult(String hhId, int score, String verdict, String reason) {
+        String now = Instant.now().toString();
+        jdbc.update(
+            "UPDATE vacancies SET ai_score=?, ai_verdict=?, ai_reason=?, updated_at=? WHERE hh_id=?",
+            score, verdict, reason, now, hhId);
+    }
+
+    /**
+     * Mark vacancies as notified (sent to Telegram).
+     */
+    public void markNotified(List<String> hhIds) {
+        String now = Instant.now().toString();
+        for (String hhId : hhIds) {
+            jdbc.update("UPDATE vacancies SET notified=1, updated_at=? WHERE hh_id=?", now, hhId);
+        }
+    }
+
+    /**
+     * Get unnotified approved vacancies for Telegram report.
+     */
+    public List<Vacancy> findUnnotifiedApproved(int minScore, int limit) {
+        return jdbc.query(
+            "SELECT * FROM vacancies WHERE ai_verdict='yes' AND ai_score >= ? AND notified = 0 " +
+            "ORDER BY ai_score DESC, published_at DESC LIMIT ?",
+            rowMapper, minScore, limit);
+    }
+
+    /**
+     * Count pending (not yet AI-analyzed) vacancies.
+     */
+    public int countPending() {
+        Integer count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM vacancies WHERE ai_verdict = 'pending'", Integer.class);
+        return count != null ? count : 0;
+    }
+
+    /**
+     * Find pending vacancies for AI analysis.
+     */
+    public List<Vacancy> findPending(int limit) {
+        return jdbc.query(
+            "SELECT * FROM vacancies WHERE ai_verdict = 'pending' ORDER BY published_at DESC LIMIT ?",
+            rowMapper, limit);
     }
 
     public void updateStatus(Long id, String status) {

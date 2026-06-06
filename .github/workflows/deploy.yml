@@ -68,6 +68,19 @@ jobs:
             sudo cp -r config ${DEPLOY_DIR}/
           fi
 
+          # Migrate DB schema (add new columns if missing)
+          DB_PATH="${DEPLOY_DIR}/data/vacancies.db"
+          if [ -f "$DB_PATH" ]; then
+            echo "Migrating database schema..."
+            sqlite3 "$DB_PATH" "ALTER TABLE vacancies ADD COLUMN source TEXT DEFAULT 'hh';" 2>/dev/null || true
+            sqlite3 "$DB_PATH" "ALTER TABLE vacancies ADD COLUMN source_query TEXT DEFAULT '';" 2>/dev/null || true
+            sqlite3 "$DB_PATH" "ALTER TABLE vacancies ADD COLUMN is_remote INTEGER DEFAULT 0;" 2>/dev/null || true
+            sqlite3 "$DB_PATH" "ALTER TABLE vacancies ADD COLUMN notified INTEGER DEFAULT 0;" 2>/dev/null || true
+            sqlite3 "$DB_PATH" "ALTER TABLE vacancies ADD COLUMN published_at TEXT DEFAULT '';" 2>/dev/null || true
+            sqlite3 "$DB_PATH" "ALTER TABLE vacancies ADD COLUMN found_by_scan INTEGER DEFAULT 0;" 2>/dev/null || true
+            echo "DB migration done"
+          fi
+
           # Restart
           sudo systemctl restart ${SERVICE}
 

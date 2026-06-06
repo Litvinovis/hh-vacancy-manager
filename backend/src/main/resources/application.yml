@@ -23,6 +23,14 @@ app:
     rules-file: ${user.dir}/config/rules.yaml
   search:
     profiles-dir: ${user.dir}/config/profiles
+  ai:
+    api-url: ${AI_API_URL:https://openrouter.ai/api/v1/chat/completions}
+    api-key: ${AI_API_KEY:}
+    model: ${AI_MODEL:openrouter/auto}
+    batch-size: 5
+  telegram:
+    bot-token: ${TELEGRAM_BOT_TOKEN:}
+    chat-id: ${TELEGRAM_CHAT_ID:}
 
 logging:
   level:

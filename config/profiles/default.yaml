@@ -1,6 +1,4 @@
-# HH Vacancy Manager — Конфигурация источников и профилей
-
-# ─── Профили поиска ──────────────────────────────────────────────────────────
+# HH Vacancy Manager — Конфигурация профилей
 # Каждый профиль — отдельный человек с настройками
 
 profiles:
@@ -20,6 +18,11 @@ profiles:
       - "Кол-центр"
       - "Вахта"
       - "Склад"
+      - "Производство"
+      - "Супермаркет"
+      - "Телефонные продажи"
+
+    # Офлайн поиск (Уфа)
     search:
       queries:
         - "продавец"
@@ -28,7 +31,7 @@ profiles:
         - "администратор"
         - "менеджер"
       area: 99  # Уфа
-      salary_min: 0
+      salary_min: 0  # Фильтр на уровне AI, не API
       schedule: "fullTime"
       experience: ""
       exclude_words:
@@ -59,6 +62,8 @@ profiles:
         - "производство"
         - "завод"
         - "цех"
+
+    # Удалённый поиск (вся Россия)
     remote_search:
       enabled: true
       queries:
@@ -99,67 +104,41 @@ profiles:
         - "DevOps"
         - "аналитик данных"
         - "Data Scientist"
+
     # Настройки скоринга
     scoring:
       rules_file: "config/rules.yaml"
       min_score_for_notify: 50
       max_per_run: 20
+
     # Настройки уведомлений
     notifications:
       enabled: true
-      telegram_chat_id: "${TELEGRAM_CHAT_ID}"  # из переменных окружения
-      min_score: 60  # минимальный скор для отправки
-      max_per_day: 10  # макс. вакансий в день
-      schedule: "0 9,12,15,18,21 * * *"  # cron
-
-  # Пример второго профиля (можно добавить)
-  # dad:
-  #   name: "Папа"
-  #   city: "Уфа"
-  #   ...
+      telegram_chat_id: "${TELEGRAM_CHAT_ID}"
+      min_score: 60
+      max_per_day: 10
 
 # ─── Источники данных ─────────────────────────────────────────────────────────
 sources:
-  # HH.ru (RSS)
-  hh_rss:
+  hh_api:
     enabled: true
-    type: "rss"
-    base_url: "https://hh.ru/search/vacancy/rss"
-    delay: 1.5  # секунды между запросами
+    type: "api"
+    base_url: "https://api.hh.ru/vacancies"
+    delay: 1.5
+    per_page: 100
+    max_pages: 20
 
-  # Авито Работа
-  avito:
-    enabled: false
-    type: "web"
-    base_url: "https://www.avito.ru"
-    delay: 2.0
-    # Города для поиска
-    cities:
-      - "ufa"
-    # Категории вакансий на Авито
-    categories:
-      - "vakansii"
-
-  # Telegram-каналы
-  telegram:
-    enabled: false  # включить после настройки API
-    type: "telegram"
-    api_id: "${TG_API_ID}"
-    api_hash: "${TG_API_HASH}"
-    # Каналы для мониторинга
-    channels:
-      - "ufa_rabota"      # Уфа Работа
-      - "avito_rabota_ufa" # Авито Работа Уфа
-      - "ufa_vacancies"    # Вакансии Уфы
-    limit: 100  # постов с канала
-    days_back: 7  # дней назад
-
-# ─── Наскоринг ────────────────────────────────────────────────────────────────
-scoring:
-  rules_file: "config/rules.yaml"
-  min_fit_score: 50
+# ─── AI настройки ──────────────────────────────────────────────────────────────
+ai:
+  enabled: true
+  api_url: "${AI_API_URL:https://openrouter.ai/api/v1/chat/completions}"
+  api_key: "${AI_API_KEY}"
+  model: "${AI_MODEL:openrouter/auto}"
+  batch_size: 5
   max_per_run: 20
 
-# ─── Уведомления ──────────────────────────────────────────────────────────────
+# ─── Telegram ──────────────────────────────────────────────────────────────────
 telegram:
+  bot_token: "${TELEGRAM_BOT_TOKEN}"
+  chat_id: "${TELEGRAM_CHAT_ID}"
   max_vacancies_in_message: 10

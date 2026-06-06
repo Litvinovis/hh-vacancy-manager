@@ -35,12 +35,13 @@ public class VacancyController {
             @RequestParam(name = "minScore", required = false) Integer minScore,
             @RequestParam(name = "search", required = false) String search,
             @RequestParam(name = "tag", required = false) String tag,
+            @RequestParam(name = "remote", required = false) Boolean remote,
             @RequestParam(name = "sort", defaultValue = "score_desc") String sort,
             @RequestParam(name = "page", defaultValue = "1") int page,
             @RequestParam(name = "perPage", defaultValue = "30") int perPage) {
 
         PageResponse<VacancyWithTags> resp = vacancyService.list(
-            status, district, minSalary, minScore, search, tag, sort, page, perPage);
+            status, district, minSalary, minScore, search, tag, remote, sort, page, perPage);
 
         List<VacancyWithTags> items = resp.getItems();
 
@@ -63,12 +64,18 @@ public class VacancyController {
             vm.put("district", v.getDistrict() != null ? v.getDistrict() : "");
             vm.put("url", v.getUrl() != null ? v.getUrl() : "");
             vm.put("aiScore", v.getAiScore() != null ? v.getAiScore() : 0);
+            vm.put("aiVerdict", v.getAiVerdict() != null ? v.getAiVerdict() : "pending");
+            vm.put("aiReason", v.getAiReason() != null ? v.getAiReason() : "");
             vm.put("description", v.getDescription() != null ? v.getDescription() : "");
             vm.put("status", v.getStatus() != null ? v.getStatus() : "new");
             vm.put("notes", v.getNotes() != null ? v.getNotes() : "");
             vm.put("appliedAt", v.getAppliedAt() != null ? v.getAppliedAt() : "");
             vm.put("createdAt", v.getCreatedAt() != null ? v.getCreatedAt() : "");
             vm.put("updatedAt", v.getUpdatedAt() != null ? v.getUpdatedAt() : "");
+            vm.put("source", v.getSource() != null ? v.getSource() : "hh");
+            vm.put("isRemote", v.isRemote());
+            vm.put("notified", v.isNotified());
+            vm.put("publishedAt", v.getPublishedAt() != null ? v.getPublishedAt() : "");
             vm.put("tags", vwt.getTags());
             return vm;
         }).toList());

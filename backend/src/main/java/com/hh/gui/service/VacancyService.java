@@ -32,11 +32,11 @@ public class VacancyService {
 
     public PageResponse<VacancyWithTags> list(String status, String district, Integer minSalary,
                                                Integer minScore, String search, String tag,
-                                               String sort, int page, int perPage) {
+                                               Boolean remote, String sort, int page, int perPage) {
         int offset = (page - 1) * perPage;
         List<Vacancy> vacancies = vacancyRepo.findAll(status, district, minSalary, minScore,
-            search, tag, sort, offset, perPage);
-        int total = vacancyRepo.countAll(status, district, minSalary, minScore, search, tag);
+            search, tag, remote, sort, offset, perPage);
+        int total = vacancyRepo.countAll(status, district, minSalary, minScore, search, tag, remote);
 
         List<VacancyWithTags> items = new ArrayList<>();
         for (Vacancy v : vacancies) {

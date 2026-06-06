@@ -23,6 +23,13 @@ public class Vacancy {
     private String appliedAt;
     private String createdAt;
     private String updatedAt;
+    // New fields
+    private String source;
+    private String sourceQuery;
+    private boolean remote;
+    private boolean notified;
+    private String publishedAt;
+    private int foundByScan; // 1 = full scan, 0 = incremental
 
     // Default constructor
     public Vacancy() {}
@@ -87,4 +94,22 @@ public class Vacancy {
 
     public String getUpdatedAt() { return updatedAt; }
     public void setUpdatedAt(String updatedAt) { this.updatedAt = updatedAt; }
+
+    public String getSource() { return source; }
+    public void setSource(String source) { this.source = source; }
+
+    public String getSourceQuery() { return sourceQuery; }
+    public void setSourceQuery(String sourceQuery) { this.sourceQuery = sourceQuery; }
+
+    public boolean isRemote() { return remote; }
+    public void setRemote(boolean remote) { this.remote = remote; }
+
+    public boolean isNotified() { return notified; }
+    public void setNotified(boolean notified) { this.notified = notified; }
+
+    public String getPublishedAt() { return publishedAt; }
+    public void setPublishedAt(String publishedAt) { this.publishedAt = publishedAt; }
+
+    public int getFoundByScan() { return foundByScan; }
+    public void setFoundByScan(int foundByScan) { this.foundByScan = foundByScan; }
 }

@@ -21,7 +21,13 @@ CREATE TABLE IF NOT EXISTS vacancies (
     notes TEXT DEFAULT '',
     applied_at TEXT DEFAULT '',
     created_at TEXT NOT NULL DEFAULT '',
-    updated_at TEXT NOT NULL DEFAULT ''
+    updated_at TEXT NOT NULL DEFAULT '',
+    source TEXT DEFAULT 'hh',
+    source_query TEXT DEFAULT '',
+    is_remote INTEGER DEFAULT 0,
+    notified INTEGER DEFAULT 0,
+    published_at TEXT DEFAULT '',
+    found_by_scan INTEGER DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS tags (
@@ -43,5 +49,8 @@ CREATE INDEX IF NOT EXISTS idx_vac_status ON vacancies(status);
 CREATE INDEX IF NOT EXISTS idx_vac_score ON vacancies(ai_score);
 CREATE INDEX IF NOT EXISTS idx_vac_district ON vacancies(district);
 CREATE INDEX IF NOT EXISTS idx_vac_verdict ON vacancies(ai_verdict);
+CREATE INDEX IF NOT EXISTS idx_vac_remote ON vacancies(is_remote);
+CREATE INDEX IF NOT EXISTS idx_vac_notified ON vacancies(notified);
+CREATE INDEX IF NOT EXISTS idx_vac_source ON vacancies(source);
 CREATE INDEX IF NOT EXISTS idx_tags_vid ON tags(vacancy_id);
 CREATE INDEX IF NOT EXISTS idx_hist_vid ON history(vacancy_id);
