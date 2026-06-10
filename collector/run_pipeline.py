@@ -102,48 +102,29 @@ def save_vacancy(db: sqlite3.Connection, v: dict):
 
 # ─── Запуск парсеров ─────────────────────────────────────────────────────────
 
-def run_hh_parser(queries: list, area: int, schedule: str,
-                   salary_min: int, remote: bool, remote_queries: list,
-                   remote_area: int, dry_run: bool) -> list:
-    """Запускает HH.ru RSS парсер."""
+def run_hh_parser(searches: list, dry_run: bool) -> list:
+    """Запускает HH.ru RSS парсер для каждого поиска из списка."""
     print("📡 Запуск HH.ru парсера...", file=sys.stderr)
 
     all_vacancies = []
 
-    # Обычный поиск
-    for query in queries:
-        try:
-            result = subprocess.run(
-                [sys.executable, str(PARSERS["hh"]),
-                 "--query", query,
-                 "--area", str(area),
-                 "--schedule", schedule,
-                 "--salary-min", str(salary_min),
-                 "--output", "json"] + (["--dry-run"] if dry_run else []),
-                capture_output=True, text=True, timeout=120,
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                data = json.loads(result.stdout)
-                vacancies = data if isinstance(data, list) else data.get("new_vacancies", [])
-                for v in vacancies:
-                    v["source"] = "hh"
-                    v["query"] = query
-                    v["is_remote"] = False
-                all_vacancies.extend(vacancies)
-        except Exception as e:
-            print(f"⚠️ HH.ru ошибка: {e}", file=sys.stderr)
+    for search in searches:
+        name = search.get("name", "default")
+        queries = search.get("queries", [])
+        area = search.get("area", 99)
+        schedule = search.get("schedule", "")
+        salary_min = search.get("salary_min", 0)
 
-        time.sleep(1.5)
+        print(f"   🔍 Поиск '{name}': {len(queries)} запросов, area={area}", file=sys.stderr)
 
-    # Удалённый поиск
-    if remote and remote_queries:
-        for query in remote_queries:
+        for query in queries:
             try:
                 result = subprocess.run(
                     [sys.executable, str(PARSERS["hh"]),
                      "--query", query,
-                     "--area", str(remote_area),
-                     "--schedule", "remote",
+                     "--area", str(area),
+                     "--schedule", schedule,
+                     "--salary-min", str(salary_min),
                      "--output", "json"] + (["--dry-run"] if dry_run else []),
                     capture_output=True, text=True, timeout=120,
                 )
@@ -153,10 +134,10 @@ def run_hh_parser(queries: list, area: int, schedule: str,
                     for v in vacancies:
                         v["source"] = "hh"
                         v["query"] = query
-                        v["is_remote"] = True
+                        v["is_remote"] = (schedule == "remote" or area == 113)
                     all_vacancies.extend(vacancies)
             except Exception as e:
-                print(f"⚠️ HH.ru remote ошибка: {e}", file=sys.stderr)
+                print(f"⚠️ HH.ru ошибка ({name}/{query}): {e}", file=sys.stderr)
 
             time.sleep(1.5)
 
@@ -326,7 +307,53 @@ def send_telegram_report(db: sqlite3.Connection, config: dict, profile: str):
         print(f"--- Сообщение ---\n{message}", file=sys.stderr)
 
 
-# ─── Основной цикл ───────────────────────────────────────────────────────────
+# ─── Парсинг конфигурации поисков ─────────────────────────────────────────────
+
+def get_searches(profile_cfg: dict) -> list:
+    """
+    Получить список поисков из конфига профиля.
+    Новый формат: searches: [{name, queries, area, ...}, ...]
+    Легаси-формат: search: {...} + remote_search: {...}
+    Возвращает список словарей с ключами: name, queries, area, schedule, salary_min, exclude_words
+    """
+    # Новый формат: searches list
+    searches = profile_cfg.get("searches")
+    if searches and isinstance(searches, list) and len(searches) > 0:
+        result = []
+        for s in searches:
+            result.append({
+                "name": s.get("name", "default"),
+                "queries": s.get("queries", []),
+                "area": s.get("area", 99),
+                "schedule": s.get("schedule", ""),
+                "salary_min": s.get("salary_min", 0),
+                "exclude_words": s.get("exclude_words", []),
+            })
+        return result
+
+    # Легаси-формат: search + remote_search
+    result = []
+    search_cfg = profile_cfg.get("search", {})
+    if search_cfg:
+        result.append({
+            "name": "Оффлайн",
+            "queries": search_cfg.get("queries", []),
+            "area": search_cfg.get("area", 99),
+            "schedule": search_cfg.get("schedule", ""),
+            "salary_min": search_cfg.get("salary_min", 0),
+            "exclude_words": search_cfg.get("exclude_words", []),
+        })
+    remote_cfg = profile_cfg.get("remote_search", {})
+    if remote_cfg and remote_cfg.get("enabled", False):
+        result.append({
+            "name": "Удалёнка",
+            "queries": remote_cfg.get("queries", []),
+            "area": remote_cfg.get("area", 113),
+            "schedule": "remote",
+            "salary_min": remote_cfg.get("salary_min", 0),
+            "exclude_words": remote_cfg.get("exclude_words", []),
+        })
+    return result
 
 def main():
     parser = argparse.ArgumentParser(description="Единый пайплайн сбора вакансий")
@@ -343,9 +370,10 @@ def main():
         print(f"❌ Профиль '{args.profile}' не найден", file=sys.stderr)
         sys.exit(1)
 
-    search_cfg = profile_cfg.get("search", {})
-    remote_cfg = profile_cfg.get("remote_search", {})
+    searches = get_searches(profile_cfg)
     sources_cfg = config.get("sources", {})
+
+    db_path = DB_PATH
 
     db_path = DB_PATH
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -360,25 +388,20 @@ def main():
 
     # ── Сбор данных ──
 
+    # ── Сбор данных ──
+
     if "hh" in sources and sources_cfg.get("hh_rss", {}).get("enabled", True):
-        hh_vacancies = run_hh_parser(
-            queries=search_cfg.get("queries", []),
-            area=search_cfg.get("area", 99),
-            schedule=search_cfg.get("schedule", ""),
-            salary_min=search_cfg.get("salary_min", 0),
-            remote=remote_cfg.get("enabled", False),
-            remote_queries=remote_cfg.get("queries", []),
-            remote_area=remote_cfg.get("area", 113),
-            dry_run=args.dry_run,
-        )
+        hh_vacancies = run_hh_parser(searches=searches, dry_run=args.dry_run)
         all_vacancies.extend(hh_vacancies)
         print(f"   HH.ru: {len(hh_vacancies)} вакансий", file=sys.stderr)
 
     if "avito" in sources and sources_cfg.get("avito", {}).get("enabled", True):
+        # Avito: берём queries из первого поиска (legacy) или из searches
+        avito_queries = searches[0]["queries"] if searches else []
         avito_vacancies = run_avito_parser(
-            queries=search_cfg.get("queries", []),
+            queries=avito_queries,
             cities=sources_cfg.get("avito", {}).get("cities", ["ufa"]),
-            salary_min=search_cfg.get("salary_min", 0),
+            salary_min=0,
             dry_run=args.dry_run,
         )
         all_vacancies.extend(avito_vacancies)

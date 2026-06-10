@@ -1,20 +1,24 @@
 package com.hh.gui.controller;
 
+import com.hh.gui.config.AppConfig;
+import com.hh.gui.config.AppConfig.SearchProfile;
+import com.hh.gui.config.AppConfig.SearchEntry;
 import com.hh.gui.service.VacancyPipelineService;
 import com.hh.gui.service.VacancyPipelineService.PipelineResult;
-import com.hh.gui.service.VacancyPipelineService.SearchProfile;
 import com.hh.gui.repository.VacancyRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.*;
 
 /**
  * REST API for pipeline control and status.
+ * Also runs scheduled pipeline via cron.
  */
 @RestController
 @RequestMapping("/api")
@@ -24,14 +28,21 @@ public class PipelineController {
 
     private final VacancyPipelineService pipelineService;
     private final VacancyRepository vacancyRepo;
+    private final SearchProfile profile;
 
-    @Value("${app.search.profiles-dir}")
-    private String profilesDir;
+    @Value("${app.pipeline.enabled:true}")
+    private boolean pipelineEnabled;
+
+    @Value("${app.pipeline.profile:mom}")
+    private String pipelineProfile;
 
     @Autowired
-    public PipelineController(VacancyPipelineService pipelineService, VacancyRepository vacancyRepo) {
+    public PipelineController(VacancyPipelineService pipelineService,
+                               VacancyRepository vacancyRepo,
+                               SearchProfile profile) {
         this.pipelineService = pipelineService;
         this.vacancyRepo = vacancyRepo;
+        this.profile = profile;
     }
 
     /**
@@ -40,16 +51,16 @@ public class PipelineController {
      */
     @PostMapping("/pipeline/run")
     public ResponseEntity<Map<String, Object>> runPipeline(
-            @RequestParam(name = "profile", defaultValue = "mom") String profile) {
-        log.info("Pipeline run requested for profile: {}", profile);
+            @RequestParam(name = "profile", defaultValue = "mom") String profileName) {
+        log.info("Pipeline run requested for profile: {}", profileName);
 
         try {
-            SearchProfile sp = loadProfile(profile);
+            VacancyPipelineService.SearchProfile sp = buildSearchProfile();
             PipelineResult result = pipelineService.runFullPipeline(sp);
 
             Map<String, Object> response = new LinkedHashMap<>();
             response.put("status", "ok");
-            response.put("profile", profile);
+            response.put("profile", profileName);
             response.put("collected", result.collected);
             response.put("newVacancies", result.newVacancies);
             response.put("analyzed", result.analyzed);
@@ -61,6 +72,26 @@ public class PipelineController {
             error.put("status", "error");
             error.put("message", e.getMessage());
             return ResponseEntity.internalServerError().body(error);
+        }
+    }
+
+    /**
+     * Scheduled pipeline run — every 2 hours.
+     */
+    @Scheduled(cron = "${app.pipeline.cron:0 0 */2 * * *}")
+    public void scheduledPipelineRun() {
+        if (!pipelineEnabled) {
+            log.debug("Pipeline scheduling disabled");
+            return;
+        }
+        log.info("=== Scheduled pipeline run ===");
+        try {
+            VacancyPipelineService.SearchProfile sp = buildSearchProfile();
+            PipelineResult result = pipelineService.runFullPipeline(sp);
+            log.info("Pipeline done: collected={}, new={}, analyzed={}, approved={}",
+                result.collected, result.newVacancies, result.analyzed, result.approved);
+        } catch (Exception e) {
+            log.error("Scheduled pipeline error: {}", e.getMessage(), e);
         }
     }
 
@@ -77,22 +108,45 @@ public class PipelineController {
         return ResponseEntity.ok(status);
     }
 
-    @SuppressWarnings("unchecked")
-    private SearchProfile loadProfile(String profile) {
-        // For now, hardcode the mom profile. TODO: load from YAML
-        SearchProfile sp = new SearchProfile();
-        sp.city = "Уфа";
-        sp.priorityDistricts = List.of("Шакша", "Калининский");
-        sp.skills = List.of("Работа с клиентами", "Касса", "Консультирование");
-        sp.notSuitable = List.of("Физический труд", "Кол-центр", "Вахта", "Склад", "Производство", "Супермаркет");
-        sp.salaryMin = 40000;
-        sp.schedule = "fullTime";
-        sp.area = 99;
-        sp.remoteArea = 113;
-        sp.localQueries = List.of("продавец", "консультант", "оператор", "администратор", "менеджер");
-        sp.remoteQueries = List.of("оператор ПК", "модератор", "администратор интернет-магазин",
-            "специалист поддержки", "диспетчер", "помощник руководителя", "секретарь",
-            "менеджер маркетплейс", "контент-менеджер", "специалист чат");
+    /**
+     * Build SearchProfile from YAML config (via AppConfig).
+     * Supports new 'searches' list format with backward compatibility.
+     */
+    private VacancyPipelineService.SearchProfile buildSearchProfile() {
+        VacancyPipelineService.SearchProfile sp = new VacancyPipelineService.SearchProfile();
+
+        sp.city = profile.getCity();
+
+        // Collect all searches into a flat list
+        List<VacancyPipelineService.SearchQuery> allQueries = new ArrayList<>();
+        for (SearchEntry entry : profile.getSearches()) {
+            boolean remote = entry.isRemote();
+            for (String query : entry.queries) {
+                VacancyPipelineService.SearchQuery sq = new VacancyPipelineService.SearchQuery();
+                sq.query = query;
+                sq.area = entry.area;
+                sq.schedule = entry.schedule;
+                sq.salaryMin = entry.salaryMin;
+                sq.isRemote = remote;
+                sq.excludeWords = entry.excludeWords;
+                allQueries.add(sq);
+            }
+        }
+        sp.queries = allQueries;
+
+        Map<String, Object> data = profile.getData();
+        @SuppressWarnings("unchecked")
+        List<String> priorityDistricts = (List<String>) data.getOrDefault("priority_districts", List.of("Шакша", "Калининский"));
+        sp.priorityDistricts = priorityDistricts;
+
+        @SuppressWarnings("unchecked")
+        List<String> skills = (List<String>) data.getOrDefault("skills", List.of("Работа с клиентами", "Касса", "Консультирование"));
+        sp.skills = skills;
+
+        @SuppressWarnings("unchecked")
+        List<String> notSuitable = (List<String>) data.getOrDefault("not_suitable", List.of("Физический труд", "Кол-центр", "Вахта", "Склад", "Производство", "Супермаркет"));
+        sp.notSuitable = notSuitable;
+
         return sp;
     }
 }
