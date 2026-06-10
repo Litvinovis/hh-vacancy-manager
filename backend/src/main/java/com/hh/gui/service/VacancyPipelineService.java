@@ -225,6 +225,75 @@ public class VacancyPipelineService {
     }
 
     /**
+     * Re-analyze all eligible vacancies (ai_verdict != 'no' AND status != 'rejected').
+     * Resets AI results to pending, then runs AI analysis in batches.
+     * Sends Telegram report when done.
+     *
+     * @return ReanalyzeResult with counts
+     */
+    @Transactional
+    public ReanalyzeResult reanalyzeAll(SearchProfile profile) {
+        log.info("=== Re-analyze start ===");
+
+        // Step 1: Reset AI results for eligible vacancies
+        int resetCount = vacancyRepo.resetAiForRescan();
+        log.info("Step 1: Reset {} vacancies for re-analysis", resetCount);
+
+        if (resetCount == 0) {
+            log.info("No vacancies to re-analyze");
+            ReanalyzeResult empty = new ReanalyzeResult();
+            empty.reset = 0;
+            empty.analyzed = 0;
+            empty.approved = 0;
+            return empty;
+        }
+
+        // Step 2: AI analyze all pending (which are now the reset ones)
+        int totalAnalyzed = 0;
+        int maxPerRun = resetCount; // analyze all reset vacancies
+        int processed = 0;
+
+        while (processed < maxPerRun) {
+            int remaining = maxPerRun - processed;
+            int currentBatchSize = Math.min(batchSize, remaining);
+            List<Vacancy> batch = vacancyRepo.findPending(currentBatchSize);
+            if (batch.isEmpty()) break;
+
+            VacancyAiAnalyzer.SearchProfile aiProfile = new VacancyAiAnalyzer.SearchProfile();
+            aiProfile.city = profile.city;
+            aiProfile.priorityDistricts = profile.priorityDistricts;
+            aiProfile.skills = profile.skills;
+            aiProfile.notSuitable = profile.notSuitable;
+            aiProfile.salaryMin = profile.salaryMin;
+            aiProfile.schedule = profile.schedule;
+
+            var results = aiAnalyzer.analyzeBatch(batch, aiProfile);
+            for (var r : results) {
+                vacancyRepo.updateAiResult(r.hhId(), r.score(), r.verdict(), r.reason());
+                totalAnalyzed++;
+            }
+            processed += batch.size();
+            log.info("Re-analyze progress: {}/{}", processed, maxPerRun);
+        }
+        log.info("Step 2: {} vacancies AI-analyzed", totalAnalyzed);
+
+        // Step 3: Get approved for notification
+        List<Vacancy> approved = vacancyRepo.findUnnotifiedApproved(50, 10);
+        log.info("Step 3: {} approved unnotified vacancies", approved.size());
+
+        // Step 4: Send Telegram report
+        if (!approved.isEmpty()) {
+            sendReport(approved, profile);
+        }
+
+        ReanalyzeResult result = new ReanalyzeResult();
+        result.reset = resetCount;
+        result.analyzed = totalAnalyzed;
+        result.approved = approved.size();
+        return result;
+    }
+
+    /**
      * Single search query entry.
      */
     public static class SearchQuery {
@@ -253,6 +322,12 @@ public class VacancyPipelineService {
     public static class PipelineResult {
         public int collected;
         public int newVacancies;
+        public int analyzed;
+        public int approved;
+    }
+
+    public static class ReanalyzeResult {
+        public int reset;
         public int analyzed;
         public int approved;
     }

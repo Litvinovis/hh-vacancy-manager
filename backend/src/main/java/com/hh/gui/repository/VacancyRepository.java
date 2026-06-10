@@ -373,6 +373,40 @@ public class VacancyRepository {
         return count != null ? count : 0;
     }
 
+    /**
+     * Find vacancies eligible for re-analysis:
+     * ai_verdict != 'no' AND status != 'rejected'
+     */
+    public List<Vacancy> findRescanable() {
+        return jdbc.query(
+            "SELECT * FROM vacancies WHERE ai_verdict != 'no' AND (status IS NULL OR status != 'rejected') " +
+            "ORDER BY published_at DESC",
+            rowMapper);
+    }
+
+    /**
+     * Count vacancies eligible for re-analysis.
+     */
+    public int countRescanable() {
+        Integer count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM vacancies WHERE ai_verdict != 'no' AND (status IS NULL OR status != 'rejected')",
+            Integer.class);
+        return count != null ? count : 0;
+    }
+
+    /**
+     * Reset AI results for re-analysis (set to pending).
+     * Only for vacancies where ai_verdict != 'no' AND status != 'rejected'.
+     * Returns number of reset vacancies.
+     */
+    public int resetAiForRescan() {
+        String now = Instant.now().toString();
+        return jdbc.update(
+            "UPDATE vacancies SET ai_verdict='pending', ai_score=0, ai_reason='', updated_at=? " +
+            "WHERE ai_verdict != 'no' AND (status IS NULL OR status != 'rejected')",
+            now);
+    }
+
     public List<Map<String, Object>> topDistricts(int limit) {
         return jdbc.queryForList(
             "SELECT district, COUNT(*) as cnt FROM vacancies WHERE district != '' " +
