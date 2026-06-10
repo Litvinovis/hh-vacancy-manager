@@ -166,6 +166,55 @@ def get_new_ids(db: sqlite3.Connection, ids: list) -> set:
     return set(ids) - existing
 
 
+# ─── Парсинг конфигурации поисков ─────────────────────────────────────────────
+
+def get_searches(config: dict) -> list:
+    """
+    Получить список поисков из конфига.
+    Новый формат: searches: [{name, queries, area, ...}, ...]
+    Легаси-формат: search: {...} + remote_search: {...}
+    """
+    profile = config.get("mom", config)  # support both profile-wrapped and flat
+
+    searches = profile.get("searches")
+    if searches and isinstance(searches, list) and len(searches) > 0:
+        result = []
+        for s in searches:
+            result.append({
+                "name": s.get("name", "default"),
+                "queries": s.get("queries", []),
+                "area": s.get("area", 99),
+                "schedule": s.get("schedule", ""),
+                "salary_min": s.get("salary_min", 0),
+                "exclude_words": s.get("exclude_words", []),
+            })
+        return result
+
+    # Legacy fallback
+    result = []
+    search_cfg = profile.get("search", {})
+    if search_cfg:
+        result.append({
+            "name": "Оффлайн",
+            "queries": search_cfg.get("queries", []),
+            "area": search_cfg.get("area", 99),
+            "schedule": search_cfg.get("schedule", ""),
+            "salary_min": search_cfg.get("salary_min", 0),
+            "exclude_words": search_cfg.get("exclude_words", []),
+        })
+    remote_cfg = profile.get("remote_search", {})
+    if remote_cfg and remote_cfg.get("enabled", False):
+        result.append({
+            "name": "Удалёнка",
+            "queries": remote_cfg.get("queries", []),
+            "area": remote_cfg.get("area", 113),
+            "schedule": "remote",
+            "salary_min": remote_cfg.get("salary_min", 0),
+            "exclude_words": remote_cfg.get("exclude_words", []),
+        })
+    return result
+
+
 # ─── Основной цикл ───────────────────────────────────────────────────────────
 
 def main():
@@ -177,8 +226,9 @@ def main():
     args = parser.parse_args()
 
     config = load_config(args.config)
-    search_cfg = config.get("search", {})
-    remote_cfg = config.get("remote_search", {})
+    searches = get_searches(config)
+
+    db_path = args.db
 
     db_path = args.db
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -197,40 +247,27 @@ def main():
 
     all_vacancies = []
 
-    # Обычный поиск
-    for query in search_cfg.get("queries", []):
-        print(f"📡 RSS: '{query}'...", file=sys.stderr)
-        xml = fetch_rss(
-            query=query,
-            area=search_cfg.get("area", 99),
-            schedule=search_cfg.get("schedule", ""),
-            salary_min=search_cfg.get("salary_min", 0),
-        )
-        vacancies = parse_rss(xml)
-        for v in vacancies:
-            v["_query"] = query
-            v["_remote"] = False
-        all_vacancies.extend(vacancies)
-        time.sleep(1.5)
+    # Итерируем по всем поискам из конфига
+    for search in searches:
+        name = search.get("name", "default")
+        queries = search.get("queries", [])
+        area = search.get("area", 99)
+        schedule = search.get("schedule", "")
+        salary_min = search.get("salary_min", 0)
+        exclude_words = [w.lower() for w in search.get("exclude_words", [])]
+        is_remote = (schedule == "remote" or area == 113)
 
-    # Удалённый поиск
-    if remote_cfg.get("enabled", False):
-        remote_exclude = [w.lower() for w in remote_cfg.get("exclude_words", [])]
-        for query in remote_cfg.get("queries", []):
-            print(f"📡 RSS (remote): '{query}'...", file=sys.stderr)
-            xml = fetch_rss(
-                query=query,
-                area=remote_cfg.get("area", 113),
-                schedule="remote",
-                salary_min=remote_cfg.get("salary_min", 0),
-            )
+        print(f"📡 RSS '{name}': {len(queries)} запросов, area={area}, remote={is_remote}", file=sys.stderr)
+
+        for query in queries:
+            xml = fetch_rss(query=query, area=area, schedule=schedule, salary_min=salary_min)
             vacancies = parse_rss(xml)
             for v in vacancies:
                 v["_query"] = query
-                v["_remote"] = True
-                title_desc = (v["title"] + " " + v.get("description", "")).lower()
-                v["_excluded"] = any(w in title_desc for w in remote_exclude)
-            all_vacancies.extend([v for v in vacancies if not v["_excluded"]])
+                v["_remote"] = is_remote
+                v["_search_name"] = name
+                v["_exclude_words"] = exclude_words
+            all_vacancies.extend(vacancies)
             time.sleep(1.5)
 
     # Дедупликация
@@ -240,18 +277,17 @@ def main():
             seen[v["id"]] = v
     unique = list(seen.values())
 
-    # Фильтр по словам-исключениям
-    exclude = [w.lower() for w in search_cfg.get("exclude_words", [])]
-    if exclude:
-        filtered = []
-        for v in unique:
-            if v.get("_remote"):
+    # Фильтр по словам-исключениям (для каждого поиска свои)
+    filtered = []
+    for v in unique:
+        exclude = v.get("_exclude_words", [])
+        if not exclude:
+            filtered.append(v)
+        else:
+            text = v["title"].lower() + " " + v.get("description", "").lower()
+            if not any(w in text for w in exclude):
                 filtered.append(v)
-            else:
-                text = v["title"].lower() + " " + v.get("description", "").lower()
-                if not any(w in text for w in exclude):
-                    filtered.append(v)
-        unique = filtered
+    unique = filtered
 
     new_ids = get_new_ids(db, [v["id"] for v in unique])
     new_vacancies = [v for v in unique if v["id"] in new_ids]

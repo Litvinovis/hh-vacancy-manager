@@ -76,33 +76,25 @@ public class VacancyPipelineService {
     }
 
     /**
-     * Collect vacancies for all queries (local + remote).
+     * Collect vacancies for all search queries (flat list, no local/remote split).
      */
     private List<Vacancy> collectAll(SearchProfile profile) {
         List<Vacancy> all = new ArrayList<>();
 
-        // Local search (Ufa)
-        if (profile.localQueries != null && !profile.localQueries.isEmpty()) {
-            for (String query : profile.localQueries) {
-                List<Vacancy> batch = hhApiClient.fetchRss(query, profile.area, profile.schedule, profile.salaryMin);
-                for (Vacancy v : batch) {
-                    v.setSourceQuery(query);
-                    v.setRemote(false);
-                }
-                all.addAll(batch);
-            }
+        if (profile.queries == null || profile.queries.isEmpty()) {
+            log.warn("No search queries configured");
+            return all;
         }
 
-        // Remote search (Russia)
-        if (profile.remoteQueries != null && !profile.remoteQueries.isEmpty()) {
-            for (String query : profile.remoteQueries) {
-                List<Vacancy> batch = hhApiClient.fetchRss(query, profile.remoteArea, "remote", profile.salaryMin);
-                for (Vacancy v : batch) {
-                    v.setSourceQuery(query);
-                    v.setRemote(true);
-                }
-                all.addAll(batch);
+        for (SearchQuery sq : profile.queries) {
+            log.debug("Collecting: query='{}' area={} schedule={} remote={}",
+                    sq.query, sq.area, sq.schedule, sq.isRemote);
+            List<Vacancy> batch = hhApiClient.fetchRss(sq.query, sq.area, sq.schedule, sq.salaryMin);
+            for (Vacancy v : batch) {
+                v.setSourceQuery(sq.query);
+                v.setRemote(sq.isRemote);
             }
+            all.addAll(batch);
         }
 
         // Deduplicate by HH ID
@@ -132,16 +124,19 @@ public class VacancyPipelineService {
     }
 
     /**
-     * AI-analyze pending vacancies.
+     * AI-analyze pending vacancies (limited to maxPerRun per invocation).
      */
     private int analyzePending(SearchProfile profile) {
         int totalAnalyzed = 0;
-        int pending;
-        do {
-            pending = vacancyRepo.countPending();
-            if (pending == 0) break;
+        int maxPerRun = 50; // limit per pipeline run to avoid burning all quota
+        int processed = 0;
 
-            List<Vacancy> batch = vacancyRepo.findPending(batchSize);
+        while (processed < maxPerRun) {
+            int remaining = maxPerRun - processed;
+            int currentBatchSize = Math.min(batchSize, remaining);
+            List<Vacancy> batch = vacancyRepo.findPending(currentBatchSize);
+            if (batch.isEmpty()) break;
+
             VacancyAiAnalyzer.SearchProfile aiProfile = new VacancyAiAnalyzer.SearchProfile();
             aiProfile.city = profile.city;
             aiProfile.priorityDistricts = profile.priorityDistricts;
@@ -155,7 +150,9 @@ public class VacancyPipelineService {
                 vacancyRepo.updateAiResult(r.hhId(), r.score(), r.verdict(), r.reason());
                 totalAnalyzed++;
             }
-        } while (pending > 0);
+            processed += batch.size();
+            log.debug("AI progress: {}/{} this run", processed, maxPerRun);
+        }
         return totalAnalyzed;
     }
 
@@ -228,7 +225,20 @@ public class VacancyPipelineService {
     }
 
     /**
+     * Single search query entry.
+     */
+    public static class SearchQuery {
+        public String query;
+        public int area;
+        public String schedule;
+        public int salaryMin;
+        public boolean isRemote;
+        public List<String> excludeWords;
+    }
+
+    /**
      * Search profile with all needed fields.
+     * Replaces localQueries/remoteQueries with flat queries list.
      */
     public static class SearchProfile {
         public String city;
@@ -237,10 +247,7 @@ public class VacancyPipelineService {
         public List<String> notSuitable;
         public int salaryMin;
         public String schedule;
-        public List<String> localQueries;
-        public List<String> remoteQueries;
-        public int area;
-        public int remoteArea;
+        public List<SearchQuery> queries;
     }
 
     public static class PipelineResult {
