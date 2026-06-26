@@ -228,6 +228,7 @@ body { font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; background:va
         <option value="title_asc">А-Я</option>
       </select>
       <div class="topbar-spacer"></div>
+      <button class="btn btn-ghost" id="btn-notify-toggle" onclick="toggleNotifications()" title="Вкл/выкл уведомления">🔔</button>
       <button class="btn btn-ghost" onclick="loadStats(); loadVacancies();">🔄</button>
     </div>
 
@@ -345,6 +346,7 @@ let searchTimer = null;
 document.addEventListener('DOMContentLoaded', () => {
   loadStats();
   loadVacancies();
+  loadNotificationSettings();
 
   // File import drop zone
   const importText = document.getElementById('import-text');
@@ -584,6 +586,36 @@ async function saveRejectReason() {
 function openUrl() {
   const url = document.getElementById('d-url-btn')?.dataset?.url;
   if (url) window.open(url, '_blank');
+}
+
+// Notifications
+let notificationsEnabled = true;
+
+async function loadNotificationSettings() {
+  try {
+    const s = await api('/api/settings/notifications');
+    notificationsEnabled = s.enabled;
+    updateNotifyButton();
+  } catch(e) { console.error('Notification settings error:', e); }
+}
+
+async function toggleNotifications() {
+  try {
+    const result = await api('/api/settings/notifications', {
+      method: 'POST',
+      body: JSON.stringify({ enabled: !notificationsEnabled })
+    });
+    notificationsEnabled = result.enabled;
+    updateNotifyButton();
+  } catch(e) { console.error('Toggle notifications error:', e); }
+}
+
+function updateNotifyButton() {
+  const btn = document.getElementById('btn-notify-toggle');
+  if (btn) {
+    btn.textContent = notificationsEnabled ? '🔔' : '🔕';
+    btn.style.opacity = notificationsEnabled ? '1' : '0.5';
+  }
 }
 
 // Selection & bulk

@@ -76,6 +76,45 @@ public class PipelineController {
     }
 
     /**
+     * Re-analyze all eligible vacancies (not rejected by AI or user).
+     * POST /api/pipeline/reanalyze
+     */
+    @PostMapping("/pipeline/reanalyze")
+    public ResponseEntity<Map<String, Object>> reanalyze() {
+        log.info("Re-analyze requested");
+
+        try {
+            VacancyPipelineService.SearchProfile sp = buildSearchProfile();
+            VacancyPipelineService.ReanalyzeResult result = pipelineService.reanalyzeAll(sp);
+
+            Map<String, Object> response = new LinkedHashMap<>();
+            response.put("status", "ok");
+            response.put("reset", result.reset);
+            response.put("analyzed", result.analyzed);
+            response.put("approved", result.approved);
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            log.error("Re-analyze error: {}", e.getMessage(), e);
+            Map<String, Object> error = new LinkedHashMap<>();
+            error.put("status", "error");
+            error.put("message", e.getMessage());
+            return ResponseEntity.internalServerError().body(error);
+        }
+    }
+
+    /**
+     * Get count of vacancies eligible for re-analysis.
+     * GET /api/pipeline/reanalyze/count
+     */
+    @GetMapping("/pipeline/reanalyze/count")
+    public ResponseEntity<Map<String, Object>> reanalyzeCount() {
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("rescanable", vacancyRepo.countRescanable());
+        response.put("total", vacancyRepo.countTotal());
+        return ResponseEntity.ok(response);
+    }
+
+    /**
      * Scheduled pipeline run — every 2 hours.
      */
     @Scheduled(cron = "${app.pipeline.cron:0 0 */2 * * *}")
@@ -106,6 +145,34 @@ public class PipelineController {
         status.put("pending", vacancyRepo.countPending());
         status.put("byStatus", vacancyRepo.countByStatus());
         return ResponseEntity.ok(status);
+    }
+
+    /**
+     * Get notification settings.
+     * GET /api/settings/notifications
+     */
+    @GetMapping("/settings/notifications")
+    public ResponseEntity<Map<String, Object>> getNotificationSettings() {
+        Map<String, Object> settings = new LinkedHashMap<>();
+        settings.put("enabled", pipelineService.isNotificationsEnabled());
+        return ResponseEntity.ok(settings);
+    }
+
+    /**
+     * Update notification settings.
+     * POST /api/settings/notifications  body: {"enabled": false}
+     */
+    @PostMapping("/settings/notifications")
+    public ResponseEntity<Map<String, Object>> setNotificationSettings(
+            @RequestBody Map<String, Object> body) {
+        Object enabled = body.get("enabled");
+        if (enabled instanceof Boolean) {
+            pipelineService.setNotificationsEnabled((Boolean) enabled);
+            log.info("Notifications {}", (Boolean) enabled ? "enabled" : "disabled");
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("enabled", pipelineService.isNotificationsEnabled());
+        return ResponseEntity.ok(result);
     }
 
     /**

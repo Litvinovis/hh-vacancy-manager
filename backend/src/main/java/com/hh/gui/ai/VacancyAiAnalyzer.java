@@ -19,7 +19,7 @@ import java.util.ArrayList;
 
 /**
  * AI analyzer for vacancies — calls LLM API directly.
- * Replaces Hermes cron AI analysis for the Java project.
+ * Optimized: large batches, rate limiting, exponential backoff retry.
  */
 @Component
 public class VacancyAiAnalyzer {
@@ -35,14 +35,18 @@ public class VacancyAiAnalyzer {
     @Value("${app.ai.model:openrouter/auto}")
     private String model;
 
-    @Value("${app.ai.batch-size:5}")
+    @Value("${app.ai.batch-size:10}")
     private int batchSize;
+
+    // Rate limiter: free models need ~10-15s between requests to avoid 429
+    private static final long MIN_REQUEST_INTERVAL_MS = 12000; // 12 seconds between requests
+    private long lastRequestTime = 0;
 
     private final com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
 
     /**
      * Analyze a batch of vacancies against the profile.
-     * Returns list of results with score, verdict, reason.
+     * Processes in large chunks with rate limiting and retry.
      */
     public List<AiResult> analyzeBatch(List<Vacancy> vacancies, SearchProfile profile) {
         if (apiKey == null || apiKey.isEmpty()) {
@@ -52,23 +56,67 @@ public class VacancyAiAnalyzer {
 
         List<AiResult> results = new ArrayList<>();
 
-        // Process in batches
         for (int i = 0; i < vacancies.size(); i += batchSize) {
             int end = Math.min(i + batchSize, vacancies.size());
             List<Vacancy> batch = vacancies.subList(i, end);
             try {
-                List<AiResult> batchResults = analyzeChunk(batch, profile);
+                // Rate limiting
+                waitForRateLimit();
+
+                // Retry with exponential backoff
+                List<AiResult> batchResults = analyzeWithRetry(batch, profile, 3);
                 results.addAll(batchResults);
-                Thread.sleep(500); // rate limiting
+
+                log.debug("AI batch {}/{} done ({} vacancies, {} results)",
+                    (i / batchSize) + 1, (vacancies.size() + batchSize - 1) / batchSize,
+                    batch.size(), batchResults.size());
+
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 break;
             } catch (Exception e) {
-                log.error("AI analysis error: {}", e.getMessage());
+                log.error("AI analysis error for batch {}-{}: {}", i, end, e.getMessage());
             }
         }
 
         return results;
+    }
+
+    /**
+     * Wait to respect rate limits.
+     */
+    private synchronized void waitForRateLimit() throws InterruptedException {
+        long now = System.currentTimeMillis();
+        long elapsed = now - lastRequestTime;
+        if (elapsed < MIN_REQUEST_INTERVAL_MS) {
+            Thread.sleep(MIN_REQUEST_INTERVAL_MS - elapsed);
+        }
+        lastRequestTime = System.currentTimeMillis();
+    }
+
+    /**
+     * Analyze with exponential backoff retry.
+     * On 429 (rate limit) uses longer backoff: 15s, 30s, 60s...
+     */
+    private List<AiResult> analyzeWithRetry(List<Vacancy> vacancies, SearchProfile profile, int maxRetries)
+            throws Exception {
+        int attempt = 0;
+        while (true) {
+            try {
+                return analyzeChunk(vacancies, profile);
+            } catch (Exception e) {
+                attempt++;
+                if (attempt >= maxRetries) {
+                    log.error("AI analysis failed after {} attempts: {}", maxRetries, e.getMessage());
+                    throw e;
+                }
+                // Longer backoff for rate limits: 15s, 30s, 60s...
+                long backoff = (long) Math.pow(2, attempt) * 7500;
+                log.warn("AI analysis attempt {}/{} failed ({}), retrying in {}s...",
+                    attempt, maxRetries, e.getMessage(), backoff / 1000);
+                Thread.sleep(backoff);
+            }
+        }
     }
 
     private List<AiResult> analyzeChunk(List<Vacancy> vacancies, SearchProfile profile) throws Exception {
@@ -119,7 +167,7 @@ public class VacancyAiAnalyzer {
             sb.append("\n");
             sb.append("Адрес: ").append(v.getAddress()).append("\n");
             sb.append("Удалёнка: ").append(v.isRemote() ? "да" : "нет").append("\n");
-            sb.append("Описание: ").append(v.getDescription()).append("\n");
+            sb.append("Описание: ").append(v.getDescription() != null ? v.getDescription().substring(0, Math.min(500, v.getDescription().length())) : "").append("\n");
         }
 
         return sb.toString();
@@ -135,13 +183,12 @@ public class VacancyAiAnalyzer {
         conn.setReadTimeout(120000);
         conn.setDoOutput(true);
 
-        // Build JSON payload
         String escapedPrompt = prompt.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n");
         String messages = "[{\"role\":\"user\",\"content\":\"" + escapedPrompt + "\"}]";
         String payload = "{\"model\":\"" + model + "\"," +
             "\"messages\":" + messages + "," +
             "\"temperature\":0.3," +
-            "\"max_tokens\":2000}";
+            "\"max_tokens\":4000}";
 
         try (OutputStream os = conn.getOutputStream()) {
             os.write(payload.getBytes(StandardCharsets.UTF_8));
@@ -177,7 +224,6 @@ public class VacancyAiAnalyzer {
             Map<?, ?> message = (Map<?, ?>) choice.get("message");
             String content = (String) message.get("content");
 
-            // Extract JSON from response
             int start = content.indexOf('[');
             int end = content.lastIndexOf(']');
             if (start < 0 || end < 0) {
@@ -206,9 +252,6 @@ public class VacancyAiAnalyzer {
 
     public record AiResult(String hhId, int score, String verdict, String reason) {}
 
-    /**
-     * Profile data for AI analysis.
-     */
     public static class SearchProfile {
         public String city;
         public List<String> priorityDistricts;
@@ -217,16 +260,15 @@ public class VacancyAiAnalyzer {
         public int salaryMin;
         public String schedule;
 
-        public SearchProfile() {}
-
-        public SearchProfile(String city, List<String> priorityDistricts, List<String> skills,
-                             List<String> notSuitable, int salaryMin, String schedule) {
-            this.city = city;
-            this.priorityDistricts = priorityDistricts;
-            this.skills = skills;
-            this.notSuitable = notSuitable;
-            this.salaryMin = salaryMin;
-            this.schedule = schedule;
-        }
+    public static SearchProfile defaultProfile() {
+        SearchProfile p = new SearchProfile();
+        p.city = "Уфа";
+        p.priorityDistricts = List.of("Шакша", "Калининский");
+        p.skills = List.of("Работа с клиентами", "Касса", "Консультирование");
+        p.notSuitable = List.of("Физический труд", "Кол-центр", "Вахта", "Склад",
+                                 "Производство", "Супермаркет", "Телефонные продажи");
+        p.salaryMin = 40000;
+        return p;
     }
+}
 }

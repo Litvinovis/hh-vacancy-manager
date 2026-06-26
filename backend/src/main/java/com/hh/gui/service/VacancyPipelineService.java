@@ -8,6 +8,7 @@ import com.hh.gui.repository.VacancyRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -28,8 +29,19 @@ public class VacancyPipelineService {
     private final VacancyRepository vacancyRepo;
     private final TelegramNotifier telegramNotifier;
 
-    @Value("${app.pipeline.batch-size:20}")
+    @Value("${app.pipeline.batch-size:10}")
     private int batchSize;
+
+    @Value("${app.notifications.enabled:false}")
+    private boolean notificationsEnabled;
+
+    public boolean isNotificationsEnabled() {
+        return notificationsEnabled;
+    }
+
+    public void setNotificationsEnabled(boolean enabled) {
+        this.notificationsEnabled = enabled;
+    }
 
     public VacancyPipelineService(HhApiClient hhApiClient, VacancyAiAnalyzer aiAnalyzer,
                                    VacancyRepository vacancyRepo, TelegramNotifier telegramNotifier) {
@@ -40,21 +52,48 @@ public class VacancyPipelineService {
     }
 
     /**
-     * Full pipeline: collect all vacancies → AI analyze → send report.
+     * Scheduled pipeline: runs every 10 minutes.
+     * Analyzes up to 30 pending vacancies per invocation to avoid SQLite locks.
      */
-    @Transactional
+    @Scheduled(fixedDelay = 600000) // 10 minutes
+    public void scheduledPipeline() {
+        try {
+            com.hh.gui.ai.VacancyAiAnalyzer.SearchProfile aiProfile = com.hh.gui.ai.VacancyAiAnalyzer.SearchProfile.defaultProfile();
+            SearchProfile profile = new SearchProfile();
+            profile.city = aiProfile.city;
+            profile.priorityDistricts = aiProfile.priorityDistricts;
+            profile.skills = aiProfile.skills;
+            profile.notSuitable = aiProfile.notSuitable;
+            profile.salaryMin = aiProfile.salaryMin;
+            profile.queries = SearchQuery.defaultQueries();
+            log.info("=== Scheduled pipeline start ===");
+            runFullPipeline(profile);
+            log.info("=== Scheduled pipeline end ===");
+        } catch (Exception e) {
+            log.error("Scheduled pipeline failed: {}", e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Full pipeline: collect all vacancies → AI analyze → send report.
+     * Each step runs in its own short transaction to avoid long-held locks.
+     */
     public PipelineResult runFullPipeline(SearchProfile profile) {
+        // Convert AI profile to local profile with default queries if needed
+        if (profile.queries == null || profile.queries.isEmpty()) {
+            profile.queries = SearchQuery.defaultQueries();
+        }
         log.info("=== Pipeline start ===");
 
         // Step 1: Collect all vacancies via HH API
         List<Vacancy> allCollected = collectAll(profile);
         log.info("Step 1: Collected {} vacancies total", allCollected.size());
 
-        // Step 2: Save new ones to DB
+        // Step 2: Save new ones to DB (short transaction)
         int newCount = saveNewVacancies(allCollected);
         log.info("Step 2: {} new vacancies saved", newCount);
 
-        // Step 3: AI analyze pending
+        // Step 3: AI analyze pending (runs without holding a long transaction)
         int analyzed = analyzePending(profile);
         log.info("Step 3: {} vacancies AI-analyzed", analyzed);
 
@@ -108,6 +147,7 @@ public class VacancyPipelineService {
     /**
      * Save only new vacancies (not in DB yet).
      */
+    @Transactional
     private int saveNewVacancies(List<Vacancy> vacancies) {
         int saved = 0;
         for (Vacancy v : vacancies) {
@@ -128,7 +168,7 @@ public class VacancyPipelineService {
      */
     private int analyzePending(SearchProfile profile) {
         int totalAnalyzed = 0;
-        int maxPerRun = 50; // limit per pipeline run to avoid burning all quota
+        int maxPerRun = 30; // limit per pipeline run to avoid burning all quota
         int processed = 0;
 
         while (processed < maxPerRun) {
@@ -158,8 +198,13 @@ public class VacancyPipelineService {
 
     /**
      * Send Telegram report and mark as notified.
+     * Skipped if notifications are disabled (app.notifications.enabled=false).
      */
     private void sendReport(List<Vacancy> approved, SearchProfile profile) {
+        if (!notificationsEnabled) {
+            log.info("Step 5: Notifications disabled — skipping Telegram report ({} approved)", approved.size());
+            return;
+        }
         String report = formatReport(approved, profile);
         boolean sent = telegramNotifier.send(report);
         if (sent) {
@@ -225,6 +270,75 @@ public class VacancyPipelineService {
     }
 
     /**
+     * Re-analyze all eligible vacancies (ai_verdict != 'no' AND status != 'rejected').
+     * Resets AI results to pending, then runs AI analysis in batches.
+     * Sends Telegram report when done.
+     *
+     * @return ReanalyzeResult with counts
+     */
+    @Transactional
+    public ReanalyzeResult reanalyzeAll(SearchProfile profile) {
+        log.info("=== Re-analyze start ===");
+
+        // Step 1: Reset AI results for eligible vacancies
+        int resetCount = vacancyRepo.resetAiForRescan();
+        log.info("Step 1: Reset {} vacancies for re-analysis", resetCount);
+
+        if (resetCount == 0) {
+            log.info("No vacancies to re-analyze");
+            ReanalyzeResult empty = new ReanalyzeResult();
+            empty.reset = 0;
+            empty.analyzed = 0;
+            empty.approved = 0;
+            return empty;
+        }
+
+        // Step 2: AI analyze all pending (which are now the reset ones)
+        int totalAnalyzed = 0;
+        int maxPerRun = resetCount; // analyze all reset vacancies
+        int processed = 0;
+
+        while (processed < maxPerRun) {
+            int remaining = maxPerRun - processed;
+            int currentBatchSize = Math.min(batchSize, remaining);
+            List<Vacancy> batch = vacancyRepo.findPending(currentBatchSize);
+            if (batch.isEmpty()) break;
+
+            VacancyAiAnalyzer.SearchProfile aiProfile = new VacancyAiAnalyzer.SearchProfile();
+            aiProfile.city = profile.city;
+            aiProfile.priorityDistricts = profile.priorityDistricts;
+            aiProfile.skills = profile.skills;
+            aiProfile.notSuitable = profile.notSuitable;
+            aiProfile.salaryMin = profile.salaryMin;
+            aiProfile.schedule = profile.schedule;
+
+            var results = aiAnalyzer.analyzeBatch(batch, aiProfile);
+            for (var r : results) {
+                vacancyRepo.updateAiResult(r.hhId(), r.score(), r.verdict(), r.reason());
+                totalAnalyzed++;
+            }
+            processed += batch.size();
+            log.info("Re-analyze progress: {}/{}", processed, maxPerRun);
+        }
+        log.info("Step 2: {} vacancies AI-analyzed", totalAnalyzed);
+
+        // Step 3: Get approved for notification
+        List<Vacancy> approved = vacancyRepo.findUnnotifiedApproved(50, 10);
+        log.info("Step 3: {} approved unnotified vacancies", approved.size());
+
+        // Step 4: Send Telegram report
+        if (!approved.isEmpty()) {
+            sendReport(approved, profile);
+        }
+
+        ReanalyzeResult result = new ReanalyzeResult();
+        result.reset = resetCount;
+        result.analyzed = totalAnalyzed;
+        result.approved = approved.size();
+        return result;
+    }
+
+    /**
      * Single search query entry.
      */
     public static class SearchQuery {
@@ -234,25 +348,62 @@ public class VacancyPipelineService {
         public int salaryMin;
         public boolean isRemote;
         public List<String> excludeWords;
+
+        public static List<SearchQuery> defaultQueries() {
+            List<SearchQuery> queries = new ArrayList<>();
+            // Offline Ufa searches
+            for (String q : List.of("продавец", "консультант", "оператор", "администратор", "менеджер")) {
+                SearchQuery sq = new SearchQuery();
+                sq.query = q;
+                sq.area = 99; // Ufa
+                sq.schedule = "fullTime";
+                sq.salaryMin = 0;
+                sq.isRemote = false;
+                sq.excludeWords = List.of("водитель", "грузчик", "разнорабочий", "курьер", "вахта",
+                        "кол-центр", "call-центр", "call center", "телефон", "холодн",
+                        "супермаркет", "гипермаркет", "пятёрочка", "магнит", "лента", "дикси",
+                        "перекрёсток", "склад", "комплектовщик", "сборщик", "фасовщик", "упаковщик",
+                        "физическ", "ручной труд", "производство", "завод", "цех");
+                queries.add(sq);
+            }
+            // Remote Russia searches
+            for (String q : List.of("оператор ПК", "модератор", "администратор интернет-магазин",
+                    "специалист поддержки", "диспетчер", "помощник руководителя", "секретарь",
+                    "менеджер маркетплейс", "контент-менеджер", "специалист чат")) {
+                SearchQuery sq = new SearchQuery();
+                sq.query = q;
+                sq.area = 113; // Russia
+                sq.schedule = "remote";
+                sq.salaryMin = 40000;
+                sq.isRemote = true;
+                sq.excludeWords = List.of("кол-центр", "call-центр", "call center", "телефон", "холодн",
+                        "продаж", "водитель", "курьер", "грузчик", "разнорабочий", "вахта",
+                        "склад", "производство", "завод", "цех", "фриланс",
+                        "1С программист", "программист", "разработчик", "тестировщик",
+                        "системный администратор", "DevOps", "аналитик данных", "Data Scientist");
+                queries.add(sq);
+            }
+            return queries;
+        }
     }
 
     /**
-     * Search profile with all needed fields.
+     * Local search profile config (extends AI SearchProfile with queries).
      * Replaces localQueries/remoteQueries with flat queries list.
      */
-    public static class SearchProfile {
-        public String city;
-        public List<String> priorityDistricts;
-        public List<String> skills;
-        public List<String> notSuitable;
-        public int salaryMin;
-        public String schedule;
+    public static class SearchProfile extends VacancyAiAnalyzer.SearchProfile {
         public List<SearchQuery> queries;
     }
 
     public static class PipelineResult {
         public int collected;
         public int newVacancies;
+        public int analyzed;
+        public int approved;
+    }
+
+    public static class ReanalyzeResult {
+        public int reset;
         public int analyzed;
         public int approved;
     }
