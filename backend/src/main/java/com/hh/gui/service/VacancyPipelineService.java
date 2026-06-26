@@ -202,6 +202,76 @@ public class VacancyPipelineService {
     }
 
     /**
+     * Analyze ALL pending vacancies (no cap). Processes in batches until none remain.
+     * Respects rate limit cooldown — stops early if rate limited.
+     * Called by daily schedule and explicit API request.
+     *
+     * @return number of vacancies analyzed this run
+     */
+    public int analyzeAllPending(SearchProfile profile) {
+        int totalAnalyzed = 0;
+        int batchNum = 0;
+
+        while (true) {
+            if (aiAnalyzer.isRateLimited()) {
+                log.info("analyzeAllPending stopped early — rate limit cooldown active after {} batches", batchNum);
+                break;
+            }
+            List<Vacancy> batch = vacancyRepo.findPending(batchSize);
+            if (batch.isEmpty()) {
+                log.info("analyzeAllPending complete — no more pending vacancies");
+                break;
+            }
+
+            VacancyAiAnalyzer.SearchProfile aiProfile = new VacancyAiAnalyzer.SearchProfile();
+            aiProfile.city = profile.city;
+            aiProfile.priorityDistricts = profile.priorityDistricts;
+            aiProfile.skills = profile.skills;
+            aiProfile.notSuitable = profile.notSuitable;
+            aiProfile.salaryMin = profile.salaryMin;
+            aiProfile.schedule = profile.schedule;
+
+            var results = aiAnalyzer.analyzeBatch(batch, aiProfile);
+            for (var r : results) {
+                vacancyRepo.updateAiResult(r.hhId(), r.score(), r.verdict(), r.reason());
+                totalAnalyzed++;
+            }
+            batchNum++;
+            log.info("analyzeAllPending batch {}: analyzed {} vacancies (total {})",
+                batchNum, results.size(), totalAnalyzed);
+        }
+
+        return totalAnalyzed;
+    }
+
+    /**
+     * Daily scheduled job: runs at 12:00 every day.
+     * Analyzes ALL pending vacancies (no cap, runs until queue empty).
+     */
+    @Scheduled(cron = "0 0 12 * * *") // every day at 12:00
+    public void dailyPendingAnalysis() {
+        if (aiAnalyzer.isRateLimited()) {
+            log.info("Daily pending analysis skipped — rate limit cooldown active");
+            return;
+        }
+        log.info("=== Daily pending analysis start ===");
+        try {
+            com.hh.gui.ai.VacancyAiAnalyzer.SearchProfile aiProfile = com.hh.gui.ai.VacancyAiAnalyzer.SearchProfile.defaultProfile();
+            SearchProfile profile = new SearchProfile();
+            profile.city = aiProfile.city;
+            profile.priorityDistricts = aiProfile.priorityDistricts;
+            profile.skills = aiProfile.skills;
+            profile.notSuitable = aiProfile.notSuitable;
+            profile.salaryMin = aiProfile.salaryMin;
+
+            int analyzed = analyzeAllPending(profile);
+            log.info("=== Daily pending analysis end: {} vacancies analyzed ===", analyzed);
+        } catch (Exception e) {
+            log.error("Daily pending analysis failed: {}", e.getMessage(), e);
+        }
+    }
+
+    /**
      * Send Telegram report and mark as notified.
      * Skipped if notifications are disabled (app.notifications.enabled=false).
      */

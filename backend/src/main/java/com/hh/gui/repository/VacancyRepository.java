@@ -395,6 +395,16 @@ public class VacancyRepository {
     }
 
     /**
+     * Count unassessed vacancies (ai_score = 0 or no verdict).
+     */
+    public int countUnassessed() {
+        Integer count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM vacancies WHERE ai_score = 0 OR ai_verdict IS NULL OR ai_verdict = ''",
+            Integer.class);
+        return count != null ? count : 0;
+    }
+
+    /**
      * Reset AI results for re-analysis (set to pending).
      * Only for vacancies where ai_verdict != 'no' AND status != 'rejected'.
      * Returns number of reset vacancies.
