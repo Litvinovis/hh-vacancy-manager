@@ -57,6 +57,11 @@ public class VacancyPipelineService {
      */
     @Scheduled(fixedDelay = 600000) // 10 minutes
     public void scheduledPipeline() {
+        // Check rate limit cooldown before doing anything
+        if (aiAnalyzer.isRateLimited()) {
+            log.info("Scheduled pipeline skipped — rate limit cooldown active");
+            return;
+        }
         try {
             com.hh.gui.ai.VacancyAiAnalyzer.SearchProfile aiProfile = com.hh.gui.ai.VacancyAiAnalyzer.SearchProfile.defaultProfile();
             SearchProfile profile = new SearchProfile();
