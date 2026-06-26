@@ -69,8 +69,12 @@ public class VacancyRepository {
 
         List<String> conditions = new ArrayList<>();
         if (status != null && !status.isEmpty() && !"all".equals(status)) {
-            conditions.add("v.status = ?");
-            params.add(status);
+            if ("pending".equals(status)) {
+                conditions.add("v.ai_verdict = 'pending'");
+            } else {
+                conditions.add("v.status = ?");
+                params.add(status);
+            }
         }
         if (district != null && !district.isEmpty()) {
             conditions.add("v.district LIKE ?");
@@ -132,8 +136,12 @@ public class VacancyRepository {
 
         List<String> conditions = new ArrayList<>();
         if (status != null && !status.isEmpty() && !"all".equals(status)) {
-            conditions.add("v.status = ?");
-            params.add(status);
+            if ("pending".equals(status)) {
+                conditions.add("v.ai_verdict = 'pending'");
+            } else {
+                conditions.add("v.status = ?");
+                params.add(status);
+            }
         }
         if (district != null && !district.isEmpty()) {
             conditions.add("v.district LIKE ?");
@@ -348,6 +356,10 @@ public class VacancyRepository {
         jdbc.query("SELECT status, COUNT(*) as cnt FROM vacancies GROUP BY status", rs -> {
             result.put(rs.getString("status"), rs.getInt("cnt"));
         });
+        // Add pending (unassessed) count
+        Integer pending = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM vacancies WHERE ai_verdict = 'pending'", Integer.class);
+        result.put("pending", pending != null ? pending : 0);
         return result;
     }
 
