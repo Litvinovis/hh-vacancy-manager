@@ -77,30 +77,54 @@ public class PipelineController {
 
     /**
      * Re-analyze all eligible vacancies (not rejected by AI or user).
-     * POST /api/pipeline/reanalyze
-     */
-    @PostMapping("/pipeline/reanalyze")
-    public ResponseEntity<Map<String, Object>> reanalyze() {
-        log.info("Re-analyze requested");
+     /**
+      * Re-analyze all eligible vacancies (not rejected by AI or user).
+      * POST /api/pipeline/reanalyze
+      */
+     @PostMapping("/pipeline/reanalyze")
+     public ResponseEntity<Map<String, Object>> reanalyze() {
+         log.info("Re-analyze requested");
+         try {
+             VacancyPipelineService.SearchProfile sp = buildSearchProfile();
+             VacancyPipelineService.ReanalyzeResult result = pipelineService.reanalyzeAll(sp);
+             Map<String, Object> response = new LinkedHashMap<>();
+             response.put("status", "ok");
+             response.put("reset", result.reset);
+             response.put("analyzed", result.analyzed);
+             response.put("approved", result.approved);
+             return ResponseEntity.ok(response);
+         } catch (Exception e) {
+             log.error("Re-analyze error: {}", e.getMessage(), e);
+             Map<String, Object> error = new LinkedHashMap<>();
+             error.put("status", "error");
+             error.put("message", e.getMessage());
+             return ResponseEntity.internalServerError().body(error);
+         }
+     }
 
-        try {
-            VacancyPipelineService.SearchProfile sp = buildSearchProfile();
-            VacancyPipelineService.ReanalyzeResult result = pipelineService.reanalyzeAll(sp);
-
-            Map<String, Object> response = new LinkedHashMap<>();
-            response.put("status", "ok");
-            response.put("reset", result.reset);
-            response.put("analyzed", result.analyzed);
-            response.put("approved", result.approved);
-            return ResponseEntity.ok(response);
-        } catch (Exception e) {
-            log.error("Re-analyze error: {}", e.getMessage(), e);
-            Map<String, Object> error = new LinkedHashMap<>();
-            error.put("status", "error");
-            error.put("message", e.getMessage());
-            return ResponseEntity.internalServerError().body(error);
-        }
-    }
+     /**
+      * Analyze only pending (unassessed) vacancies — no cap, runs until queue empty.
+      * POST /api/pipeline/analyze-pending
+      */
+     @PostMapping("/pipeline/analyze-pending")
+     public ResponseEntity<Map<String, Object>> analyzePending() {
+         log.info("Analyze pending requested");
+         try {
+             VacancyPipelineService.SearchProfile sp = buildSearchProfile();
+             int analyzed = pipelineService.analyzeAllPending(sp);
+             Map<String, Object> response = new LinkedHashMap<>();
+             response.put("status", "ok");
+             response.put("analyzed", analyzed);
+             response.put("remaining", vacancyRepo.countUnassessed());
+             return ResponseEntity.ok(response);
+         } catch (Exception e) {
+             log.error("Analyze pending error: {}", e.getMessage(), e);
+             Map<String, Object> error = new LinkedHashMap<>();
+             error.put("status", "error");
+             error.put("message", e.getMessage());
+             return ResponseEntity.internalServerError().body(error);
+         }
+     }
 
     /**
      * Get count of vacancies eligible for re-analysis.
