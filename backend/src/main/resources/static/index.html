@@ -176,6 +176,9 @@ body { font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; background:va
       <div class="nav-item active" data-filter="all" onclick="setFilter('all',this)">
         <span>📋</span> Все <span class="count" id="cnt-all">0</span>
       </div>
+      <div class="nav-item" data-filter="pending" onclick="setFilter('pending',this)">
+        <span>⏳</span> Не оценено <span class="count" id="cnt-pending">0</span>
+      </div>
       <div class="nav-item" data-filter="new" onclick="setFilter('new',this)">
         <span>🆕</span> Новые <span class="count" id="cnt-new">0</span>
       </div>
@@ -198,7 +201,8 @@ body { font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; background:va
     </div>
 
     <div style="margin-top:auto; padding:12px;">
-      <button class="btn btn-primary" style="width:100%; margin-bottom:8px;" onclick="showImportModal()">📥 Импорт JSON</button>
+      <button class="btn btn-primary" style="width:100%; margin-bottom:8px;" onclick="runPipeline()">▶️ Запустить оценку</button>
+      <button class="btn btn-ghost" style="width:100%; margin-bottom:8px;" onclick="reanalyzeAll()">🔄 Переоценить всё</button>
       <button class="btn btn-ghost" style="width:100%;" onclick="exportData()">📤 Экспорт JSON</button>
     </div>
   </div>
@@ -217,6 +221,17 @@ body { font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; background:va
         <option value="40000">от 40 000 ₽</option>
         <option value="60000">от 60 000 ₽</option>
         <option value="80000">от 80 000 ₽</option>
+      </select>
+      <select class="filter-select" id="score-filter" onchange="loadVacancies()">
+        <option value="">Любой скор</option>
+        <option value="70">≥ 70</option>
+        <option value="50">≥ 50</option>
+        <option value="30">≥ 30</option>
+      </select>
+      <select class="filter-select" id="remote-filter" onchange="loadVacancies()">
+        <option value="">Все</option>
+        <option value="true">Удалёнка</option>
+        <option value="false">Офис</option>
       </select>
       <select class="filter-select" id="sort-filter" onchange="loadVacancies()">
         <option value="score_desc">Скор ↓</option>
@@ -383,6 +398,7 @@ async function loadStats() {
     document.getElementById('stat-applied7d').textContent = s.applied_last_7d;
     document.getElementById('cnt-all').textContent = s.total;
     document.getElementById('cnt-new').textContent = s.by_status.new || 0;
+    document.getElementById('cnt-pending').textContent = s.by_status.pending || 0;
     document.getElementById('cnt-favorite').textContent = s.by_status.favorite || 0;
     document.getElementById('cnt-applied').textContent = s.by_status.applied || 0;
     document.getElementById('cnt-rejected').textContent = s.by_status.rejected || 0;
@@ -399,14 +415,20 @@ async function loadVacancies(page = 1) {
   if (district) params.set('district', district);
   
   const salary = document.getElementById('salary-filter').value;
-  if (salary) params.set('min_salary', salary);
+  if (salary) params.set('minSalary', salary);
+  
+  const score = document.getElementById('score-filter').value;
+  if (score) params.set('minScore', score);
+  
+  const remote = document.getElementById('remote-filter').value;
+  if (remote) params.set('remote', remote);
   
   const search = document.getElementById('search-input').value.trim();
   if (search) params.set('search', search);
   
   params.set('sort', document.getElementById('sort-filter').value);
   params.set('page', page);
-  params.set('per_page', 30);
+  params.set('perPage', 30);
 
   try {
     const data = await api('/api/vacancies?' + params.toString());
@@ -439,8 +461,9 @@ function renderList(data) {
           <span>🏢 ${escHtml(v.company) || '—'}</span>
           <span>📍 ${escHtml(v.district || v.address) || '—'}</span>
           <span>
-            <span class="score-bar"><span class="fill ${scoreClass(v.ai_score)}" style="width:${Math.min(v.ai_score,100)}%"></span></span>
-            <span class="score-num">${v.ai_score}</span>
+            ${v.aiScore > 0 ? `
+            <span class="score-bar"><span class="fill ${scoreClass(v.aiScore)}" style="width:${Math.min(v.aiScore,100)}%"></span></span>
+            <span class="score-num">${v.aiScore}</span>` : '<span class="score-num" style="color:var(--muted)">⏳</span>'}
           </span>
         </div>
         <div class="v-bottom">
@@ -616,6 +639,42 @@ function updateNotifyButton() {
     btn.textContent = notificationsEnabled ? '🔔' : '🔕';
     btn.style.opacity = notificationsEnabled ? '1' : '0.5';
   }
+}
+
+// Pipeline control
+async function runPipeline() {
+  const btn = event?.target || document.querySelector('[onclick*="runPipeline"]');
+  const orig = btn?.textContent || '▶️ Запустить оценку';
+  if (btn) { btn.textContent = '⏳...'; btn.disabled = true; }
+  try {
+    const r = await api('/api/pipeline/analyze-pending', { method: 'POST' });
+    if (r.remaining > 0) {
+      alert(`Оценено: ${r.analyzed}\nОсталось: ${r.remaining}\n\nОценка продолжается в фоне — проверьте через пару минут.`);
+    } else {
+      alert(`✅ Все вакансии оценены!\nОценено: ${r.analyzed}`);
+    }
+    loadStats();
+    loadVacancies(currentPage);
+  } catch(e) {
+    alert('Ошибка: ' + e.message);
+  }
+  if (btn) { btn.textContent = orig; btn.disabled = false; }
+}
+
+async function reanalyzeAll() {
+  if (!confirm('Переоценить все вакансии (кроме отклонённых)? Это может занять много времени.')) return;
+  const btn = event?.target || document.querySelector('[onclick*="reanalyzeAll"]');
+  const orig = btn?.textContent || '🔄 Переоценить всё';
+  if (btn) { btn.textContent = '⏳...'; btn.disabled = true; }
+  try {
+    const r = await api('/api/pipeline/reanalyze', { method: 'POST' });
+    alert(`Сброшено: ${r.reset}\nОценено: ${r.analyzed}\nОдобрено: ${r.approved}`);
+    loadStats();
+    loadVacancies(currentPage);
+  } catch(e) {
+    alert('Ошибка: ' + e.message);
+  }
+  if (btn) { btn.textContent = orig; btn.disabled = false; }
 }
 
 // Selection & bulk
