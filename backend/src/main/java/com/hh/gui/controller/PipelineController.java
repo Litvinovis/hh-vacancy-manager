@@ -148,6 +148,34 @@ public class PipelineController {
     }
 
     /**
+     * Get notification settings.
+     * GET /api/settings/notifications
+     */
+    @GetMapping("/settings/notifications")
+    public ResponseEntity<Map<String, Object>> getNotificationSettings() {
+        Map<String, Object> settings = new LinkedHashMap<>();
+        settings.put("enabled", pipelineService.isNotificationsEnabled());
+        return ResponseEntity.ok(settings);
+    }
+
+    /**
+     * Update notification settings.
+     * POST /api/settings/notifications  body: {"enabled": false}
+     */
+    @PostMapping("/settings/notifications")
+    public ResponseEntity<Map<String, Object>> setNotificationSettings(
+            @RequestBody Map<String, Object> body) {
+        Object enabled = body.get("enabled");
+        if (enabled instanceof Boolean) {
+            pipelineService.setNotificationsEnabled((Boolean) enabled);
+            log.info("Notifications {}", (Boolean) enabled ? "enabled" : "disabled");
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("enabled", pipelineService.isNotificationsEnabled());
+        return ResponseEntity.ok(result);
+    }
+
+    /**
      * Build SearchProfile from YAML config (via AppConfig).
      * Supports new 'searches' list format with backward compatibility.
      */
