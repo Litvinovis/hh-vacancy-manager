@@ -42,7 +42,25 @@ public class VacancyAiAnalyzer {
     private static final long MIN_REQUEST_INTERVAL_MS = 12000; // 12 seconds between requests
     private long lastRequestTime = 0;
 
+    // Rate limit cooldown: when set, all API calls are skipped until this timestamp (epoch ms)
+    private volatile long rateLimitCooldownUntil = 0;
+
     private final com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+
+    /**
+     * Check if the rate limit cooldown is active.
+     * When true, all AI analysis calls will be skipped.
+     */
+    public boolean isRateLimited() {
+        long now = System.currentTimeMillis();
+        if (now >= rateLimitCooldownUntil) {
+            return false;
+        }
+        String msg = "=== COOLDOWN ACTIVE until " + new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm").format(new java.util.Date(rateLimitCooldownUntil)) + " ===";
+        System.err.println(msg);
+        log.warn(msg);
+        return true;
+    }
 
     /**
      * Analyze a batch of vacancies against the profile.
@@ -54,9 +72,19 @@ public class VacancyAiAnalyzer {
             return List.of();
         }
 
+        // Check rate limit cooldown — skip all analysis if active
+        if (isRateLimited()) {
+            return List.of();
+        }
+
         List<AiResult> results = new ArrayList<>();
 
         for (int i = 0; i < vacancies.size(); i += batchSize) {
+            // Check cooldown before each batch (may have been set by a previous batch failure)
+            if (isRateLimited()) {
+                log.info("Stopping AI analysis — rate limit cooldown active after batch {}", (i / batchSize));
+                break;
+            }
             int end = Math.min(i + batchSize, vacancies.size());
             List<Vacancy> batch = vacancies.subList(i, end);
             try {
@@ -102,6 +130,11 @@ public class VacancyAiAnalyzer {
             throws Exception {
         int attempt = 0;
         while (true) {
+            // Stop retrying if rate limit cooldown was set by a previous attempt
+            if (attempt > 0 && isRateLimited()) {
+                log.warn("Aborting retry — rate limit cooldown active");
+                throw new RuntimeException("Rate limited, aborting retry");
+            }
             try {
                 return analyzeChunk(vacancies, profile);
             } catch (Exception e) {
@@ -206,6 +239,19 @@ public class VacancyAiAnalyzer {
             }
             if (code >= 400) {
                 log.error("LLM API error {}: {}", code, sb);
+                // On 429 (rate limit), set cooldown until midnight the next day
+                if (code == 429) {
+                    java.util.Calendar cal = java.util.Calendar.getInstance();
+                    cal.add(java.util.Calendar.DAY_OF_MONTH, 1);
+                    cal.set(java.util.Calendar.HOUR_OF_DAY, 0);
+                    cal.set(java.util.Calendar.MINUTE, 0);
+                    cal.set(java.util.Calendar.SECOND, 0);
+                    cal.set(java.util.Calendar.MILLISECOND, 0);
+                    rateLimitCooldownUntil = cal.getTimeInMillis();
+                    String cooldownMsg = "=== RATE LIMIT COOLDOWN UNTIL " + new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm").format(new java.util.Date(rateLimitCooldownUntil)) + " ===";
+                    System.err.println(cooldownMsg);
+                    log.warn(cooldownMsg);
+                }
                 throw new RuntimeException("LLM API returned " + code);
             }
             return sb.toString();
