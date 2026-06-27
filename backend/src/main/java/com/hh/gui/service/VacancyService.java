@@ -137,9 +137,31 @@ public class VacancyService {
     }
 
     @Transactional
-    public void updateStatus(Long id, String status) {
+    public boolean resetScore(Long id) {
+        if (vacancyRepo.findById(id).isEmpty()) return false;
+        vacancyRepo.resetScore(id);
+        historyRepo.save(id, "score_reset", "Score reset to pending for re-analysis");
+        return true;
+    }
+
+    @Transactional
+    public boolean updateStatus(Long id, String status) {
+        Optional<Vacancy> vOpt = vacancyRepo.findById(id);
+        if (vOpt.isEmpty()) return false;
+
+        Vacancy v = vOpt.get();
+        // When moving to/from fraud, also update ai_verdict for consistency
+        if ("fraud".equals(status)) {
+            vacancyRepo.updateAiResult(v.getHhId(), 0, "fraud", "Помечена как обман вручную");
+        } else {
+            // When restoring from fraud, reset to pending if it was fraud
+            if ("fraud".equals(v.getAiVerdict())) {
+                vacancyRepo.updateAiResult(v.getHhId(), 0, "pending", "Восстановлена из обмана");
+            }
+        }
         vacancyRepo.updateStatus(id, status);
-        historyRepo.save(id, "status_change", "status → " + status);
+        historyRepo.save(id, "status_changed", "status → " + status);
+        return true;
     }
 
     @Transactional

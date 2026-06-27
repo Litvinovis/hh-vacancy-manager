@@ -40,6 +40,11 @@ public class VacancyController {
             @RequestParam(name = "page", defaultValue = "1") int page,
             @RequestParam(name = "perPage", defaultValue = "30") int perPage) {
 
+        // Clamp to valid values
+        if (page < 1) page = 1;
+        if (perPage < 1) perPage = 30;
+        if (perPage > 200) perPage = 200;
+
         PageResponse<VacancyWithTags> resp = vacancyService.list(
             status, district, minSalary, minScore, search, tag, remote, sort, page, perPage);
 
@@ -141,6 +146,24 @@ public class VacancyController {
         }
         Vacancy v = result.get().getVacancy();
         return ResponseEntity.ok(Map.of("status", "updated", "id", v.getId()));
+    }
+
+    @PostMapping("/vacancies/{id}/reset-score")
+    public ResponseEntity<?> resetScore(@PathVariable Long id) {
+        boolean reset = vacancyService.resetScore(id);
+        if (!reset) return ResponseEntity.notFound().build();
+        return ResponseEntity.ok(Map.of("status", "reset", "id", id));
+    }
+
+    @PutMapping("/vacancies/{id}/status")
+    public ResponseEntity<?> updateStatus(@PathVariable Long id, @RequestBody Map<String, String> body) {
+        String status = body.get("status");
+        if (status == null || status.isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "status is required"));
+        }
+        boolean updated = vacancyService.updateStatus(id, status);
+        if (!updated) return ResponseEntity.notFound().build();
+        return ResponseEntity.ok(Map.of("status", "updated", "id", id));
     }
 
     @PostMapping("/vacancies/bulk-status")

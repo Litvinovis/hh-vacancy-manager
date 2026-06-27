@@ -36,10 +36,13 @@ body { font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; background:va
 .stats-box .stat-val { font-weight:600; }
 
 /* Top bar */
-.topbar { padding:12px 20px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:12px; }
+.topbar { padding:12px 20px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
 .search-input { flex:1; max-width:400px; padding:8px 14px; background:var(--surface); border:1px solid var(--border); border-radius:8px; color:var(--text); font-size:14px; outline:none; }
 .search-input:focus { border-color:var(--accent); }
 .filter-select { padding:8px 12px; background:var(--surface); border:1px solid var(--border); border-radius:8px; color:var(--text); font-size:13px; outline:none; }
+.filter-select:focus { border-color:var(--accent); }
+.btn-tiny { padding:2px 6px; font-size:12px; background:transparent; border:1px solid var(--border); border-radius:4px; color:var(--muted); cursor:pointer; transition:all .15s; }
+.btn-tiny:hover { color:var(--accent); border-color:var(--accent); }
 .topbar-spacer { flex:1; }
 .btn { padding:8px 16px; border:none; border-radius:8px; cursor:pointer; font-size:13px; font-weight:600; transition:all .15s; }
 .btn-primary { background:var(--accent); color:#fff; }
@@ -191,6 +194,9 @@ body { font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; background:va
       <div class="nav-item" data-filter="rejected" onclick="setFilter('rejected',this)">
         <span>❌</span> Отклонено <span class="count" id="cnt-rejected">0</span>
       </div>
+      <div class="nav-item" data-filter="fraud" onclick="setFilter('fraud',this)">
+        <span>🚫</span> Обман <span class="count" id="cnt-fraud">0</span>
+      </div>
     </div>
 
     <div class="stats-box" id="stats-box">
@@ -202,7 +208,7 @@ body { font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; background:va
 
     <div style="margin-top:auto; padding:12px;">
       <button class="btn btn-primary" style="width:100%; margin-bottom:8px;" onclick="runPipeline()">▶️ Запустить оценку</button>
-      <button class="btn btn-ghost" style="width:100%; margin-bottom:8px;" onclick="reanalyzeAll()">🔄 Переоценить всё</button>
+      <button class="btn btn-ghost" style="width:100%; margin-bottom:8px;" onclick="showReanalyzeModal()">🔄 Переоценить всё</button>
       <button class="btn btn-ghost" style="width:100%;" onclick="exportData()">📤 Экспорт JSON</button>
     </div>
   </div>
@@ -282,6 +288,16 @@ body { font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; background:va
             <button class="btn" id="btn-apply" onclick="toggleStatus('applied')">📤 Отклик</button>
             <button class="btn" id="btn-reject" onclick="toggleStatus('rejected')">❌ Отклонить</button>
             <button class="btn btn-link" id="d-url-btn" onclick="openUrl()" style="display:none;">🔗 HH.ru</button>
+          </div>
+          <div class="detail-actions" style="margin-top:8px;">
+            <select class="filter-select" id="move-status-select" onchange="moveStatus(this.value)">
+              <option value="">Переместить в...</option>
+              <option value="new">🆕 Новые</option>
+              <option value="favorite">⭐ Избранное</option>
+              <option value="applied">📤 Отклик</option>
+              <option value="rejected">❌ Отклонить</option>
+              <option value="fraud">🚫 Обман</option>
+            </select>
           </div>
         </div>
 
@@ -370,11 +386,15 @@ document.addEventListener('DOMContentLoaded', () => {
   importModal.addEventListener('click', (e) => {
     if (e.target === importModal) closeImportModal();
   });
+  document.getElementById('reanalyze-modal').addEventListener('click', (e) => {
+    if (e.target.id === 'reanalyze-modal') closeReanalyzeModal();
+  });
 
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       closeDetail();
       closeImportModal();
+      closeReanalyzeModal();
     }
   });
 });
@@ -402,6 +422,7 @@ async function loadStats() {
     document.getElementById('cnt-favorite').textContent = s.by_status.favorite || 0;
     document.getElementById('cnt-applied').textContent = s.by_status.applied || 0;
     document.getElementById('cnt-rejected').textContent = s.by_status.rejected || 0;
+    document.getElementById('cnt-fraud').textContent = s.by_status.fraud || 0;
   } catch(e) { console.error('Stats error:', e); }
 }
 
@@ -470,6 +491,7 @@ function renderList(data) {
           <span class="tag tag-status tag-${v.status}">${statusLabel(v.status)}</span>
           ${(v.tags||[]).map(t => `<span class="tag tag-gray">${escHtml(t)}</span>`).join('')}
           ${v.district?.includes('Шакша') ? '<span class="tag tag-green">🏠 Шакша</span>' : ''}
+          <button class="btn btn-tiny" onclick="event.stopPropagation(); resetScore(${v.id})" title="Переоценить вакансию">🔄</button>
         </div>
       </div>
     </div>
@@ -785,6 +807,63 @@ function escHtml(s) {
   const d = document.createElement('div');
   d.textContent = s;
   return d.innerHTML;
+}
+</script>
+
+<!-- Reanalyze Confirmation Modal -->
+<div class="modal-overlay" id="reanalyze-modal">
+  <div class="modal">
+    <h3>🔄 Переоценить все вакансии?</h3>
+    <p style="color:var(--muted); font-size:14px; margin-bottom:16px;">
+      Процесс займёт несколько дней. AI оценит все вакансии заново (кроме отклонённых и мошеннических).
+      <br><br>
+      <b>Вы уверены?</b>
+    </p>
+    <div class="btn-group">
+      <button class="btn btn-ghost" onclick="closeReanalyzeModal()">Нет</button>
+      <button class="btn btn-primary" onclick="confirmReanalyze()">Да</button>
+    </div>
+  </div>
+</div>
+
+<script>
+function showReanalyzeModal() {
+  document.getElementById('reanalyze-modal').classList.add('open');
+}
+function closeReanalyzeModal() {
+  document.getElementById('reanalyze-modal').classList.remove('open');
+}
+async function confirmReanalyze() {
+  closeReanalyzeModal();
+  await reanalyzeAll();
+}
+
+async function resetScore(id) {
+  if (!confirm('Переоценить эту вакансию? Скор будет сброшен.')) return;
+  try {
+    await api(`/api/vacancies/${id}/reset-score`, { method: 'POST' });
+    loadStats();
+    loadVacancies(currentPage);
+  } catch(e) {
+    alert('Ошибка: ' + e.message);
+  }
+}
+
+async function moveStatus(newStatus) {
+  if (!newStatus || !selectedId) return;
+  try {
+    await api(`/api/vacancies/${selectedId}/status`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: newStatus })
+    });
+    document.getElementById('move-status-select').value = '';
+    openDetail(selectedId);
+    loadStats();
+    loadVacancies(currentPage);
+  } catch(e) {
+    alert('Ошибка: ' + e.message);
+  }
 }
 </script>
 </body>
