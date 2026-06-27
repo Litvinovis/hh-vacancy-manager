@@ -68,7 +68,7 @@ public class VacancyAiAnalyzer {
      */
     public List<AiResult> analyzeBatch(List<Vacancy> vacancies, SearchProfile profile) {
         if (apiKey == null || apiKey.isEmpty()) {
-            log.warn("AI API key not configured, skipping AI analysis");
+            log.warn("Ключ AI API не настроен, пропускаем анализ");
             return List.of();
         }
 
@@ -82,7 +82,7 @@ public class VacancyAiAnalyzer {
         for (int i = 0; i < vacancies.size(); i += batchSize) {
             // Check cooldown before each batch (may have been set by a previous batch failure)
             if (isRateLimited()) {
-                log.info("Stopping AI analysis — rate limit cooldown active after batch {}", (i / batchSize));
+                log.info("Остановка AI-анализа — активен период охлаждения после пакета {}", (i / batchSize));
                 break;
             }
             int end = Math.min(i + batchSize, vacancies.size());
@@ -95,7 +95,7 @@ public class VacancyAiAnalyzer {
                 List<AiResult> batchResults = analyzeWithRetry(batch, profile, 3);
                 results.addAll(batchResults);
 
-                log.debug("AI batch {}/{} done ({} vacancies, {} results)",
+                log.debug("AI-пакет {}/{} готов ({} вакансий, {} результатов)",
                     (i / batchSize) + 1, (vacancies.size() + batchSize - 1) / batchSize,
                     batch.size(), batchResults.size());
 
@@ -103,7 +103,7 @@ public class VacancyAiAnalyzer {
                 Thread.currentThread().interrupt();
                 break;
             } catch (Exception e) {
-                log.error("AI analysis error for batch {}-{}: {}", i, end, e.getMessage());
+                log.error("Ошибка AI-анализа для пакета {}-{}: {}", i, end, e.getMessage());
             }
         }
 
@@ -132,7 +132,7 @@ public class VacancyAiAnalyzer {
         while (true) {
             // Stop retrying if rate limit cooldown was set by a previous attempt
             if (attempt > 0 && isRateLimited()) {
-                log.warn("Aborting retry — rate limit cooldown active");
+                log.warn("Пробуем повторить — активен период охлаждения для ограничения запросов");
                 throw new RuntimeException("Rate limited, aborting retry");
             }
             try {
@@ -140,12 +140,12 @@ public class VacancyAiAnalyzer {
             } catch (Exception e) {
                 attempt++;
                 if (attempt >= maxRetries) {
-                    log.error("AI analysis failed after {} attempts: {}", maxRetries, e.getMessage());
+                    log.error("AI-анализ не удался после {} попыток: {}", maxRetries, e.getMessage());
                     throw e;
                 }
                 // Longer backoff for rate limits: 15s, 30s, 60s...
                 long backoff = (long) Math.pow(2, attempt) * 7500;
-                log.warn("AI analysis attempt {}/{} failed ({}), retrying in {}s...",
+                log.warn("Попытка AI-анализа {}/{} не удалась ({}), повторяем через {}с...",
                     attempt, maxRetries, e.getMessage(), backoff / 1000);
                 Thread.sleep(backoff);
             }
@@ -179,8 +179,41 @@ public class VacancyAiAnalyzer {
         sb.append("- Соответствие опыту: ").append(String.join(", ", profile.skills)).append("\n");
         sb.append("- Шакша в адресе = бонус\n\n");
 
+        sb.append("УДАЛЁННАЯ РАБОТА:\n");
+        sb.append("- Если вакансия предлагает удалённый формат — оценивай её ВЫШЕ, это приоритет\n");
+        sb.append("- Но удалёнка должна быть ИНТЕРЕСНОЙ, а не рутинной\n\n");
+
+        sb.append("ЧТО СЧИТАТЬ ИНТЕРЕСНОЙ РАБОТОЙ (высокий балл):\n");
+        sb.append("- Задачи требуют аналитического мышления, коммуникации, разнообразия\n");
+        sb.append("- Непредсказуемый рабочий процесс, не монотонная конвейерная работа\n");
+        sb.append("- Нестандартные должности: координатор проектов, специалист по обучению, ");
+        sb.append("куратор, модератор контента, оператор на расшифровке, ассистент с разными ");
+        sb.append("задачами, специалист по вводу и обработке данных, виртуальный помощник\n\n");
+
+        sb.append("ЧТО СЧИТАТЬ НЕИНТЕРЕСНОЙ РАБОТОЙ (низкий балл даже при удалёнке):\n");
+        sb.append("- Поддержка/консультирование банковских клиентов по типовым вопросам\n");
+        sb.append("- Монотонная обработка однотипных заявок, писем, тикетов без разнообразия задач\n");
+        sb.append("- Прямые продажи, active sales, впаривание услуг\n");
+        sb.append("- Транскрибация/расшифровка аудио «в потоке», копипаст данных\n");
+        sb.append("- Работа по скриптам с жёстким регламентом и сквозной контролем\n\n");
+
+        sb.append("ФОРМУЛА ОЦЕНКИ УДАЛЁНКИ:\n");
+        sb.append("- Удалёнка + интересная работа = score 70-100 (высокий приоритет)\n");
+        sb.append("- Удалёнка + скучная/монотонная работа = score 30-50 (не приоритет)\n");
+        sb.append("- Офис/гибрид + интересная = score 50-70\n");
+        sb.append("- Офис/гибрид + скучная = score 20-40\n");
+        sb.append("- Лайфхак: даже обычная должность с необычным описанием или компанией может быть интересной\n\n");
+
+        sb.append("ПРОВЕРКА НА ОБМАН:\n");
+        sb.append("- Оцени, не является ли вакансия или компанией обманом/скамом\n");
+        sb.append("- Завышенная зарплата для простой должности = обман (например, 300000₽ для продавца)\n");
+        sb.append("- Сетевые пирамидные продажи (MLM), крипто-схемы, инфо-партнёрства = обман\n");
+        sb.append("- Компания без отзывов/сайта/реквизитов с нереалистичными условиями = подозрительно\n");
+        sb.append("- Вакансии-скам ставь verdict=\"fraud\" и score=0, но оставляй в базе (не удаляй)\n");
+        sb.append("- Это нужно, чтобы не анализировать одну и ту же мошенническую вакансию повторно\n\n");
+
         sb.append("Проанализируй каждую вакансию и верни JSON-массив с полями:\n");
-        sb.append("[{\"id\": \"...\", \"score\": 0-100, \"verdict\": \"yes\" или \"no\", \"reason\": \"краткое обоснование\"}]\n\n");
+        sb.append("[{\"id\": \"...\", \"score\": 0-100, \"verdict\": \"yes\", \"no\" или \"fraud\", \"reason\": \"краткое обоснование\"}]\n\n");
 
         sb.append("ВАКАНСИИ:\n");
         for (Vacancy v : vacancies) {
@@ -238,7 +271,7 @@ public class VacancyAiAnalyzer {
                 sb.append(line);
             }
             if (code >= 400) {
-                log.error("LLM API error {}: {}", code, sb);
+                log.error("Ошибка LLM API {}: {}", code, sb);
                 // On 429 (rate limit), set cooldown until midnight the next day
                 if (code == 429) {
                     java.util.Calendar cal = java.util.Calendar.getInstance();
@@ -273,7 +306,7 @@ public class VacancyAiAnalyzer {
             int start = content.indexOf('[');
             int end = content.lastIndexOf(']');
             if (start < 0 || end < 0) {
-                log.warn("No JSON array in AI response: {}", content.substring(0, Math.min(200, content.length())));
+                log.warn("JSON-массив не найден в ответе AI: {}", content.substring(0, Math.min(200, content.length())));
                 return results;
             }
 
@@ -287,11 +320,11 @@ public class VacancyAiAnalyzer {
                 String reason = (String) item.getOrDefault("reason", "");
 
                 AiResult r = new AiResult(id, Math.max(0, Math.min(100, score)),
-                    "yes".equals(verdict) ? "yes" : "no", reason);
+                    verdict, reason);
                 results.add(r);
             }
         } catch (Exception e) {
-            log.error("Failed to parse AI response: {}", e.getMessage());
+            log.error("Не удалось разобрать ответ AI: {}", e.getMessage());
         }
         return results;
     }

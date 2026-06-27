@@ -41,14 +41,14 @@ public class AppConfig {
                 if (profiles != null && profiles.containsKey(profileName)) {
                     @SuppressWarnings("unchecked")
                     Map<String, Object> profile = (Map<String, Object>) profiles.get(profileName);
-                    log.info("Loaded profile '{}' from {}", profileName, profileFile);
+                    log.info("Загружен профиль '{}' из {}", profileName, profileFile);
                     return new SearchProfile(profile);
                 }
             }
-            log.warn("Profile '{}' not found in {}, using empty", profileName, profileFile);
+            log.warn("Профиль '{}' не найден в {}, используем пустой", profileName, profileFile);
             return new SearchProfile(Map.of());
         } catch (Exception e) {
-            log.error("Failed to load profile: {}", e.getMessage());
+            log.error("Не удалось загрузить профиль: {}", e.getMessage());
             return new SearchProfile(Map.of());
         }
     }

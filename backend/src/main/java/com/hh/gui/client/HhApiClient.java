@@ -70,9 +70,9 @@ public class HhApiClient {
                 }
             }
 
-            log.info("HH RSS: fetched {} vacancies for '{}' (area={}, schedule={})", results.size(), query, area, schedule);
+            log.info("HH RSS: получено {} вакансий для '{}' (area={}, schedule={})", results.size(), query, area, schedule);
         } catch (Exception e) {
-            log.error("HH RSS error for '{}': {}", query, e.getMessage());
+            log.error("Ошибка HH RSS для '{}': {}", query, e.getMessage());
         }
         return results;
     }
@@ -108,7 +108,7 @@ public class HhApiClient {
 
         int code = conn.getResponseCode();
         if (code != 200) {
-            log.warn("HTTP {} from {}", code, urlStr);
+            log.warn("HTTP {} от {}", code, urlStr);
             return null;
         }
 
@@ -180,7 +180,7 @@ public class HhApiClient {
 
             return v;
         } catch (Exception e) {
-            log.warn("Failed to parse RSS item: {}", e.getMessage());
+            log.warn("Не удалось разобрать RSS-элемент: {}", e.getMessage());
             return null;
         }
     }

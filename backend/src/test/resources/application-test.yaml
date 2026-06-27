@@ -1,0 +1,28 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=false
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema-test.sql
+
+app:
+  ai:
+    api-url: http://localhost:8089/mock
+    api-key: "test-key"
+    model: test/model
+    batch-size: 5
+  scoring:
+    rules-file: config/rules.yaml
+  data-dir: /tmp/test-data
+  profiles-dir: /tmp/test-config/profiles
+  telegram:
+    bot-token: test-token
+    chat-id: "12345"
+
+logging:
+  level:
+    com.hh.gui: INFO

@@ -71,6 +71,8 @@ public class VacancyRepository {
         if (status != null && !status.isEmpty() && !"all".equals(status)) {
             if ("pending".equals(status)) {
                 conditions.add("v.ai_verdict = 'pending'");
+            } else if ("fraud".equals(status)) {
+                conditions.add("v.ai_verdict = 'fraud'");
             } else {
                 conditions.add("v.status = ?");
                 params.add(status);
@@ -113,6 +115,7 @@ public class VacancyRepository {
             case "date_desc" -> "v.created_at DESC";
             case "date_asc" -> "v.created_at ASC";
             case "title_asc" -> "v.title ASC";
+            case "id_desc" -> "v.id DESC";
             default -> "v.ai_score DESC";
         };
         sql.append(" ORDER BY ").append(orderBy);
@@ -138,6 +141,8 @@ public class VacancyRepository {
         if (status != null && !status.isEmpty() && !"all".equals(status)) {
             if ("pending".equals(status)) {
                 conditions.add("v.ai_verdict = 'pending'");
+            } else if ("fraud".equals(status)) {
+                conditions.add("v.ai_verdict = 'fraud'");
             } else {
                 conditions.add("v.status = ?");
                 params.add(status);
@@ -272,6 +277,15 @@ public class VacancyRepository {
     }
 
     /**
+     * Reset AI score for a specific vacancy (mark for re-analysis).
+     */
+    public void resetScore(Long id) {
+        String now = Instant.now().toString();
+        jdbc.update("UPDATE vacancies SET ai_verdict='pending', ai_score=0, ai_reason='', updated_at=? WHERE id=?",
+            now, id);
+    }
+
+    /**
      * Mark vacancies as notified (sent to Telegram).
      */
     public void markNotified(List<String> hhIds) {
@@ -360,6 +374,10 @@ public class VacancyRepository {
         Integer pending = jdbc.queryForObject(
             "SELECT COUNT(*) FROM vacancies WHERE ai_verdict = 'pending'", Integer.class);
         result.put("pending", pending != null ? pending : 0);
+        // Add fraud count
+        Integer fraud = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM vacancies WHERE ai_verdict = 'fraud'", Integer.class);
+        result.put("fraud", fraud != null ? fraud : 0);
         return result;
     }
 
@@ -375,13 +393,15 @@ public class VacancyRepository {
 
     public Double avgSalaryNew() {
         return jdbc.queryForObject(
-            "SELECT AVG(salary_to) FROM vacancies WHERE salary_to > 0 AND status='new'", Double.class);
+            "SELECT AVG(CASE WHEN salary_to > 0 THEN salary_to ELSE salary_from END) " +
+            "FROM vacancies WHERE (salary_to > 0 OR salary_from > 0) AND status='new'", Double.class);
     }
 
     public int countAppliedLast7Days() {
+        String sevenDaysAgo = Instant.now().minusSeconds(7 * 24 * 3600).toString();
         Integer count = jdbc.queryForObject(
-            "SELECT COUNT(*) FROM vacancies WHERE status='applied' AND applied_at > datetime('now', '-7 days')",
-            Integer.class);
+            "SELECT COUNT(*) FROM vacancies WHERE status='applied' AND applied_at > ?",
+            Integer.class, sevenDaysAgo);
         return count != null ? count : 0;
     }
 
@@ -391,7 +411,7 @@ public class VacancyRepository {
      */
     public List<Vacancy> findRescanable() {
         return jdbc.query(
-            "SELECT * FROM vacancies WHERE ai_verdict != 'no' AND (status IS NULL OR status != 'rejected') " +
+            "SELECT * FROM vacancies WHERE ai_verdict NOT IN ('no', 'fraud') AND (status IS NULL OR status != 'rejected') " +
             "ORDER BY published_at DESC",
             rowMapper);
     }
@@ -401,7 +421,7 @@ public class VacancyRepository {
      */
     public int countRescanable() {
         Integer count = jdbc.queryForObject(
-            "SELECT COUNT(*) FROM vacancies WHERE ai_verdict != 'no' AND (status IS NULL OR status != 'rejected')",
+            "SELECT COUNT(*) FROM vacancies WHERE ai_verdict NOT IN ('no', 'fraud') AND (status IS NULL OR status != 'rejected')",
             Integer.class);
         return count != null ? count : 0;
     }
@@ -411,7 +431,7 @@ public class VacancyRepository {
      */
     public int countUnassessed() {
         Integer count = jdbc.queryForObject(
-            "SELECT COUNT(*) FROM vacancies WHERE ai_score = 0 OR ai_verdict IS NULL OR ai_verdict = ''",
+            "SELECT COUNT(*) FROM vacancies WHERE (ai_score = 0 OR ai_verdict IS NULL OR ai_verdict = '') AND ai_verdict != 'fraud'",
             Integer.class);
         return count != null ? count : 0;
     }
@@ -425,7 +445,7 @@ public class VacancyRepository {
         String now = Instant.now().toString();
         return jdbc.update(
             "UPDATE vacancies SET ai_verdict='pending', ai_score=0, ai_reason='', updated_at=? " +
-            "WHERE ai_verdict != 'no' AND (status IS NULL OR status != 'rejected')",
+            "WHERE ai_verdict NOT IN ('no', 'fraud') AND (status IS NULL OR status != 'rejected')",
             now);
     }
 

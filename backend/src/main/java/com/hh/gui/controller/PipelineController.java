@@ -52,7 +52,7 @@ public class PipelineController {
     @PostMapping("/pipeline/run")
     public ResponseEntity<Map<String, Object>> runPipeline(
             @RequestParam(name = "profile", defaultValue = "mom") String profileName) {
-        log.info("Pipeline run requested for profile: {}", profileName);
+        log.info("Запуск пайплайна для профиля: {}", profileName);
 
         try {
             VacancyPipelineService.SearchProfile sp = buildSearchProfile();
@@ -67,7 +67,7 @@ public class PipelineController {
             response.put("approved", result.approved);
             return ResponseEntity.ok(response);
         } catch (Exception e) {
-            log.error("Pipeline error: {}", e.getMessage(), e);
+            log.error("Ошибка пайплайна: {}", e.getMessage(), e);
             Map<String, Object> error = new LinkedHashMap<>();
             error.put("status", "error");
             error.put("message", e.getMessage());
@@ -83,7 +83,7 @@ public class PipelineController {
       */
      @PostMapping("/pipeline/reanalyze")
      public ResponseEntity<Map<String, Object>> reanalyze() {
-         log.info("Re-analyze requested");
+         log.info("Запрошена повторная оценка");
          try {
              VacancyPipelineService.SearchProfile sp = buildSearchProfile();
              VacancyPipelineService.ReanalyzeResult result = pipelineService.reanalyzeAll(sp);
@@ -94,7 +94,7 @@ public class PipelineController {
              response.put("approved", result.approved);
              return ResponseEntity.ok(response);
          } catch (Exception e) {
-             log.error("Re-analyze error: {}", e.getMessage(), e);
+             log.error("Ошибка повторной оценки: {}", e.getMessage(), e);
              Map<String, Object> error = new LinkedHashMap<>();
              error.put("status", "error");
              error.put("message", e.getMessage());
@@ -108,7 +108,7 @@ public class PipelineController {
       */
      @PostMapping("/pipeline/analyze-pending")
      public ResponseEntity<Map<String, Object>> analyzePending() {
-         log.info("Analyze pending requested");
+         log.info("Запрошен анализ необработанных");
          try {
              VacancyPipelineService.SearchProfile sp = buildSearchProfile();
              int analyzed = pipelineService.analyzeAllPending(sp);
@@ -118,7 +118,7 @@ public class PipelineController {
              response.put("remaining", vacancyRepo.countUnassessed());
              return ResponseEntity.ok(response);
          } catch (Exception e) {
-             log.error("Analyze pending error: {}", e.getMessage(), e);
+             log.error("Ошибка анализа необработанных: {}", e.getMessage(), e);
              Map<String, Object> error = new LinkedHashMap<>();
              error.put("status", "error");
              error.put("message", e.getMessage());
@@ -144,17 +144,17 @@ public class PipelineController {
     @Scheduled(cron = "${app.pipeline.cron:0 0 */2 * * *}")
     public void scheduledPipelineRun() {
         if (!pipelineEnabled) {
-            log.debug("Pipeline scheduling disabled");
+            log.debug("Планировщик пайплайна отключён");
             return;
         }
-        log.info("=== Scheduled pipeline run ===");
+        log.info("=== Запланированный запуск пайплайна ===");
         try {
             VacancyPipelineService.SearchProfile sp = buildSearchProfile();
             PipelineResult result = pipelineService.runFullPipeline(sp);
-            log.info("Pipeline done: collected={}, new={}, analyzed={}, approved={}",
+            log.info("Пайплайн завершён: собрано={}, новых={}, проанализировано={}, одобрено={}",
                 result.collected, result.newVacancies, result.analyzed, result.approved);
         } catch (Exception e) {
-            log.error("Scheduled pipeline error: {}", e.getMessage(), e);
+            log.error("Ошибка запланированного пайплайна: {}", e.getMessage(), e);
         }
     }
 
@@ -192,7 +192,7 @@ public class PipelineController {
         Object enabled = body.get("enabled");
         if (enabled instanceof Boolean) {
             pipelineService.setNotificationsEnabled((Boolean) enabled);
-            log.info("Notifications {}", (Boolean) enabled ? "enabled" : "disabled");
+            log.info("Уведомления {}", (Boolean) enabled ? "включены" : "отключены");
         }
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("enabled", pipelineService.isNotificationsEnabled());

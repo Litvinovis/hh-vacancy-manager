@@ -59,7 +59,7 @@ public class VacancyPipelineService {
     public void scheduledPipeline() {
         // Check rate limit cooldown before doing anything
         if (aiAnalyzer.isRateLimited()) {
-            log.info("Scheduled pipeline skipped — rate limit cooldown active");
+            log.info("Запланированный пайплайн пропущен — активен период охлаждения");
             return;
         }
         try {
@@ -71,11 +71,11 @@ public class VacancyPipelineService {
             profile.notSuitable = aiProfile.notSuitable;
             profile.salaryMin = aiProfile.salaryMin;
             profile.queries = SearchQuery.defaultQueries();
-            log.info("=== Scheduled pipeline start ===");
+            log.info("=== Начало запланированного пайплайна ===");
             runFullPipeline(profile);
-            log.info("=== Scheduled pipeline end ===");
+            log.info("=== Конец запланированного пайплайна ===");
         } catch (Exception e) {
-            log.error("Scheduled pipeline failed: {}", e.getMessage(), e);
+            log.error("Запланированный пайплайн завершился ошибкой: {}", e.getMessage(), e);
         }
     }
 
@@ -88,23 +88,23 @@ public class VacancyPipelineService {
         if (profile.queries == null || profile.queries.isEmpty()) {
             profile.queries = SearchQuery.defaultQueries();
         }
-        log.info("=== Pipeline start ===");
+        log.info("=== Начало пайплайна ===");
 
         // Step 1: Collect all vacancies via HH API
         List<Vacancy> allCollected = collectAll(profile);
-        log.info("Step 1: Collected {} vacancies total", allCollected.size());
+        log.info("Шаг 1: собрано {} вакансий", allCollected.size());
 
         // Step 2: Save new ones to DB (short transaction)
         int newCount = saveNewVacancies(allCollected);
-        log.info("Step 2: {} new vacancies saved", newCount);
+        log.info("Шаг 2: {} новых вакансий сохранено", newCount);
 
         // Step 3: AI analyze pending (runs without holding a long transaction)
         int analyzed = analyzePending(profile);
-        log.info("Step 3: {} vacancies AI-analyzed", analyzed);
+        log.info("Шаг 3: {} вакансий проанализировано AI", analyzed);
 
         // Step 4: Get approved for notification (min AI score = 50, max 10 per batch)
         List<Vacancy> approved = vacancyRepo.findUnnotifiedApproved(50, 10);
-        log.info("Step 4: {} approved unnotified vacancies", approved.size());
+        log.info("Шаг 4: {} одобренных неуведомлённых вакансий", approved.size());
 
         // Step 5: Send Telegram report
         if (!approved.isEmpty()) {
@@ -126,12 +126,12 @@ public class VacancyPipelineService {
         List<Vacancy> all = new ArrayList<>();
 
         if (profile.queries == null || profile.queries.isEmpty()) {
-            log.warn("No search queries configured");
+            log.warn("Поисковые запросы не настроены");
             return all;
         }
 
         for (SearchQuery sq : profile.queries) {
-            log.debug("Collecting: query='{}' area={} schedule={} remote={}",
+            log.debug("Сбор: запрос='{}' area={} schedule={} remote={}",
                     sq.query, sq.area, sq.schedule, sq.isRemote);
             List<Vacancy> batch = hhApiClient.fetchRss(sq.query, sq.area, sq.schedule, sq.salaryMin);
             for (Vacancy v : batch) {
@@ -196,7 +196,7 @@ public class VacancyPipelineService {
                 totalAnalyzed++;
             }
             processed += batch.size();
-            log.debug("AI progress: {}/{} this run", processed, maxPerRun);
+            log.debug("Прогресс AI: {}/{} в этом запуске", processed, maxPerRun);
         }
         return totalAnalyzed;
     }
@@ -214,12 +214,12 @@ public class VacancyPipelineService {
 
         while (true) {
             if (aiAnalyzer.isRateLimited()) {
-                log.info("analyzeAllPending stopped early — rate limit cooldown active after {} batches", batchNum);
+                log.info("analyzeAllPending остановлен — активен период охлаждения после {} пакетов", batchNum);
                 break;
             }
             List<Vacancy> batch = vacancyRepo.findPending(batchSize);
             if (batch.isEmpty()) {
-                log.info("analyzeAllPending complete — no more pending vacancies");
+                log.info("analyzeAllPending завершён — больше нет необработанных вакансий");
                 break;
             }
 
@@ -237,7 +237,7 @@ public class VacancyPipelineService {
                 totalAnalyzed++;
             }
             batchNum++;
-            log.info("analyzeAllPending batch {}: analyzed {} vacancies (total {})",
+            log.info("Пакет analyzeAllPending {}: проанализировано {} вакансий (всего {})",
                 batchNum, results.size(), totalAnalyzed);
         }
 
@@ -251,10 +251,10 @@ public class VacancyPipelineService {
     @Scheduled(cron = "0 0 12 * * *") // every day at 12:00
     public void dailyPendingAnalysis() {
         if (aiAnalyzer.isRateLimited()) {
-            log.info("Daily pending analysis skipped — rate limit cooldown active");
+            log.info("Ежедневный анализ необработанных пропущен — активен период охлаждения");
             return;
         }
-        log.info("=== Daily pending analysis start ===");
+        log.info("=== Начало ежедневного анализа необработанных ===");
         try {
             com.hh.gui.ai.VacancyAiAnalyzer.SearchProfile aiProfile = com.hh.gui.ai.VacancyAiAnalyzer.SearchProfile.defaultProfile();
             SearchProfile profile = new SearchProfile();
@@ -265,9 +265,9 @@ public class VacancyPipelineService {
             profile.salaryMin = aiProfile.salaryMin;
 
             int analyzed = analyzeAllPending(profile);
-            log.info("=== Daily pending analysis end: {} vacancies analyzed ===", analyzed);
+            log.info("=== Конец ежедневного анализа необработанных: {} вакансий проанализировано ===", analyzed);
         } catch (Exception e) {
-            log.error("Daily pending analysis failed: {}", e.getMessage(), e);
+            log.error("Ежедневный анализ необработанных завершился ошибкой: {}", e.getMessage(), e);
         }
     }
 
@@ -277,7 +277,7 @@ public class VacancyPipelineService {
      */
     private void sendReport(List<Vacancy> approved, SearchProfile profile) {
         if (!notificationsEnabled) {
-            log.info("Step 5: Notifications disabled — skipping Telegram report ({} approved)", approved.size());
+            log.info("Шаг 5: Уведомления отключены — пропускаем отчёт Telegram ({} одобренных)", approved.size());
             return;
         }
         String report = formatReport(approved, profile);
@@ -285,7 +285,7 @@ public class VacancyPipelineService {
         if (sent) {
             List<String> ids = approved.stream().map(Vacancy::getHhId).collect(Collectors.toList());
             vacancyRepo.markNotified(ids);
-            log.info("Step 5: Report sent ({} vacancies)", approved.size());
+            log.info("Шаг 5: Отчёт отправлен ({} вакансий)", approved.size());
         }
     }
 
@@ -353,14 +353,14 @@ public class VacancyPipelineService {
      */
     @Transactional
     public ReanalyzeResult reanalyzeAll(SearchProfile profile) {
-        log.info("=== Re-analyze start ===");
+        log.info("=== Начало повторной оценки ===");
 
         // Step 1: Reset AI results for eligible vacancies
         int resetCount = vacancyRepo.resetAiForRescan();
-        log.info("Step 1: Reset {} vacancies for re-analysis", resetCount);
+        log.info("Шаг 1: Сброшено {} вакансий для повторного анализа", resetCount);
 
         if (resetCount == 0) {
-            log.info("No vacancies to re-analyze");
+            log.info("Нет вакансий для повторной оценки");
             ReanalyzeResult empty = new ReanalyzeResult();
             empty.reset = 0;
             empty.analyzed = 0;
@@ -393,13 +393,13 @@ public class VacancyPipelineService {
                 totalAnalyzed++;
             }
             processed += batch.size();
-            log.info("Re-analyze progress: {}/{}", processed, maxPerRun);
+            log.info("Прогресс повторной оценки: {}/{}", processed, maxPerRun);
         }
-        log.info("Step 2: {} vacancies AI-analyzed", totalAnalyzed);
+        log.info("Шаг 2: {} вакансий проанализировано AI", totalAnalyzed);
 
         // Step 3: Get approved for notification
         List<Vacancy> approved = vacancyRepo.findUnnotifiedApproved(50, 10);
-        log.info("Step 3: {} approved unnotified vacancies", approved.size());
+        log.info("Шаг 3: {} одобренных неуведомлённых вакансий", approved.size());
 
         // Step 4: Send Telegram report
         if (!approved.isEmpty()) {
