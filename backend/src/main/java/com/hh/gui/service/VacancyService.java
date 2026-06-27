@@ -72,7 +72,7 @@ public class VacancyService {
 
         Vacancy saved = vacancyRepo.save(v);
         historyRepo.save(saved.getId(), "created", "Vacancy imported");
-        log.info("Created vacancy: id={}, title={}", saved.getId(), saved.getTitle());
+        log.info("Создана вакансия: id={}, title={}", saved.getId(), saved.getTitle());
         return saved;
     }
 
@@ -190,7 +190,7 @@ public class VacancyService {
             create(v);
             imported++;
         }
-        log.info("Import complete: imported={}, skipped={}", imported, skipped);
+        log.info("Импорт завершён: импортировано={}, пропущено={}", imported, skipped);
         return imported;
     }
 

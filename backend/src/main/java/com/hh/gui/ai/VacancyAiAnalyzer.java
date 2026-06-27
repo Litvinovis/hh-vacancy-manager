@@ -68,7 +68,7 @@ public class VacancyAiAnalyzer {
      */
     public List<AiResult> analyzeBatch(List<Vacancy> vacancies, SearchProfile profile) {
         if (apiKey == null || apiKey.isEmpty()) {
-            log.warn("AI API key not configured, skipping AI analysis");
+            log.warn("Ключ AI API не настроен, пропускаем анализ");
             return List.of();
         }
 
@@ -82,7 +82,7 @@ public class VacancyAiAnalyzer {
         for (int i = 0; i < vacancies.size(); i += batchSize) {
             // Check cooldown before each batch (may have been set by a previous batch failure)
             if (isRateLimited()) {
-                log.info("Stopping AI analysis — rate limit cooldown active after batch {}", (i / batchSize));
+                log.info("Остановка AI-анализа — активен период охлаждения после пакета {}", (i / batchSize));
                 break;
             }
             int end = Math.min(i + batchSize, vacancies.size());
@@ -95,7 +95,7 @@ public class VacancyAiAnalyzer {
                 List<AiResult> batchResults = analyzeWithRetry(batch, profile, 3);
                 results.addAll(batchResults);
 
-                log.debug("AI batch {}/{} done ({} vacancies, {} results)",
+                log.debug("AI-пакет {}/{} готов ({} вакансий, {} результатов)",
                     (i / batchSize) + 1, (vacancies.size() + batchSize - 1) / batchSize,
                     batch.size(), batchResults.size());
 
@@ -103,7 +103,7 @@ public class VacancyAiAnalyzer {
                 Thread.currentThread().interrupt();
                 break;
             } catch (Exception e) {
-                log.error("AI analysis error for batch {}-{}: {}", i, end, e.getMessage());
+                log.error("Ошибка AI-анализа для пакета {}-{}: {}", i, end, e.getMessage());
             }
         }
 
@@ -132,7 +132,7 @@ public class VacancyAiAnalyzer {
         while (true) {
             // Stop retrying if rate limit cooldown was set by a previous attempt
             if (attempt > 0 && isRateLimited()) {
-                log.warn("Aborting retry — rate limit cooldown active");
+                log.warn("Пробуем повторить — активен период охлаждения для ограничения запросов");
                 throw new RuntimeException("Rate limited, aborting retry");
             }
             try {
@@ -140,12 +140,12 @@ public class VacancyAiAnalyzer {
             } catch (Exception e) {
                 attempt++;
                 if (attempt >= maxRetries) {
-                    log.error("AI analysis failed after {} attempts: {}", maxRetries, e.getMessage());
+                    log.error("AI-анализ не удался после {} попыток: {}", maxRetries, e.getMessage());
                     throw e;
                 }
                 // Longer backoff for rate limits: 15s, 30s, 60s...
                 long backoff = (long) Math.pow(2, attempt) * 7500;
-                log.warn("AI analysis attempt {}/{} failed ({}), retrying in {}s...",
+                log.warn("Попытка AI-анализа {}/{} не удалась ({}), повторяем через {}с...",
                     attempt, maxRetries, e.getMessage(), backoff / 1000);
                 Thread.sleep(backoff);
             }
@@ -271,7 +271,7 @@ public class VacancyAiAnalyzer {
                 sb.append(line);
             }
             if (code >= 400) {
-                log.error("LLM API error {}: {}", code, sb);
+                log.error("Ошибка LLM API {}: {}", code, sb);
                 // On 429 (rate limit), set cooldown until midnight the next day
                 if (code == 429) {
                     java.util.Calendar cal = java.util.Calendar.getInstance();
@@ -306,7 +306,7 @@ public class VacancyAiAnalyzer {
             int start = content.indexOf('[');
             int end = content.lastIndexOf(']');
             if (start < 0 || end < 0) {
-                log.warn("No JSON array in AI response: {}", content.substring(0, Math.min(200, content.length())));
+                log.warn("JSON-массив не найден в ответе AI: {}", content.substring(0, Math.min(200, content.length())));
                 return results;
             }
 
@@ -324,7 +324,7 @@ public class VacancyAiAnalyzer {
                 results.add(r);
             }
         } catch (Exception e) {
-            log.error("Failed to parse AI response: {}", e.getMessage());
+            log.error("Не удалось разобрать ответ AI: {}", e.getMessage());
         }
         return results;
     }

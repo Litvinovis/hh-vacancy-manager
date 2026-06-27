@@ -30,11 +30,11 @@ public class TelegramNotifier {
 
     public boolean send(String message) {
         if (botToken == null || botToken.isEmpty()) {
-            log.warn("Telegram bot token not configured");
+            log.warn("Токен Telegram-бота не настроен");
             return false;
         }
         if (chatId == null || chatId.isEmpty()) {
-            log.warn("Telegram chat ID not configured");
+            log.warn("ID чата Telegram не настроен");
             return false;
         }
 
@@ -57,19 +57,19 @@ public class TelegramNotifier {
 
             int code = conn.getResponseCode();
             if (code == 200) {
-                log.info("Telegram message sent successfully");
+                log.info("Сообщение Telegram успешно отправлено");
                 return true;
             } else {
                 try (BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getErrorStream()))) {
                     StringBuilder sb = new StringBuilder();
                     String line;
                     while ((line = reader.readLine()) != null) sb.append(line);
-                    log.error("Telegram API error {}: {}", code, sb);
+                    log.error("Ошибка Telegram API {}: {}", code, sb);
                 }
                 return false;
             }
         } catch (Exception e) {
-            log.error("Failed to send Telegram message: {}", e.getMessage());
+            log.error("Не удалось отправить сообщение Telegram: {}", e.getMessage());
             return false;
         }
     }

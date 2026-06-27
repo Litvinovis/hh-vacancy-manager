@@ -34,7 +34,7 @@ public class ScoringEngine {
             Yaml yaml = new Yaml();
             Map<String, Object> data = yaml.load(is);
             if (data == null || !data.containsKey("rules")) {
-                log.warn("No rules found in {}", rulesFile);
+                log.warn("Правила не найдены в {}", rulesFile);
                 return;
             }
 
@@ -47,9 +47,9 @@ public class ScoringEngine {
                 String reason = (String) r.getOrDefault("reason", "");
                 rules.add(new ScoringRule(match, field, score, reason));
             }
-            log.info("Loaded {} scoring rules from {}", rules.size(), rulesFile);
+            log.info("Загружено {} правил скоринга из {}", rules.size(), rulesFile);
         } catch (Exception e) {
-            log.error("Failed to load scoring rules from {}: {}", rulesFile, e.getMessage());
+            log.error("Не удалось загрузить правила скоринга из {}: {}", rulesFile, e.getMessage());
         }
     }
 
