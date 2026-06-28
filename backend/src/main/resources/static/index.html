@@ -413,16 +413,16 @@ async function loadStats() {
   try {
     const s = await api('/api/stats');
     document.getElementById('stat-total').textContent = s.total;
-    document.getElementById('stat-score').textContent = s.avg_score;
-    document.getElementById('stat-salary').textContent = s.avg_salary ? s.avg_salary.toLocaleString() + ' ₽' : '—';
-    document.getElementById('stat-applied7d').textContent = s.applied_last_7d;
+    document.getElementById('stat-score').textContent = s.avgScore;
+    document.getElementById('stat-salary').textContent = s.avgSalary ? s.avgSalary.toLocaleString() + ' ₽' : '—';
+    document.getElementById('stat-applied7d').textContent = s.appliedLast7d;
     document.getElementById('cnt-all').textContent = s.total;
-    document.getElementById('cnt-new').textContent = s.by_status.new || 0;
-    document.getElementById('cnt-pending').textContent = s.by_status.pending || 0;
-    document.getElementById('cnt-favorite').textContent = s.by_status.favorite || 0;
-    document.getElementById('cnt-applied').textContent = s.by_status.applied || 0;
-    document.getElementById('cnt-rejected').textContent = s.by_status.rejected || 0;
-    document.getElementById('cnt-fraud').textContent = s.by_status.fraud || 0;
+    document.getElementById('cnt-new').textContent = s.byStatus.new || 0;
+    document.getElementById('cnt-pending').textContent = s.byStatus.pending || 0;
+    document.getElementById('cnt-favorite').textContent = s.byStatus.favorite || 0;
+    document.getElementById('cnt-applied').textContent = s.byStatus.applied || 0;
+    document.getElementById('cnt-rejected').textContent = s.byStatus.rejected || 0;
+    document.getElementById('cnt-fraud').textContent = s.byStatus.fraud || 0;
   } catch(e) { console.error('Stats error:', e); }
 }
 
@@ -498,7 +498,7 @@ function renderList(data) {
   `).join('');
 
   // Pagination
-  const totalPages = Math.ceil(data.total / data.per_page);
+  const totalPages = Math.ceil(data.total / data.perPage);
   const pag = document.getElementById('pagination');
   if (totalPages <= 1) { pag.innerHTML = ''; return; }
   let html = `<button ${page<=1?'disabled':''} onclick="loadVacancies(${page-1})">←</button>`;
@@ -521,9 +521,9 @@ async function openDetail(id) {
     document.getElementById('d-salary').textContent = salaryText(v);
     document.getElementById('d-district').textContent = v.district || '—';
     document.getElementById('d-address').textContent = v.address || '—';
-    document.getElementById('d-score').textContent = v.ai_score + ' / 100';
+    document.getElementById('d-score').textContent = v.aiScore + ' / 100';
     document.getElementById('d-status').innerHTML = `<span class="tag tag-status tag-${v.status}">${statusLabel(v.status)}</span>`;
-    document.getElementById('d-created').textContent = formatDate(v.created_at);
+    document.getElementById('d-created').textContent = formatDate(v.createdAt);
     document.getElementById('d-notes').value = v.notes || '';
     document.getElementById('d-desc').textContent = v.description || 'Нет описания';
     
@@ -533,9 +533,9 @@ async function openDetail(id) {
     else urlBtn.style.display = 'none';
 
     // Applied date
-    if (v.applied_at) {
+    if (v.appliedAt) {
       document.getElementById('d-applied-row').style.display = '';
-      document.getElementById('d-applied').textContent = formatDate(v.applied_at);
+      document.getElementById('d-applied').textContent = formatDate(v.appliedAt);
     } else {
       document.getElementById('d-applied-row').style.display = 'none';
     }
@@ -545,7 +545,7 @@ async function openDetail(id) {
 
     // Reject reason
     document.getElementById('d-reject-reason-section').style.display = v.status === 'rejected' ? '' : 'none';
-    document.getElementById('d-reject-reason').value = v.rejection_reason || '';
+    document.getElementById('d-reject-reason').value = v.rejectionReason || '';
 
     // Tags
     renderDetailTags(v.tags || []);
@@ -553,7 +553,7 @@ async function openDetail(id) {
     // History
     document.getElementById('d-history').innerHTML = (v.history||[]).map(h => `
       <div class="history-item">
-        <span class="history-time">${formatDate(h.created_at)}</span>
+        <span class="history-time">${formatDate(h.createdAt)}</span>
         <span class="history-action">${escHtml(h.action)}</span>
         ${h.details ? `<div class="history-details">${escHtml(h.details)}</div>` : ''}
       </div>
@@ -625,7 +625,7 @@ async function saveNotes() {
 async function saveRejectReason() {
   if (!selectedId) return;
   const reason = document.getElementById('d-reject-reason').value;
-  await api('/api/vacancies/' + selectedId, { method: 'PUT', body: JSON.stringify({ rejection_reason: reason }) });
+  await api('/api/vacancies/' + selectedId, { method: 'PUT', body: JSON.stringify({ rejectionReason: reason }) });
 }
 
 function openUrl() {
@@ -767,7 +767,7 @@ async function doImport() {
 }
 
 async function exportData() {
-  const data = await api('/api/vacancies?per_page=9999');
+  const data = await api('/api/vacancies?perPage=9999');
   const blob = new Blob([JSON.stringify(data.vacancies, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -779,11 +779,12 @@ async function exportData() {
 
 // Helpers
 function salaryText(v) {
-  if (!v.salary_from && !v.salary_to) return '<span class="no-sal">не указана</span>';
+  const sf = v.salaryFrom, st = v.salaryTo;
+  if (!sf && !st) return '<span class="no-sal">не указана</span>';
   const cur = v.currency === 'RUR' ? '₽' : v.currency;
-  if (v.salary_from && v.salary_to) return `${v.salary_from.toLocaleString()}–${v.salary_to.toLocaleString()} ${cur}`;
-  if (v.salary_to) return `до ${v.salary_to.toLocaleString()} ${cur}`;
-  return `от ${v.salary_from.toLocaleString()} ${cur}`;
+  if (sf && st) return `${sf.toLocaleString()}–${st.toLocaleString()} ${cur}`;
+  if (st) return `до ${st.toLocaleString()} ${cur}`;
+  return `от ${sf.toLocaleString()} ${cur}`;
 }
 
 function statusLabel(s) {
