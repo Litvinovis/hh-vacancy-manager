@@ -378,6 +378,10 @@ public class VacancyRepository {
         Integer fraud = jdbc.queryForObject(
             "SELECT COUNT(*) FROM vacancies WHERE ai_verdict = 'fraud'", Integer.class);
         result.put("fraud", fraud != null ? fraud : 0);
+        // Add truly new count: status='new' AND ai_verdict='pending' (not yet AI-analyzed)
+        Integer newPending = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM vacancies WHERE status = 'new' AND ai_verdict = 'pending'", Integer.class);
+        result.put("newPending", newPending != null ? newPending : 0);
         return result;
     }
 

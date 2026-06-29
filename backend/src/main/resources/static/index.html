@@ -417,7 +417,7 @@ async function loadStats() {
     document.getElementById('stat-salary').textContent = s.avgSalary ? s.avgSalary.toLocaleString() + ' ₽' : '—';
     document.getElementById('stat-applied7d').textContent = s.appliedLast7d;
     document.getElementById('cnt-all').textContent = s.total;
-    document.getElementById('cnt-new').textContent = s.byStatus.new || 0;
+    document.getElementById('cnt-new').textContent = s.byStatus.newPending || 0;
     document.getElementById('cnt-pending').textContent = s.byStatus.pending || 0;
     document.getElementById('cnt-favorite').textContent = s.byStatus.favorite || 0;
     document.getElementById('cnt-applied').textContent = s.byStatus.applied || 0;
