@@ -148,6 +148,18 @@ public class VacancyController {
         return ResponseEntity.ok(Map.of("status", "updated", "id", v.getId()));
     }
 
+    @PostMapping("/vacancies/{id}/tags")
+    public ResponseEntity<?> addTag(@PathVariable Long id, @RequestBody Map<String, String> body) {
+        String tag = body.get("tag");
+        if (tag == null || tag.trim().isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "tag is required"));
+        }
+        Optional<VacancyDetail> v = vacancyService.findById(id);
+        if (v.isEmpty()) return ResponseEntity.notFound().build();
+        vacancyService.addTag(id, tag.trim());
+        return ResponseEntity.ok(Map.of("status", "ok"));
+    }
+
     @PostMapping("/vacancies/{id}/reset-score")
     public ResponseEntity<?> resetScore(@PathVariable Long id) {
         boolean reset = vacancyService.resetScore(id);

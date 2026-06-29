@@ -178,6 +178,11 @@ public class VacancyService {
         return true;
     }
 
+    public void addTag(Long id, String tag) {
+        tagRepo.save(id, tag);
+        historyRepo.save(id, "tag_added", tag);
+    }
+
     @Transactional
     public int importVacancies(List<Vacancy> vacancies) {
         int imported = 0;
