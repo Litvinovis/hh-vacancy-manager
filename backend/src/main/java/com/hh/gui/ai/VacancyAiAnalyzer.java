@@ -276,7 +276,7 @@ public class VacancyAiAnalyzer {
                 if (code == 429) {
                     java.util.Calendar cal = java.util.Calendar.getInstance();
                     cal.add(java.util.Calendar.DAY_OF_MONTH, 1);
-                    cal.set(java.util.Calendar.HOUR_OF_DAY, 0);
+                    cal.set(java.util.Calendar.HOUR_OF_DAY, 6);
                     cal.set(java.util.Calendar.MINUTE, 0);
                     cal.set(java.util.Calendar.SECOND, 0);
                     cal.set(java.util.Calendar.MILLISECOND, 0);
