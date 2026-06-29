@@ -1,129 +1,871 @@
 <!DOCTYPE html>
-<html lang="ru" data-theme="dark">
+<html lang="ru">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>HH Monitor</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/css/style.css">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HH Вакансии</title>
+<style>
+:root {
+  --bg: #0f1117; --surface: #1a1d27; --surface2: #242836;
+  --border: #2e3348; --text: #e4e6f0; --muted: #6b7394;
+  --accent: #5b8af5; --green: #4caf8a; --orange: #f5a623;
+  --red: #ef5350; --purple: #ab47bc; --blue: #42a5f5;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; background:var(--bg); color:var(--text); min-height:100vh; }
+
+/* Layout */
+.app { display:flex; height:100vh; overflow:hidden; }
+.sidebar { width:260px; min-width:260px; background:var(--surface); border-right:1px solid var(--border); display:flex; flex-direction:column; }
+.main { flex:1; display:flex; flex-direction:column; overflow:hidden; }
+
+/* Sidebar */
+.logo { padding:16px 20px; font-size:18px; font-weight:700; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:10px; }
+.logo span { font-size:22px; }
+.nav-section { padding:12px 0; }
+.nav-label { padding:8px 20px 4px; font-size:11px; text-transform:uppercase; color:var(--muted); letter-spacing:1px; font-weight:600; }
+.nav-item { padding:8px 20px; cursor:pointer; display:flex; align-items:center; gap:10px; font-size:14px; color:var(--muted); transition:all .15s; border-left:3px solid transparent; }
+.nav-item:hover { background:var(--surface2); color:var(--text); }
+.nav-item.active { background:var(--surface2); color:var(--accent); border-left-color:var(--accent); }
+.nav-item .count { margin-left:auto; background:var(--surface2); padding:2px 8px; border-radius:10px; font-size:12px; }
+.nav-item.active .count { background:var(--accent); color:#fff; }
+
+/* Stats in sidebar */
+.stats-box { margin:12px; padding:12px; background:var(--surface2); border-radius:8px; }
+.stats-box .stat-row { display:flex; justify-content:space-between; padding:4px 0; font-size:13px; }
+.stats-box .stat-val { font-weight:600; }
+
+/* Top bar */
+.topbar { padding:12px 20px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+.search-input { flex:1; max-width:400px; padding:8px 14px; background:var(--surface); border:1px solid var(--border); border-radius:8px; color:var(--text); font-size:14px; outline:none; }
+.search-input:focus { border-color:var(--accent); }
+.filter-select { padding:8px 12px; background:var(--surface); border:1px solid var(--border); border-radius:8px; color:var(--text); font-size:13px; outline:none; }
+.filter-select:focus { border-color:var(--accent); }
+.btn-tiny { padding:2px 6px; font-size:12px; background:transparent; border:1px solid var(--border); border-radius:4px; color:var(--muted); cursor:pointer; transition:all .15s; }
+.btn-tiny:hover { color:var(--accent); border-color:var(--accent); }
+.topbar-spacer { flex:1; }
+.btn { padding:8px 16px; border:none; border-radius:8px; cursor:pointer; font-size:13px; font-weight:600; transition:all .15s; }
+.btn-primary { background:var(--accent); color:#fff; }
+.btn-primary:hover { background:#4a7be0; }
+.btn-ghost { background:transparent; color:var(--muted); }
+.btn-ghost:hover { background:var(--surface2); color:var(--text); }
+
+/* Bulk bar */
+.bulk-bar { display:none; padding:8px 20px; background:var(--surface2); border-bottom:1px solid var(--border); align-items:center; gap:12px; font-size:13px; }
+.bulk-bar.visible { display:flex; }
+.bulk-bar .btn { padding:5px 12px; font-size:12px; }
+
+/* Vacancy list */
+.list-container { flex:1; overflow-y:auto; }
+.vacancy-card { padding:14px 20px; border-bottom:1px solid var(--border); cursor:pointer; transition:background .12s; display:flex; gap:12px; }
+.vacancy-card:hover { background:var(--surface); }
+.vacancy-card.selected { background:var(--surface2); }
+.vacancy-card .cb { margin-top:2px; }
+.vacancy-card .cb input { width:16px; height:16px; accent-color:var(--accent); }
+.v-content { flex:1; min-width:0; }
+.v-top { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+.v-title { font-size:15px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:60%; }
+.v-salary { font-size:15px; font-weight:700; color:var(--green); white-space:nowrap; }
+.v-salary .no-sal { color:var(--muted); font-weight:400; font-size:13px; }
+.v-info { display:flex; gap:12px; margin-top:4px; font-size:13px; color:var(--muted); }
+.v-info span { display:flex; align-items:center; gap:4px; }
+.v-bottom { display:flex; align-items:center; gap:8px; margin-top:6px; flex-wrap:wrap; }
+.tag { display:inline-block; padding:2px 8px; border-radius:12px; font-size:11px; font-weight:600; }
+.tag-status { text-transform:uppercase; font-size:10px; letter-spacing:.5px; }
+.tag-new { background:#2e3650; color:var(--blue); }
+.tag-favorite { background:#3d2e1a; color:var(--orange); }
+.tag-applied { background:#1a3d2e; color:var(--green); }
+.tag-rejected { background:#3d1a1a; color:var(--red); }
+.tag-hidden { background:var(--surface2); color:var(--muted); }
+.tag-blue { background:#1a2d4d; color:var(--blue); }
+.tag-purple { background:#2d1a3d; color:var(--purple); }
+.tag-green { background:#1a3d2e; color:var(--green); }
+.tag-orange { background:#3d2e1a; color:var(--orange); }
+.tag-red { background:#3d1a1a; color:var(--red); }
+.tag-gray { background:var(--surface2); color:var(--muted); }
+.tag-district { background:#1e2d3d; color:var(--blue); }
+.tag-user { background:var(--surface2); color:var(--text); font-size:11px; font-weight:400; }
+.score-bar { width:60px; height:4px; background:var(--border); border-radius:2px; overflow:hidden; display:inline-block; margin-right:4px; vertical-align:middle; }
+.score-bar .fill { height:100%; border-radius:2px; }
+.score-num { font-size:11px; color:var(--muted); }
+
+/* Empty state */
+.empty { display:flex; flex-direction:column; align-items:center; justify-content:center; height:60vh; color:var(--muted); }
+.empty .icon { font-size:48px; margin-bottom:12px; }
+.empty .text { font-size:16px; }
+.empty .sub { font-size:13px; margin-top:4px; }
+
+/* Detail panel */
+.detail-panel { width:420px; min-width:420px; background:var(--surface); border-left:1px solid var(--border); overflow-y:auto; display:none; }
+.detail-panel.open { display:block; }
+.detail-header { padding:16px; border-bottom:1px solid var(--border); position:sticky; top:0; background:var(--surface); z-index:1; }
+.detail-close { position:absolute; top:12px; right:12px; background:none; border:none; color:var(--muted); font-size:20px; cursor:pointer; padding:4px 8px; }
+.detail-close:hover { color:var(--text); }
+.detail-title { font-size:17px; font-weight:700; margin-bottom:4px; padding-right:30px; }
+.detail-company { color:var(--muted); font-size:14px; }
+.detail-section { padding:16px; border-bottom:1px solid var(--border); }
+.detail-section h4 { font-size:12px; text-transform:uppercase; color:var(--muted); letter-spacing:1px; margin-bottom:10px; }
+.detail-row { display:flex; justify-content:space-between; padding:5px 0; font-size:13px; }
+.detail-row .label { color:var(--muted); }
+.detail-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+.detail-actions .btn { padding:8px 14px; font-size:13px; display:flex; align-items:center; gap:6px; }
+.btn-fav { background:#3d2e1a; color:var(--orange); }
+.btn-fav.active { background:var(--orange); color:#fff; }
+.btn-apply { background:#1a3d2e; color:var(--green); }
+.btn-apply.active { background:var(--green); color:#fff; }
+.btn-reject { background:#3d1a1a; color:var(--red); }
+.btn-reject.active { background:var(--red); color:#fff; }
+.btn-link { background:var(--surface2); color:var(--text); }
+.btn-link:hover { background:var(--border); }
+.notes-area { width:100%; background:var(--bg); border:1px solid var(--border); border-radius:8px; color:var(--text); padding:10px; font-size:13px; resize:vertical; min-height:60px; font-family:inherit; outline:none; }
+.notes-area:focus { border-color:var(--accent); }
+.tags-edit { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+.tag-input { background:var(--bg); border:1px solid var(--border); border-radius:6px; color:var(--text); padding:4px 8px; font-size:12px; width:120px; outline:none; }
+.tag-input:focus { border-color:var(--accent); }
+.history-item { padding:8px 0; border-bottom:1px solid var(--border); font-size:13px; }
+.history-item:last-child { border:none; }
+.history-time { color:var(--muted); font-size:11px; }
+.history-action { font-weight:600; color:var(--accent); }
+.history-details { color:var(--muted); margin-top:2px; }
+
+/* Description */
+.desc-text { font-size:13px; line-height:1.6; color:var(--muted); white-space:pre-wrap; word-break:break-word; }
+
+/* Modal */
+.modal-overlay { display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.6); z-index:100; align-items:center; justify-content:center; }
+.modal-overlay.open { display:flex; }
+.modal { background:var(--surface); border-radius:12px; padding:24px; width:480px; max-height:80vh; overflow-y:auto; }
+.modal h3 { margin-bottom:16px; }
+.modal .btn-group { display:flex; gap:8px; justify-content:flex-end; margin-top:16px; }
+
+/* Score colors */
+.score-high { background:var(--green); }
+.score-mid { background:var(--orange); }
+.score-low { background:var(--red); }
+
+/* Tooltip */
+.tooltip { position:relative; }
+.tooltip::after { content:attr(data-tip); position:absolute; bottom:100%; left:50%; transform:translateX(-50%); background:var(--surface2); color:var(--text); padding:4px 8px; border-radius:4px; font-size:11px; white-space:nowrap; opacity:0; pointer-events:none; transition:opacity .2s; }
+.tooltip:hover::after { opacity:1; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width:6px; }
+::-webkit-scrollbar-track { background:var(--bg); }
+::-webkit-scrollbar-thumb { background:var(--border); border-radius:3px; }
+::-webkit-scrollbar-thumb:hover { background:var(--muted); }
+
+/* Pagination */
+.pagination { display:flex; align-items:center; justify-content:center; gap:8px; padding:12px; border-top:1px solid var(--border); }
+.pagination button { padding:6px 12px; background:var(--surface); border:1px solid var(--border); border-radius:6px; color:var(--text); cursor:pointer; font-size:13px; }
+.pagination button:hover { background:var(--surface2); }
+.pagination button.active { background:var(--accent); border-color:var(--accent); }
+.pagination button:disabled { opacity:.4; cursor:default; }
+
+/* Responsive */
+@media (max-width:1024px) {
+  .detail-panel { position:fixed; right:0; top:0; bottom:0; z-index:50; }
+}
+</style>
 </head>
 <body>
 
 <div class="app">
-  <!-- ═══════ SIDEBAR ═══════ -->
+  <!-- Sidebar -->
   <div class="sidebar">
-    <div class="sb">
-      <div class="logo">
-        <div class="logo-icon">🔍</div>
-        <span>HH Monitor</span>
-        <div class="theme-tg">
-          <button class="theme-b active" data-theme="dark" title="Тёмная">🌙</button>
-          <button class="theme-b" data-theme="light" title="Светлая">☀️</button>
-        </div>
-      </div>
-
+    <div class="logo"><span>🔍</span> HH Вакансии</div>
+    
+    <div class="nav-section">
       <div class="nav-label">Фильтры</div>
-      <div class="nav-item active" data-filter="all">
-        <span class="ico">📋</span> Все <span class="count" id="cnt-all">0</span>
+      <div class="nav-item active" data-filter="all" onclick="setFilter('all',this)">
+        <span>📋</span> Все <span class="count" id="cnt-all">0</span>
       </div>
-      <div class="nav-item" data-filter="new">
-        <span class="ico">🆕</span> Новые <span class="count" id="cnt-new">0</span>
+      <div class="nav-item" data-filter="pending" onclick="setFilter('pending',this)">
+        <span>⏳</span> Не оценено <span class="count" id="cnt-pending">0</span>
       </div>
-      <div class="nav-item" data-filter="pending">
-        <span class="ico">⏳</span> Не оценено <span class="count" id="cnt-pending">0</span>
+      <div class="nav-item" data-filter="new" onclick="setFilter('new',this)">
+        <span>🆕</span> Новые <span class="count" id="cnt-new">0</span>
       </div>
-      <div class="nav-item" data-filter="favorite">
-        <span class="ico">⭐</span> Избранное <span class="count" id="cnt-favorite">0</span>
+      <div class="nav-item" data-filter="favorite" onclick="setFilter('favorite',this)">
+        <span>⭐</span> Избранное <span class="count" id="cnt-favorite">0</span>
       </div>
-      <div class="nav-item" data-filter="applied">
-        <span class="ico">📤</span> Отклик <span class="count" id="cnt-applied">0</span>
+      <div class="nav-item" data-filter="applied" onclick="setFilter('applied',this)">
+        <span>📤</span> Отклик <span class="count" id="cnt-applied">0</span>
       </div>
-      <div class="nav-item" data-filter="rejected">
-        <span class="ico">❌</span> Отклонено <span class="count" id="cnt-rejected">0</span>
+      <div class="nav-item" data-filter="rejected" onclick="setFilter('rejected',this)">
+        <span>❌</span> Отклонено <span class="count" id="cnt-rejected">0</span>
       </div>
-      <div class="nav-item" data-filter="fraud">
-        <span class="ico">🚫</span> Обман <span class="count" id="cnt-fraud">0</span>
+      <div class="nav-item" data-filter="fraud" onclick="setFilter('fraud',this)">
+        <span>🚫</span> Обман <span class="count" id="cnt-fraud">0</span>
       </div>
+    </div>
 
-      <div class="stats-w">
-        <h4>Прогресс анализа</h4>
-        <div class="pl">
-          <div class="bar"><div class="bar-fill" id="progress-fill" style="width:0%"></div></div>
-          <div class="pct" id="progress-pct">0%</div>
-        </div>
-        <div class="rows">
-          <div class="rs">Средний скор <span class="v" id="stat-score">—</span></div>
-          <div class="rs">Ср. зарплата <span class="v" id="stat-salary">—</span></div>
-        </div>
-      </div>
+    <div class="stats-box" id="stats-box">
+      <div class="stat-row"><span>Всего вакансий</span><span class="stat-val" id="stat-total">0</span></div>
+      <div class="stat-row"><span>Средний скор</span><span class="stat-val" id="stat-score">0</span></div>
+      <div class="stat-row"><span>Ср. зарплата</span><span class="stat-val" id="stat-salary">0 ₽</span></div>
+      <div class="stat-row"><span>Откликов за 7д</span><span class="stat-val" id="stat-applied7d">0</span></div>
+    </div>
 
-      <div class="sb-actions">
-        <button class="btn btn-prim" onclick="runPipeline()">▶️ Запустить оценку</button>
-        <div class="btn-row">
-          <button class="btn btn-ghost" onclick="showReanalyzeModal()">🔄 Переоц.</button>
-          <button class="btn btn-ghost" onclick="exportData()">📤 Экспорт</button>
-        </div>
-      </div>
+    <div style="margin-top:auto; padding:12px;">
+      <button class="btn btn-primary" style="width:100%; margin-bottom:8px;" onclick="runPipeline()">▶️ Запустить оценку</button>
+      <button class="btn btn-ghost" style="width:100%; margin-bottom:8px;" onclick="showReanalyzeModal()">🔄 Переоценить всё</button>
+      <button class="btn btn-ghost" style="width:100%;" onclick="exportData()">📤 Экспорт JSON</button>
     </div>
   </div>
 
-  <!-- ═══════ MAIN ═══════ -->
+  <!-- Main content -->
   <div class="main">
+    <!-- Top bar -->
     <div class="topbar">
-      <div class="search-box">
-        <span class="search-ico">🔎</span>
-        <input class="search-inp" id="search-input" placeholder="Поиск по названию, компании, адресу...">
-      </div>
-      <select class="filter-sel" id="district-filter">
+      <input class="search-input" type="text" id="search-input" placeholder="Поиск: название, компания, адрес..." oninput="debounceSearch()">
+      <select class="filter-select" id="district-filter" onchange="loadVacancies()">
         <option value="">Все районы</option>
+        <option value="Шакша">Шакша</option>
       </select>
-      <select class="filter-sel" id="salary-filter">
+      <select class="filter-select" id="salary-filter" onchange="loadVacancies()">
         <option value="">Любая зарплата</option>
-        <option value="30000">от 30К</option>
-        <option value="40000">от 40К</option>
-        <option value="60000">от 60К</option>
-        <option value="80000">от 80К</option>
+        <option value="40000">от 40 000 ₽</option>
+        <option value="60000">от 60 000 ₽</option>
+        <option value="80000">от 80 000 ₽</option>
       </select>
-      <select class="filter-sel" id="score-filter">
+      <select class="filter-select" id="score-filter" onchange="loadVacancies()">
         <option value="">Любой скор</option>
         <option value="70">≥ 70</option>
         <option value="50">≥ 50</option>
         <option value="30">≥ 30</option>
       </select>
-      <select class="filter-sel" id="remote-filter">
+      <select class="filter-select" id="remote-filter" onchange="loadVacancies()">
         <option value="">Все</option>
         <option value="true">Удалёнка</option>
         <option value="false">Офис</option>
       </select>
-      <select class="filter-sel" id="sort-filter">
+      <select class="filter-select" id="sort-filter" onchange="loadVacancies()">
         <option value="score_desc">Скор ↓</option>
         <option value="score_asc">Скор ↑</option>
         <option value="salary_desc">Зарплата ↓</option>
         <option value="salary_asc">Зарплата ↑</option>
         <option value="date_desc">Новые</option>
         <option value="date_asc">Старые</option>
+        <option value="title_asc">А-Я</option>
       </select>
-      <button class="btn-ico" id="btn-notify-toggle" onclick="toggleNotifications()" title="Уведомления">🔔</button>
-      <button class="btn-ico" onclick="loadStats();loadVacancies(1)" title="Обновить">↻</button>
+      <div class="topbar-spacer"></div>
+      <button class="btn btn-ghost" id="btn-notify-toggle" onclick="toggleNotifications()" title="Вкл/выкл уведомления">🔔</button>
+      <button class="btn btn-ghost" onclick="loadStats(); loadVacancies();">🔄</button>
     </div>
 
-    <div class="list-cont" id="list-container">
-      <div class="empty" id="empty-state">
-        <div class="icon">📭</div>
-        <div class="text">Нет вакансий</div>
-        <div class="sub">Нажмите «Запустить оценку» для сбора данных</div>
+    <!-- Bulk bar -->
+    <div class="bulk-bar" id="bulk-bar">
+      <span id="bulk-count">0</span> выбрано:
+      <button class="btn btn-ghost" onclick="bulkStatus('favorite')">⭐ В избранное</button>
+      <button class="btn btn-ghost" onclick="bulkStatus('applied')">📤 Отклик</button>
+      <button class="btn btn-ghost" onclick="bulkStatus('rejected')">❌ Отклонить</button>
+      <button class="btn btn-ghost" onclick="bulkStatus('hidden')">👁 Скрыть</button>
+      <button class="btn btn-ghost" onclick="bulkStatus('new')">↩ Сбросить</button>
+    </div>
+
+    <!-- Detail panel -->
+    <div style="display:flex; flex:1; overflow:hidden;">
+      <div class="list-container" id="list-container">
+        <div class="empty" id="empty-state">
+          <div class="icon">📭</div>
+          <div class="text">Нет вакансий</div>
+          <div class="sub">Импортируйте данные или подождите обновления</div>
+        </div>
+        <div id="vacancy-list"></div>
+        <div class="pagination" id="pagination"></div>
       </div>
-      <div id="vacancy-list"></div>
+
+      <div class="detail-panel" id="detail-panel">
+        <div class="detail-header">
+          <button class="detail-close" onclick="closeDetail()">✕</button>
+          <div class="detail-title" id="d-title">—</div>
+          <div class="detail-company" id="d-company">—</div>
+        </div>
+
+        <div class="detail-section" style="padding:12px 16px;">
+          <div class="detail-actions">
+            <button class="btn" id="btn-fav" onclick="toggleStatus('favorite')">⭐ В избранное</button>
+            <button class="btn" id="btn-apply" onclick="toggleStatus('applied')">📤 Отклик</button>
+            <button class="btn" id="btn-reject" onclick="toggleStatus('rejected')">❌ Отклонить</button>
+            <button class="btn btn-link" id="d-url-btn" onclick="openUrl()" style="display:none;">🔗 HH.ru</button>
+          </div>
+          <div class="detail-actions" style="margin-top:8px;">
+            <select class="filter-select" id="move-status-select" onchange="moveStatus(this.value)">
+              <option value="">Переместить в...</option>
+              <option value="new">🆕 Новые</option>
+              <option value="favorite">⭐ Избранное</option>
+              <option value="applied">📤 Отклик</option>
+              <option value="rejected">❌ Отклонить</option>
+              <option value="fraud">🚫 Обман</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="detail-section">
+          <h4>Информация</h4>
+          <div class="detail-row"><span class="label">Зарплата</span><span id="d-salary">—</span></div>
+          <div class="detail-row"><span class="label">Район</span><span id="d-district">—</span></div>
+          <div class="detail-row"><span class="label">Адрес</span><span id="d-address">—</span></div>
+          <div class="detail-row"><span class="label">Скор AI</span><span id="d-score">—</span></div>
+          <div class="detail-row"><span class="label">Статус</span><span id="d-status">—</span></div>
+          <div class="detail-row"><span class="label">Добавлено</span><span id="d-created">—</span></div>
+          <div class="detail-row" id="d-applied-row" style="display:none;"><span class="label">Отклик</span><span id="d-applied">—</span></div>
+        </div>
+
+        <div class="detail-section">
+          <h4>Заметки</h4>
+          <textarea class="notes-area" id="d-notes" placeholder="Ваши заметки..." onchange="saveNotes()"></textarea>
+        </div>
+
+        <div class="detail-section">
+          <h4>Теги</h4>
+          <div class="tags-edit" id="d-tags"></div>
+          <input class="tag-input" id="new-tag-input" placeholder="+ тег" onkeydown="if(event.key==='Enter')addTag()">
+        </div>
+
+        <div class="detail-section" id="d-reject-reason-section" style="display:none;">
+          <h4>Причина отклонения</h4>
+          <select class="filter-select" id="d-reject-reason" onchange="saveRejectReason()" style="width:100%;">
+            <option value="">—</option>
+            <option value="Не подходит по навыкам">Не подходит по навыкам</option>
+            <option value="Низкая зарплата">Низкая зарплата</option>
+            <option value="Не тот район">Не тот район</option>
+            <option value="Физический труд">Физический труд</option>
+            <option value="Call-центр / продажи">Call-центр / продажи</option>
+            <option value="Вахта">Вахта</option>
+            <option value="Другое">Другое</option>
+          </select>
+        </div>
+
+        <div class="detail-section">
+          <h4>Описание</h4>
+          <div class="desc-text" id="d-desc">Нет описания</div>
+        </div>
+
+        <div class="detail-section">
+          <h4>История</h4>
+          <div id="d-history"></div>
+        </div>
+      </div>
     </div>
-
-    <div class="pagination" id="pagination"></div>
   </div>
-
-  <!-- ═══════ DETAIL ═══════ -->
-  <div class="detail hidden" id="detail-panel"></div>
 </div>
 
-<script src="/js/app.js"></script>
+<!-- Import Modal -->
+<div class="modal-overlay" id="import-modal">
+  <div class="modal">
+    <h3>Импорт вакансий</h3>
+    <p style="color:var(--muted); font-size:13px; margin-bottom:12px;">Вставьте JSON-массив вакансий или укажите путь к файлу</p>
+    <textarea class="notes-area" id="import-text" placeholder='[{"hh_id":"...","title":"..."}]' style="min-height:200px; margin-bottom:8px; font-family:monospace; font-size:12px;"></textarea>
+    <div class="btn-group">
+      <button class="btn btn-ghost" onclick="closeImportModal()">Отмена</button>
+      <button class="btn btn-primary" onclick="doImport()">Импорт</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// State
+let currentFilter = 'all';
+let currentPage = 1;
+let selectedId = null;
+let selectedIds = new Set();
+let allData = [];
+let searchTimer = null;
+
+// Init
+document.addEventListener('DOMContentLoaded', () => {
+  loadStats();
+  loadVacancies();
+  loadNotificationSettings();
+
+  // File import drop zone
+  const importText = document.getElementById('import-text');
+  const importModal = document.getElementById('import-modal');
+
+  importModal.addEventListener('click', (e) => {
+    if (e.target === importModal) closeImportModal();
+  });
+  document.getElementById('reanalyze-modal').addEventListener('click', (e) => {
+    if (e.target.id === 'reanalyze-modal') closeReanalyzeModal();
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      closeDetail();
+      closeImportModal();
+      closeReanalyzeModal();
+    }
+  });
+});
+
+// API helpers
+async function api(url, opts = {}) {
+  const res = await fetch(url, {
+    headers: { 'Content-Type': 'application/json' },
+    ...opts,
+  });
+  return res.json();
+}
+
+// Load stats
+async function loadStats() {
+  try {
+    const s = await api('/api/stats');
+    document.getElementById('stat-total').textContent = s.total;
+    document.getElementById('stat-score').textContent = s.avgScore;
+    document.getElementById('stat-salary').textContent = s.avgSalary ? s.avgSalary.toLocaleString() + ' ₽' : '—';
+    document.getElementById('stat-applied7d').textContent = s.appliedLast7d;
+    document.getElementById('cnt-all').textContent = s.total;
+    document.getElementById('cnt-new').textContent = s.byStatus.newPending || 0;
+    document.getElementById('cnt-pending').textContent = s.byStatus.pending || 0;
+    document.getElementById('cnt-favorite').textContent = s.byStatus.favorite || 0;
+    document.getElementById('cnt-applied').textContent = s.byStatus.applied || 0;
+    document.getElementById('cnt-rejected').textContent = s.byStatus.rejected || 0;
+    document.getElementById('cnt-fraud').textContent = s.byStatus.fraud || 0;
+  } catch(e) { console.error('Stats error:', e); }
+}
+
+// Load vacancies
+async function loadVacancies(page = 1) {
+  currentPage = page;
+  const params = new URLSearchParams();
+  if (currentFilter !== 'all') params.set('status', currentFilter);
+  
+  const district = document.getElementById('district-filter').value;
+  if (district) params.set('district', district);
+  
+  const salary = document.getElementById('salary-filter').value;
+  if (salary) params.set('minSalary', salary);
+  
+  const score = document.getElementById('score-filter').value;
+  if (score) params.set('minScore', score);
+  
+  const remote = document.getElementById('remote-filter').value;
+  if (remote) params.set('remote', remote);
+  
+  const search = document.getElementById('search-input').value.trim();
+  if (search) params.set('search', search);
+  
+  params.set('sort', document.getElementById('sort-filter').value);
+  params.set('page', page);
+  params.set('perPage', 30);
+
+  try {
+    const data = await api('/api/vacancies?' + params.toString());
+    allData = data.vacancies;
+    renderList(data);
+  } catch(e) { console.error('Load error:', e); }
+}
+
+function renderList(data) {
+  const container = document.getElementById('vacancy-list');
+  const empty = document.getElementById('empty-state');
+  
+  if (!data.vacancies.length) {
+    container.innerHTML = '';
+    empty.style.display = 'flex';
+    document.getElementById('pagination').innerHTML = '';
+    return;
+  }
+  empty.style.display = 'none';
+
+  container.innerHTML = data.vacancies.map(v => `
+    <div class="vacancy-card ${v.id === selectedId ? 'selected' : ''}" onclick="openDetail(${v.id})">
+      <div class="cb"><input type="checkbox" ${selectedIds.has(v.id) ? 'checked' : ''} onclick="event.stopPropagation(); toggleSelect(${v.id})"></div>
+      <div class="v-content">
+        <div class="v-top">
+          <div class="v-title" title="${escHtml(v.title)}">${escHtml(v.title) || 'Без названия'}</div>
+          <div class="v-salary">${salaryText(v)}</div>
+        </div>
+        <div class="v-info">
+          <span>🏢 ${escHtml(v.company) || '—'}</span>
+          <span>📍 ${escHtml(v.district || v.address) || '—'}</span>
+          <span>
+            ${v.aiScore > 0 ? `
+            <span class="score-bar"><span class="fill ${scoreClass(v.aiScore)}" style="width:${Math.min(v.aiScore,100)}%"></span></span>
+            <span class="score-num">${v.aiScore}</span>` : '<span class="score-num" style="color:var(--muted)">⏳</span>'}
+          </span>
+        </div>
+        <div class="v-bottom">
+          <span class="tag tag-status tag-${v.status}">${statusLabel(v.status)}</span>
+          ${(v.tags||[]).map(t => `<span class="tag tag-gray">${escHtml(t)}</span>`).join('')}
+          ${v.district?.includes('Шакша') ? '<span class="tag tag-green">🏠 Шакша</span>' : ''}
+          <button class="btn btn-tiny" onclick="event.stopPropagation(); resetScore(${v.id})" title="Переоценить вакансию">🔄</button>
+        </div>
+      </div>
+    </div>
+  `).join('');
+
+  // Pagination
+  const totalPages = Math.ceil(data.total / data.perPage);
+  const pag = document.getElementById('pagination');
+  if (totalPages <= 1) { pag.innerHTML = ''; return; }
+  let html = `<button ${page<=1?'disabled':''} onclick="loadVacancies(${page-1})">←</button>`;
+  for (let i = Math.max(1,page-2); i <= Math.min(totalPages, page+2); i++) {
+    html += `<button class="${i===page?'active':''}" onclick="loadVacancies(${i})">${i}</button>`;
+  }
+  html += `<button ${page>=totalPages?'disabled':''} onclick="loadVacancies(${page+1})">→</button>`;
+  html += `<span style="margin-left:12px; color:var(--muted); font-size:13px;">${data.total} всего</span>`;
+  pag.innerHTML = html;
+}
+
+// Open detail
+async function openDetail(id) {
+  selectedId = id;
+  try {
+    const v = await api('/api/vacancies/' + id);
+    document.getElementById('detail-panel').classList.add('open');
+    document.getElementById('d-title').textContent = v.title || '—';
+    document.getElementById('d-company').textContent = v.company || '—';
+    document.getElementById('d-salary').textContent = salaryText(v);
+    document.getElementById('d-district').textContent = v.district || '—';
+    document.getElementById('d-address').textContent = v.address || '—';
+    document.getElementById('d-score').textContent = v.aiScore + ' / 100';
+    document.getElementById('d-status').innerHTML = `<span class="tag tag-status tag-${v.status}">${statusLabel(v.status)}</span>`;
+    document.getElementById('d-created').textContent = formatDate(v.createdAt);
+    document.getElementById('d-notes').value = v.notes || '';
+    document.getElementById('d-desc').textContent = v.description || 'Нет описания';
+    
+    // URL
+    const urlBtn = document.getElementById('d-url-btn');
+    if (v.url) { urlBtn.style.display = ''; urlBtn.dataset.url = v.url; }
+    else urlBtn.style.display = 'none';
+
+    // Applied date
+    if (v.appliedAt) {
+      document.getElementById('d-applied-row').style.display = '';
+      document.getElementById('d-applied').textContent = formatDate(v.appliedAt);
+    } else {
+      document.getElementById('d-applied-row').style.display = 'none';
+    }
+
+    // Status buttons
+    updateDetailButtons(v.status);
+
+    // Reject reason
+    document.getElementById('d-reject-reason-section').style.display = v.status === 'rejected' ? '' : 'none';
+    document.getElementById('d-reject-reason').value = v.rejectionReason || '';
+
+    // Tags
+    renderDetailTags(v.tags || []);
+
+    // History
+    document.getElementById('d-history').innerHTML = (v.history||[]).map(h => `
+      <div class="history-item">
+        <span class="history-time">${formatDate(h.createdAt)}</span>
+        <span class="history-action">${escHtml(h.action)}</span>
+        ${h.details ? `<div class="history-details">${escHtml(h.details)}</div>` : ''}
+      </div>
+    `).join('') || '<div style="color:var(--muted); font-size:13px;">Нет событий</div>';
+
+    // Highlight in list
+    document.querySelectorAll('.vacancy-card').forEach(el => el.classList.remove('selected'));
+    event?.currentTarget?.classList.add('selected');
+  } catch(e) { console.error('Detail error:', e); }
+}
+
+function closeDetail() {
+  document.getElementById('detail-panel').classList.remove('open');
+  selectedId = null;
+  document.querySelectorAll('.vacancy-card').forEach(el => el.classList.remove('selected'));
+}
+
+function renderDetailTags(tags) {
+  const c = document.getElementById('d-tags');
+  c.innerHTML = tags.map(t => `
+    <span class="tag tag-user">
+      ${escHtml(t)}
+      <span style="cursor:pointer; margin-left:4px;" onclick="removeTag('${escHtml(t)}')">×</span>
+    </span>
+  `).join('');
+}
+
+async function addTag() {
+  const input = document.getElementById('new-tag-input');
+  const tag = input.value.trim();
+  if (!tag || !selectedId) return;
+  const v = await api('/api/vacancies/' + selectedId);
+  const tags = [...(v.tags || []), tag];
+  await api('/api/vacancies/' + selectedId, { method: 'PUT', body: JSON.stringify({ tags }) });
+  input.value = '';
+  openDetail(selectedId);
+}
+
+async function removeTag(tag) {
+  if (!selectedId) return;
+  const v = await api('/api/vacancies/' + selectedId);
+  const tags = (v.tags || []).filter(t => t !== tag);
+  await api('/api/vacancies/' + selectedId, { method: 'PUT', body: JSON.stringify({ tags }) });
+  openDetail(selectedId);
+}
+
+function updateDetailButtons(status) {
+  document.getElementById('btn-fav').className = 'btn btn-fav' + (status === 'favorite' ? ' active' : '');
+  document.getElementById('btn-apply').className = 'btn btn-apply' + (status === 'applied' ? ' active' : '');
+  document.getElementById('btn-reject').className = 'btn btn-reject' + (status === 'rejected' ? ' active' : '');
+}
+
+async function toggleStatus(newStatus) {
+  if (!selectedId) return;
+  const v = await api('/api/vacancies/' + selectedId);
+  const finalStatus = v.status === newStatus ? 'new' : newStatus;
+  await api('/api/vacancies/' + selectedId, { method: 'PUT', body: JSON.stringify({ status: finalStatus }) });
+  openDetail(selectedId);
+  loadStats();
+  loadVacancies(currentPage);
+}
+
+async function saveNotes() {
+  if (!selectedId) return;
+  const notes = document.getElementById('d-notes').value;
+  await api('/api/vacancies/' + selectedId, { method: 'PUT', body: JSON.stringify({ notes }) });
+}
+
+async function saveRejectReason() {
+  if (!selectedId) return;
+  const reason = document.getElementById('d-reject-reason').value;
+  await api('/api/vacancies/' + selectedId, { method: 'PUT', body: JSON.stringify({ rejectionReason: reason }) });
+}
+
+function openUrl() {
+  const url = document.getElementById('d-url-btn')?.dataset?.url;
+  if (url) window.open(url, '_blank');
+}
+
+// Notifications
+let notificationsEnabled = true;
+
+async function loadNotificationSettings() {
+  try {
+    const s = await api('/api/settings/notifications');
+    notificationsEnabled = s.enabled;
+    updateNotifyButton();
+  } catch(e) { console.error('Notification settings error:', e); }
+}
+
+async function toggleNotifications() {
+  try {
+    const result = await api('/api/settings/notifications', {
+      method: 'POST',
+      body: JSON.stringify({ enabled: !notificationsEnabled })
+    });
+    notificationsEnabled = result.enabled;
+    updateNotifyButton();
+  } catch(e) { console.error('Toggle notifications error:', e); }
+}
+
+function updateNotifyButton() {
+  const btn = document.getElementById('btn-notify-toggle');
+  if (btn) {
+    btn.textContent = notificationsEnabled ? '🔔' : '🔕';
+    btn.style.opacity = notificationsEnabled ? '1' : '0.5';
+  }
+}
+
+// Pipeline control
+async function runPipeline() {
+  const btn = event?.target || document.querySelector('[onclick*="runPipeline"]');
+  const orig = btn?.textContent || '▶️ Запустить оценку';
+  if (btn) { btn.textContent = '⏳...'; btn.disabled = true; }
+  try {
+    const r = await api('/api/pipeline/analyze-pending', { method: 'POST' });
+    if (r.remaining > 0) {
+      alert(`Оценено: ${r.analyzed}\nОсталось: ${r.remaining}\n\nОценка продолжается в фоне — проверьте через пару минут.`);
+    } else {
+      alert(`✅ Все вакансии оценены!\nОценено: ${r.analyzed}`);
+    }
+    loadStats();
+    loadVacancies(currentPage);
+  } catch(e) {
+    alert('Ошибка: ' + e.message);
+  }
+  if (btn) { btn.textContent = orig; btn.disabled = false; }
+}
+
+async function reanalyzeAll() {
+  if (!confirm('Переоценить все вакансии (кроме отклонённых)? Это может занять много времени.')) return;
+  const btn = event?.target || document.querySelector('[onclick*="reanalyzeAll"]');
+  const orig = btn?.textContent || '🔄 Переоценить всё';
+  if (btn) { btn.textContent = '⏳...'; btn.disabled = true; }
+  try {
+    const r = await api('/api/pipeline/reanalyze', { method: 'POST' });
+    alert(`Сброшено: ${r.reset}\nОценено: ${r.analyzed}\nОдобрено: ${r.approved}`);
+    loadStats();
+    loadVacancies(currentPage);
+  } catch(e) {
+    alert('Ошибка: ' + e.message);
+  }
+  if (btn) { btn.textContent = orig; btn.disabled = false; }
+}
+
+// Selection & bulk
+function toggleSelect(id) {
+  if (selectedIds.has(id)) selectedIds.delete(id);
+  else selectedIds.add(id);
+  updateBulkBar();
+}
+
+function updateBulkBar() {
+  const bar = document.getElementById('bulk-bar');
+  if (selectedIds.size > 0) {
+    bar.classList.add('visible');
+    document.getElementById('bulk-count').textContent = selectedIds.size;
+  } else {
+    bar.classList.remove('visible');
+  }
+}
+
+async function bulkStatus(status) {
+  if (!selectedIds.size) return;
+  await api('/api/vacancies/bulk-status', {
+    method: 'POST',
+    body: JSON.stringify({ ids: [...selectedIds], status })
+  });
+  selectedIds.clear();
+  updateBulkBar();
+  loadStats();
+  loadVacancies(currentPage);
+}
+
+// Filter
+function setFilter(filter, el) {
+  currentFilter = filter;
+  document.querySelectorAll('.nav-item').forEach(e => e.classList.remove('active'));
+  el.classList.add('active');
+  loadVacancies(1);
+}
+
+function debounceSearch() {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => loadVacancies(1), 300);
+}
+
+// Import / Export
+function showImportModal() {
+  document.getElementById('import-modal').classList.add('open');
+}
+
+function closeImportModal() {
+  document.getElementById('import-modal').classList.remove('open');
+}
+
+async function doImport() {
+  const text = document.getElementById('import-text').value.trim();
+  if (!text) return;
+  try {
+    const data = JSON.parse(text);
+    const result = await api('/api/import', { method: 'POST', body: JSON.stringify(data) });
+    alert(`Импортировано: ${result.imported}, пропущено: ${result.skipped}`);
+    closeImportModal();
+    document.getElementById('import-text').value = '';
+    loadStats();
+    loadVacancies(1);
+  } catch(e) {
+    alert('Ошибка: ' + e.message);
+  }
+}
+
+async function exportData() {
+  const data = await api('/api/vacancies?perPage=9999');
+  const blob = new Blob([JSON.stringify(data.vacancies, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'vacancies_' + new Date().toISOString().slice(0,10) + '.json';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// Helpers
+function salaryText(v) {
+  const sf = v.salaryFrom, st = v.salaryTo;
+  if (!sf && !st) return '<span class="no-sal">не указана</span>';
+  const cur = v.currency === 'RUR' ? '₽' : v.currency;
+  if (sf && st) return `${sf.toLocaleString()}–${st.toLocaleString()} ${cur}`;
+  if (st) return `до ${st.toLocaleString()} ${cur}`;
+  return `от ${sf.toLocaleString()} ${cur}`;
+}
+
+function statusLabel(s) {
+  const m = { new:'Новая', favorite:'Избранное', applied:'Отклик', rejected:'Отклонено', hidden:'Скрыто' };
+  return m[s] || s;
+}
+
+function scoreClass(score) {
+  if (score >= 70) return 'score-high';
+  if (score >= 40) return 'score-mid';
+  return 'score-low';
+}
+
+function formatDate(iso) {
+  if (!iso) return '—';
+  try { return new Date(iso).toLocaleString('ru-RU'); } catch(e) { return iso; }
+}
+
+function escHtml(s) {
+  if (!s) return '';
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+</script>
+
+<!-- Reanalyze Confirmation Modal -->
+<div class="modal-overlay" id="reanalyze-modal">
+  <div class="modal">
+    <h3>🔄 Переоценить все вакансии?</h3>
+    <p style="color:var(--muted); font-size:14px; margin-bottom:16px;">
+      Процесс займёт несколько дней. AI оценит все вакансии заново (кроме отклонённых и мошеннических).
+      <br><br>
+      <b>Вы уверены?</b>
+    </p>
+    <div class="btn-group">
+      <button class="btn btn-ghost" onclick="closeReanalyzeModal()">Нет</button>
+      <button class="btn btn-primary" onclick="confirmReanalyze()">Да</button>
+    </div>
+  </div>
+</div>
+
+<script>
+function showReanalyzeModal() {
+  document.getElementById('reanalyze-modal').classList.add('open');
+}
+function closeReanalyzeModal() {
+  document.getElementById('reanalyze-modal').classList.remove('open');
+}
+async function confirmReanalyze() {
+  closeReanalyzeModal();
+  await reanalyzeAll();
+}
+
+async function resetScore(id) {
+  if (!confirm('Переоценить эту вакансию? Скор будет сброшен.')) return;
+  try {
+    await api(`/api/vacancies/${id}/reset-score`, { method: 'POST' });
+    loadStats();
+    loadVacancies(currentPage);
+  } catch(e) {
+    alert('Ошибка: ' + e.message);
+  }
+}
+
+async function moveStatus(newStatus) {
+  if (!newStatus || !selectedId) return;
+  try {
+    await api(`/api/vacancies/${selectedId}/status`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: newStatus })
+    });
+    document.getElementById('move-status-select').value = '';
+    openDetail(selectedId);
+    loadStats();
+    loadVacancies(currentPage);
+  } catch(e) {
+    alert('Ошибка: ' + e.message);
+  }
+}
+</script>
 </body>
 </html>
