@@ -1,21 +1,36 @@
 package com.hh.gui.config;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import java.io.File;
+import java.nio.file.Paths;
 import java.util.*;
 
 /**
  * Runtime-изменяемые настройки приложения.
- * Инициализируются из application.yml через @Value, затем могут меняться через API без ребута.
+ * Инициализируются из defaults / JSON-файла, затем могут меняться через API без ребута.
+ * Все изменения сохраняются в JSON-файл и восстанавливаются при перезапуске.
  */
 @Component
 public class RuntimeConfig {
 
     private static final Logger log = LoggerFactory.getLogger(RuntimeConfig.class);
+    private static final ObjectMapper MAPPER = new ObjectMapper()
+            .enable(SerializationFeature.INDENT_OUTPUT);
 
-    // ═══════ Поля с defaults (соответствуют текущим хардкодам/yml) ═══════
+    private static final String CONFIG_FILE = "runtime-config.json";
+
+    @Value("${app.data-dir:${user.dir}/data}")
+    private String dataDir = System.getProperty("user.dir") + "/data";
+
+    // ═══════ Поля с defaults ═══════
 
     private volatile int maxPerRun = 30;
     private volatile int pipelineIntervalMs = 600000; // 10 мин
@@ -27,17 +42,51 @@ public class RuntimeConfig {
     private volatile int minScore = 50;
     private volatile int maxApproved = 10;
     private volatile int salaryMinRemote = 40000;
-    private volatile int cooldownHours = 0; // часы до конца cooldown после 429 (0 = до 06:00 следующего дня)
+    private volatile int cooldownHours = 0;
     private volatile int pipelineBatchSize = 10;
     private volatile boolean notificationsEnabled = false;
     private volatile int aiBatchSize = 5;
     private volatile boolean pipelineEnabled = true;
 
+    // ═══════ Persistence ═══════
+
+    @PostConstruct
+    void loadFromFile() {
+        if (dataDir == null) return;
+        File file = getConfigFile();
+        if (!file.exists()) {
+            log.info("Runtime config file не найден ({}), используем defaults", file.getAbsolutePath());
+            return;
+        }
+        try {
+            Map<String, Object> saved = MAPPER.readValue(file, new TypeReference<>() {});
+            apply(saved, true); // silent = true — не пишем лог и не триггерим save
+            log.info("Runtime config загружен из {} ({} параметров)", file.getAbsolutePath(), saved.size());
+        } catch (Exception e) {
+            log.warn("Не удалось загрузить runtime config из {}: {}", file.getAbsolutePath(), e.getMessage());
+        }
+    }
+
+    private synchronized void saveToFile() {
+        File file = getConfigFile();
+        if (file == null) return;
+        try {
+            // Создаём родительскую директорию если нужно
+            file.getParentFile().mkdirs();
+            MAPPER.writeValue(file, toMap());
+            log.debug("Runtime config сохранён в {}", file.getAbsolutePath());
+        } catch (Exception e) {
+            log.error("Не удалось сохранить runtime config в {}: {}", file.getAbsolutePath(), e.getMessage());
+        }
+    }
+
+    private File getConfigFile() {
+        if (dataDir == null) return null;
+        return Paths.get(dataDir, CONFIG_FILE).toFile();
+    }
+
     // ═══════ Метода-дескрипторы для UI ═══════
 
-    /**
-     * Возвращает список всех настраиваемых параметров с метаданными для UI.
-     */
     public List<SettingDescriptor> getDescriptors() {
         return List.of(
             SettingDescriptor.of("maxPerRun", "Лимит вакансий за запуск",
@@ -127,10 +176,15 @@ public class RuntimeConfig {
     /**
      * Обновляет параметры из Map. Невалидные ключи игнорируются.
      * Невалидные значения отвергаются с возвратом ошибок.
+     * При успешном обновлении — сохраняет в JSON-файл.
      *
      * @return Map с ошибками (пустой = всё ок)
      */
     public Map<String, String> apply(Map<String, Object> updates) {
+        return apply(updates, false);
+    }
+
+    private Map<String, String> apply(Map<String, Object> updates, boolean silent) {
         Map<String, String> errors = new LinkedHashMap<>();
 
         for (Map.Entry<String, Object> entry : updates.entrySet()) {
@@ -161,8 +215,14 @@ public class RuntimeConfig {
         }
 
         if (errors.isEmpty()) {
-            log.info("Настройки обновлены: {}", updates.keySet());
-        } else {
+            if (!silent) {
+                log.info("Настройки обновлены: {}", updates.keySet());
+            }
+            // Сохраняем в файл если были реальные изменения
+            if (!updates.isEmpty()) {
+                saveToFile();
+            }
+        } else if (!silent) {
             log.warn("Ошибки обновления настроек: {}", errors);
         }
         return errors;
@@ -232,7 +292,6 @@ public class RuntimeConfig {
     private String toCron(Object value, Map<String, String> errors, String key) {
         if (value instanceof String s) {
             String trimmed = s.trim();
-            // Простая валидация: 6 полей, разделённых пробелами
             String[] parts = trimmed.split("\\s+");
             if (parts.length != 6) {
                 errors.put(key, "Cron должен содержать 6 полей (сек мин час день месяц день_недели)");
