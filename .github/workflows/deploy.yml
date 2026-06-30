@@ -34,17 +34,16 @@ jobs:
   deploy:
     needs: build-and-test
     if: github.event_name != 'pull_request'
-    runs-on: self-hosted
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    runs-on: [self-hosted, Linux, X64]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Set up JDK 17
-        run: |
-          echo "JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64" >> $GITHUB_ENV
-          echo "/usr/lib/jvm/java-25-openjdk-amd64/bin" >> $GITHUB_PATH
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
 
       - name: Build
         run: cd backend && mvn package -B -DskipTests
