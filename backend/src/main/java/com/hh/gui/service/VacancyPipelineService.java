@@ -45,6 +45,14 @@ public class VacancyPipelineService {
         runtimeConfig.setNotificationsEnabled(enabled);
     }
 
+    public boolean isAiRateLimited() {
+        return aiAnalyzer.isRateLimited();
+    }
+
+    public long getAiCooldownUntil() {
+        return aiAnalyzer.getRateLimitCooldownUntil();
+    }
+
     private int getBatchSize() {
         return runtimeConfig.getPipelineBatchSize() > 0 ? runtimeConfig.getPipelineBatchSize() : batchSizeDefault;
     }

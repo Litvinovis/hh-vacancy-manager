@@ -62,14 +62,14 @@ public class VacancyAiAnalyzer {
      * When true, all AI analysis calls will be skipped.
      */
     public boolean isRateLimited() {
-        long now = System.currentTimeMillis();
-        if (now >= rateLimitCooldownUntil) {
-            return false;
-        }
-        String msg = "=== COOLDOWN ACTIVE until " + new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm").format(new java.util.Date(rateLimitCooldownUntil)) + " ===";
-        System.err.println(msg);
-        log.warn(msg);
-        return true;
+        return System.currentTimeMillis() < rateLimitCooldownUntil;
+    }
+
+    /**
+     * Get rate limit cooldown until timestamp (epoch ms). 0 = not limited.
+     */
+    public long getRateLimitCooldownUntil() {
+        return rateLimitCooldownUntil;
     }
 
     /**
