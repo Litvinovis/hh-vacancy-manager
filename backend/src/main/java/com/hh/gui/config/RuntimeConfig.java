@@ -28,7 +28,7 @@ public class RuntimeConfig {
     private static final String CONFIG_FILE = "runtime-config.json";
 
     @Value("${app.data-dir:${user.dir}/data}")
-    private String dataDir;
+    private String dataDir = System.getProperty("user.dir") + "/data";
 
     // ═══════ Поля с defaults ═══════
 
@@ -52,6 +52,7 @@ public class RuntimeConfig {
 
     @PostConstruct
     void loadFromFile() {
+        if (dataDir == null) return;
         File file = getConfigFile();
         if (!file.exists()) {
             log.info("Runtime config file не найден ({}), используем defaults", file.getAbsolutePath());
@@ -68,6 +69,7 @@ public class RuntimeConfig {
 
     private synchronized void saveToFile() {
         File file = getConfigFile();
+        if (file == null) return;
         try {
             // Создаём родительскую директорию если нужно
             file.getParentFile().mkdirs();
@@ -79,6 +81,7 @@ public class RuntimeConfig {
     }
 
     private File getConfigFile() {
+        if (dataDir == null) return null;
         return Paths.get(dataDir, CONFIG_FILE).toFile();
     }
 
