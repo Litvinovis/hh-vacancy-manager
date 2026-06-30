@@ -3,6 +3,7 @@ package com.hh.gui.service;
 import com.hh.gui.ai.VacancyAiAnalyzer;
 import com.hh.gui.ai.VacancyAiAnalyzer.SearchProfile;
 import com.hh.gui.client.HhApiClient;
+import com.hh.gui.config.RuntimeConfig;
 import com.hh.gui.model.Vacancy;
 import com.hh.gui.repository.VacancyRepository;
 import org.slf4j.Logger;
@@ -28,27 +29,37 @@ public class VacancyPipelineService {
     private final VacancyAiAnalyzer aiAnalyzer;
     private final VacancyRepository vacancyRepo;
     private final TelegramNotifier telegramNotifier;
+    private final RuntimeConfig runtimeConfig;
 
     @Value("${app.pipeline.batch-size:10}")
-    private int batchSize;
+    private int batchSizeDefault;
 
     @Value("${app.notifications.enabled:false}")
-    private boolean notificationsEnabled;
+    private boolean notificationsEnabledDefault;
 
     public boolean isNotificationsEnabled() {
-        return notificationsEnabled;
+        return runtimeConfig.isNotificationsEnabled();
     }
 
     public void setNotificationsEnabled(boolean enabled) {
-        this.notificationsEnabled = enabled;
+        runtimeConfig.setNotificationsEnabled(enabled);
+    }
+
+    private int getBatchSize() {
+        return runtimeConfig.getPipelineBatchSize() > 0 ? runtimeConfig.getPipelineBatchSize() : batchSizeDefault;
     }
 
     public VacancyPipelineService(HhApiClient hhApiClient, VacancyAiAnalyzer aiAnalyzer,
-                                   VacancyRepository vacancyRepo, TelegramNotifier telegramNotifier) {
+                                   VacancyRepository vacancyRepo, TelegramNotifier telegramNotifier,
+                                   RuntimeConfig runtimeConfig) {
         this.hhApiClient = hhApiClient;
         this.aiAnalyzer = aiAnalyzer;
         this.vacancyRepo = vacancyRepo;
         this.telegramNotifier = telegramNotifier;
+        this.runtimeConfig = runtimeConfig;
+        // Инициализация RuntimeConfig дефолтами из yml
+        runtimeConfig.setPipelineBatchSize(runtimeConfig.getPipelineBatchSize() > 0 ? runtimeConfig.getPipelineBatchSize() : batchSizeDefault);
+        runtimeConfig.setNotificationsEnabled(notificationsEnabledDefault);
     }
 
     /**
@@ -70,7 +81,7 @@ public class VacancyPipelineService {
             profile.skills = aiProfile.skills;
             profile.notSuitable = aiProfile.notSuitable;
             profile.salaryMin = aiProfile.salaryMin;
-            profile.queries = SearchQuery.defaultQueries();
+            profile.queries = SearchQuery.defaultQueries(runtimeConfig.getSalaryMinRemote());
             log.info("=== Начало запланированного пайплайна ===");
             runFullPipeline(profile);
             log.info("=== Конец запланированного пайплайна ===");
@@ -86,7 +97,7 @@ public class VacancyPipelineService {
     public PipelineResult runFullPipeline(SearchProfile profile) {
         // Convert AI profile to local profile with default queries if needed
         if (profile.queries == null || profile.queries.isEmpty()) {
-            profile.queries = SearchQuery.defaultQueries();
+            profile.queries = SearchQuery.defaultQueries(runtimeConfig.getSalaryMinRemote());
         }
         log.info("=== Начало пайплайна ===");
 
@@ -103,7 +114,7 @@ public class VacancyPipelineService {
         log.info("Шаг 3: {} вакансий проанализировано AI", analyzed);
 
         // Step 4: Get approved for notification (min AI score = 50, max 10 per batch)
-        List<Vacancy> approved = vacancyRepo.findUnnotifiedApproved(50, 10);
+        List<Vacancy> approved = vacancyRepo.findUnnotifiedApproved(runtimeConfig.getMinScore(), runtimeConfig.getMaxApproved());
         log.info("Шаг 4: {} одобренных неуведомлённых вакансий", approved.size());
 
         // Step 5: Send Telegram report
@@ -173,12 +184,12 @@ public class VacancyPipelineService {
      */
     private int analyzePending(SearchProfile profile) {
         int totalAnalyzed = 0;
-        int maxPerRun = 30; // limit per pipeline run to avoid burning all quota
+        int maxPerRun = runtimeConfig.getMaxPerRun();
         int processed = 0;
 
         while (processed < maxPerRun) {
             int remaining = maxPerRun - processed;
-            int currentBatchSize = Math.min(batchSize, remaining);
+            int currentBatchSize = Math.min(getBatchSize(), remaining);
             List<Vacancy> batch = vacancyRepo.findPending(currentBatchSize);
             if (batch.isEmpty()) break;
 
@@ -217,7 +228,7 @@ public class VacancyPipelineService {
                 log.info("analyzeAllPending остановлен — активен период охлаждения после {} пакетов", batchNum);
                 break;
             }
-            List<Vacancy> batch = vacancyRepo.findPending(batchSize);
+            List<Vacancy> batch = vacancyRepo.findPending(getBatchSize());
             if (batch.isEmpty()) {
                 log.info("analyzeAllPending завершён — больше нет необработанных вакансий");
                 break;
@@ -276,7 +287,7 @@ public class VacancyPipelineService {
      * Skipped if notifications are disabled (app.notifications.enabled=false).
      */
     private void sendReport(List<Vacancy> approved, SearchProfile profile) {
-        if (!notificationsEnabled) {
+        if (!runtimeConfig.isNotificationsEnabled()) {
             log.info("Шаг 5: Уведомления отключены — пропускаем отчёт Telegram ({} одобренных)", approved.size());
             return;
         }
@@ -375,7 +386,7 @@ public class VacancyPipelineService {
 
         while (processed < maxPerRun) {
             int remaining = maxPerRun - processed;
-            int currentBatchSize = Math.min(batchSize, remaining);
+            int currentBatchSize = Math.min(getBatchSize(), remaining);
             List<Vacancy> batch = vacancyRepo.findPending(currentBatchSize);
             if (batch.isEmpty()) break;
 
@@ -398,7 +409,7 @@ public class VacancyPipelineService {
         log.info("Шаг 2: {} вакансий проанализировано AI", totalAnalyzed);
 
         // Step 3: Get approved for notification
-        List<Vacancy> approved = vacancyRepo.findUnnotifiedApproved(50, 10);
+        List<Vacancy> approved = vacancyRepo.findUnnotifiedApproved(runtimeConfig.getMinScore(), runtimeConfig.getMaxApproved());
         log.info("Шаг 3: {} одобренных неуведомлённых вакансий", approved.size());
 
         // Step 4: Send Telegram report
@@ -424,7 +435,7 @@ public class VacancyPipelineService {
         public boolean isRemote;
         public List<String> excludeWords;
 
-        public static List<SearchQuery> defaultQueries() {
+        public static List<SearchQuery> defaultQueries(int salaryMinRemote) {
             List<SearchQuery> queries = new ArrayList<>();
             // Offline Ufa searches
             for (String q : List.of("продавец", "консультант", "оператор", "администратор", "менеджер")) {
@@ -449,7 +460,7 @@ public class VacancyPipelineService {
                 sq.query = q;
                 sq.area = 113; // Russia
                 sq.schedule = "remote";
-                sq.salaryMin = 40000;
+                sq.salaryMin = salaryMinRemote;
                 sq.isRemote = true;
                 sq.excludeWords = List.of("кол-центр", "call-центр", "call center", "телефон", "холодн",
                         "продаж", "водитель", "курьер", "грузчик", "разнорабочий", "вахта",

@@ -1,5 +1,6 @@
 package com.hh.gui.ai;
 
+import com.hh.gui.config.RuntimeConfig;
 import com.hh.gui.model.Vacancy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -36,16 +37,25 @@ public class VacancyAiAnalyzer {
     private String model;
 
     @Value("${app.ai.batch-size:10}")
-    private int batchSize;
+    private int batchSizeDefault;
+
+    private final RuntimeConfig runtimeConfig;
 
     // Rate limiter: free models need ~10-15s between requests to avoid 429
-    private static final long MIN_REQUEST_INTERVAL_MS = 12000; // 12 seconds between requests
     private long lastRequestTime = 0;
 
     // Rate limit cooldown: when set, all API calls are skipped until this timestamp (epoch ms)
     private volatile long rateLimitCooldownUntil = 0;
 
     private final com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+
+    public VacancyAiAnalyzer(RuntimeConfig runtimeConfig) {
+        this.runtimeConfig = runtimeConfig;
+    }
+
+    private int getBatchSize() {
+        return runtimeConfig.getAiBatchSize() > 0 ? runtimeConfig.getAiBatchSize() : batchSizeDefault;
+    }
 
     /**
      * Check if the rate limit cooldown is active.
@@ -79,24 +89,24 @@ public class VacancyAiAnalyzer {
 
         List<AiResult> results = new ArrayList<>();
 
-        for (int i = 0; i < vacancies.size(); i += batchSize) {
+        for (int i = 0; i < vacancies.size(); i += getBatchSize()) {
             // Check cooldown before each batch (may have been set by a previous batch failure)
             if (isRateLimited()) {
-                log.info("Остановка AI-анализа — активен период охлаждения после пакета {}", (i / batchSize));
+                log.info("Остановка AI-анализа — активен период охлаждения после пакета {}", (i / getBatchSize()));
                 break;
             }
-            int end = Math.min(i + batchSize, vacancies.size());
+            int end = Math.min(i + getBatchSize(), vacancies.size());
             List<Vacancy> batch = vacancies.subList(i, end);
             try {
                 // Rate limiting
                 waitForRateLimit();
 
                 // Retry with exponential backoff
-                List<AiResult> batchResults = analyzeWithRetry(batch, profile, 3);
+                List<AiResult> batchResults = analyzeWithRetry(batch, profile, runtimeConfig.getMaxRetries());
                 results.addAll(batchResults);
 
                 log.debug("AI-пакет {}/{} готов ({} вакансий, {} результатов)",
-                    (i / batchSize) + 1, (vacancies.size() + batchSize - 1) / batchSize,
+                    (i / getBatchSize()) + 1, (vacancies.size() + getBatchSize() - 1) / getBatchSize(),
                     batch.size(), batchResults.size());
 
             } catch (InterruptedException e) {
@@ -116,8 +126,9 @@ public class VacancyAiAnalyzer {
     private synchronized void waitForRateLimit() throws InterruptedException {
         long now = System.currentTimeMillis();
         long elapsed = now - lastRequestTime;
-        if (elapsed < MIN_REQUEST_INTERVAL_MS) {
-            Thread.sleep(MIN_REQUEST_INTERVAL_MS - elapsed);
+        long minInterval = 12000; // 12s default, can be configured via requestDelayMs for AI
+        if (elapsed < minInterval) {
+            Thread.sleep(minInterval - elapsed);
         }
         lastRequestTime = System.currentTimeMillis();
     }
@@ -245,8 +256,8 @@ public class VacancyAiAnalyzer {
         conn.setRequestMethod("POST");
         conn.setRequestProperty("Content-Type", "application/json");
         conn.setRequestProperty("Authorization", "Bearer " + apiKey);
-        conn.setConnectTimeout(30000);
-        conn.setReadTimeout(120000);
+        conn.setConnectTimeout(runtimeConfig.getHttpConnectTimeoutMs());
+        conn.setReadTimeout(runtimeConfig.getHttpReadTimeoutMs());
         conn.setDoOutput(true);
 
         String escapedPrompt = prompt.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n");
@@ -275,8 +286,14 @@ public class VacancyAiAnalyzer {
                 // On 429 (rate limit), set cooldown until midnight the next day
                 if (code == 429) {
                     java.util.Calendar cal = java.util.Calendar.getInstance();
-                    cal.add(java.util.Calendar.DAY_OF_MONTH, 1);
-                    cal.set(java.util.Calendar.HOUR_OF_DAY, 6);
+                    int cooldownH = runtimeConfig.getCooldownHours();
+                    if (cooldownH > 0) {
+                        cal.add(java.util.Calendar.HOUR_OF_DAY, cooldownH);
+                    } else {
+                        // Default: until 06:00 next day
+                        cal.add(java.util.Calendar.DAY_OF_MONTH, 1);
+                        cal.set(java.util.Calendar.HOUR_OF_DAY, 6);
+                    }
                     cal.set(java.util.Calendar.MINUTE, 0);
                     cal.set(java.util.Calendar.SECOND, 0);
                     cal.set(java.util.Calendar.MILLISECOND, 0);

@@ -1,6 +1,7 @@
 package com.hh.gui.ai;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.hh.gui.config.RuntimeConfig;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -20,12 +21,12 @@ class VacancyAiAnalyzerTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        analyzer = new VacancyAiAnalyzer();
+        analyzer = new VacancyAiAnalyzer(new RuntimeConfig());
         // Set required fields via reflection
         setField(analyzer, "apiUrl", "http://localhost:8089/mock");
         setField(analyzer, "apiKey", "test-key");
         setField(analyzer, "model", "test/model");
-        setField(analyzer, "batchSize", 5);
+        setField(analyzer, "batchSizeDefault", 5);
         setField(analyzer, "mapper", mapper);
     }
 
