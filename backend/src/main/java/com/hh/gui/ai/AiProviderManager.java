@@ -43,11 +43,13 @@ public class AiProviderManager {
     private String configuredProvider;
 
     private final RuntimeConfig runtimeConfig;
+    private final AiMetrics metrics;
     private ProviderState state = ProviderState.PRIMARY;
     private volatile long cooldownUntil = 0;
 
-    public AiProviderManager(RuntimeConfig runtimeConfig) {
+    public AiProviderManager(RuntimeConfig runtimeConfig, AiMetrics metrics) {
         this.runtimeConfig = runtimeConfig;
+        this.metrics = metrics;
     }
 
     /** Returns true if fallback provider is configured. */
@@ -111,10 +113,12 @@ public class AiProviderManager {
         if (hasFallback()) {
             if (state != ProviderState.FALLBACK) {
                 log.warn("Primary provider rate limited (429). Switching to fallback Grok.");
+                metrics.recordRateLimit("openrouter");
                 state = ProviderState.FALLBACK;
             }
         } else {
             log.warn("Primary provider (429) but no fallback configured. Entering cooldown.");
+            metrics.recordRateLimit("openrouter");
             enterCooldown();
         }
     }

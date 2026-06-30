@@ -2,6 +2,7 @@ package com.hh.gui.ai;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hh.gui.config.RuntimeConfig;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -22,13 +23,13 @@ class VacancyAiAnalyzerTest {
     @BeforeEach
     void setUp() throws Exception {
         RuntimeConfig config = new RuntimeConfig();
-        AiProviderManager provider = new AiProviderManager(config);
+        AiProviderManager provider = new AiProviderManager(config, new AiMetrics(new SimpleMeterRegistry()));
         // Set provider fields via reflection
         setField(provider, "primaryUrl", "http://localhost:8089/mock");
         setField(provider, "primaryKey", "test-key");
         setField(provider, "primaryModel", "test/model");
         setField(provider, "configuredProvider", "auto");
-        analyzer = new VacancyAiAnalyzer(config, provider);
+        analyzer = new VacancyAiAnalyzer(config, provider, new AiMetrics(new SimpleMeterRegistry()));
         setField(analyzer, "batchSizeDefault", 5);
         setField(analyzer, "mapper", mapper);
     }

@@ -32,15 +32,17 @@ public class VacancyAiAnalyzer {
 
     private final RuntimeConfig runtimeConfig;
     private final AiProviderManager providerManager;
+    private final AiMetrics metrics;
 
     // Rate limiter: free models need ~10-15s between requests to avoid 429
     private long lastRequestTime = 0;
 
     private final com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
 
-    public VacancyAiAnalyzer(RuntimeConfig runtimeConfig, AiProviderManager providerManager) {
+    public VacancyAiAnalyzer(RuntimeConfig runtimeConfig, AiProviderManager providerManager, AiMetrics metrics) {
         this.runtimeConfig = runtimeConfig;
         this.providerManager = providerManager;
+        this.metrics = metrics;
     }
 
     private int getBatchSize() {
@@ -279,9 +281,10 @@ public class VacancyAiAnalyzer {
         String url = providerManager.getCurrentUrl();
         String key = providerManager.getCurrentKey();
         String model = providerManager.getCurrentModel();
+        String provider = providerManager.getCurrentProviderName();
 
         if (key == null || key.isEmpty()) {
-            throw new RuntimeException("AI API key not configured for " + providerManager.getCurrentProviderName());
+            throw new RuntimeException("AI API key not configured for " + provider);
         }
 
         URL apiUrl = new URL(url);
@@ -305,6 +308,15 @@ public class VacancyAiAnalyzer {
         }
 
         int code = conn.getResponseCode();
+
+        // Record metrics
+        metrics.recordRequest(provider);
+        if (code == 429) {
+            metrics.recordRateLimit(provider);
+        } else if (code >= 400) {
+            metrics.recordError(provider, code);
+        }
+
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(
                     code >= 400 ? conn.getErrorStream() : conn.getInputStream(),
@@ -315,7 +327,7 @@ public class VacancyAiAnalyzer {
                 sb.append(line);
             }
             if (code >= 400) {
-                log.error("Ошибка LLM API {} ({}): {}", code, providerManager.getCurrentProviderName(), sb);
+                log.error("Ошибка LLM API {} ({}): {}", code, provider, sb);
                 throw new RuntimeException("LLM API returned " + code);
             }
             return sb.toString();

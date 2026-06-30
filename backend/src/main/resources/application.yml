@@ -40,6 +40,16 @@ app:
     bot-token: ${TELEGRAM_BOT_TOKEN:}
     chat-id: ${TELEGRAM_CHAT_ID:}
 
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus,metrics
+  metrics:
+    tags:
+      application: hh-gui
+      service: ai-analyzer
+
 logging:
   level:
     com.hh.gui: DEBUG
