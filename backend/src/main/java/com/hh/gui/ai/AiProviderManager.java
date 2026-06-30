@@ -100,10 +100,21 @@ public class AiProviderManager {
     public String getCurrentProviderName() {
         resolveState();
         return switch (state) {
-            case PRIMARY -> "openrouter";
-            case FALLBACK -> "grok";
-            case COOLDOWN -> hasFallback() ? "grok" : "openrouter (cooldown)";
+            case PRIMARY -> detectProviderName(primaryUrl);
+            case FALLBACK -> detectProviderName(fallbackUrl);
+            case COOLDOWN -> detectProviderName(fallbackUrl) + " (cooldown)";
         };
+    }
+
+    /** Detect provider name from URL. */
+    private static String detectProviderName(String url) {
+        if (url == null) return "unknown";
+        String u = url.toLowerCase();
+        if (u.contains("github")) return "github-models";
+        if (u.contains("x.ai")) return "grok";
+        if (u.contains("openrouter")) return "openrouter";
+        if (u.contains("groq")) return "groq";
+        return "custom";
     }
 
     /**
@@ -112,13 +123,13 @@ public class AiProviderManager {
     public void switchToFallback() {
         if (hasFallback()) {
             if (state != ProviderState.FALLBACK) {
-                log.warn("Primary provider rate limited (429). Switching to fallback Grok.");
-                metrics.recordRateLimit("openrouter");
+                log.warn("Primary provider rate limited (429). Switching to fallback {}.", detectProviderName(fallbackUrl));
+                metrics.recordRateLimit(detectProviderName(primaryUrl));
                 state = ProviderState.FALLBACK;
             }
         } else {
             log.warn("Primary provider (429) but no fallback configured. Entering cooldown.");
-            metrics.recordRateLimit("openrouter");
+            metrics.recordRateLimit(detectProviderName(primaryUrl));
             enterCooldown();
         }
     }
@@ -191,13 +202,14 @@ public class AiProviderManager {
     private String getProviderLabel(boolean isFallback) {
         String url = isFallback ? fallbackUrl : primaryUrl;
         String model = isFallback ? fallbackModel : primaryModel;
+        String shortName = detectProviderName(url);
         if (model != null && !model.isBlank()) {
             // Short model name
             String[] parts = model.split("/");
             String shortModel = parts[parts.length - 1].replace("-3-mini", "").replace("-2-vision", "");
-            return (isFallback ? "grok" : "or") + "/" + shortModel;
+            return shortName + "/" + shortModel;
         }
-        return isFallback ? "grok" : "openrouter";
+        return shortName;
     }
 
     private void resolveState() {
