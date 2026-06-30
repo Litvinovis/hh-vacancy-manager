@@ -366,3 +366,12 @@ body {
 }
 .switch input:checked + .slider { background: var(--accent-bg); border-color: var(--accent); }
 .switch input:checked + .slider::before { transform: translateX(20px); background: var(--accent); }
+
+/* ═══════ AI RATE BANNER ═══════ */
+.ai-rate-banner {
+  background: var(--red-bg); border: 1px solid var(--red); border-radius: 8px;
+  padding: 8px 14px; color: var(--red); font-size: 13px; font-weight: 500;
+  margin-right: 12px; white-space: nowrap; flex-shrink: 0;
+  animation: pulse-banner 2s ease-in-out infinite;
+}
+@keyframes pulse-banner { 0%,100% { opacity: 1; } 50% { opacity: 0.7; } }

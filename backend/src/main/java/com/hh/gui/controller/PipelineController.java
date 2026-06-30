@@ -173,6 +173,25 @@ public class PipelineController {
     }
 
     /**
+     * Get AI status (rate limit, cooldown).
+     * GET /api/ai/status
+     */
+    @GetMapping("/ai/status")
+    public ResponseEntity<Map<String, Object>> getAiStatus() {
+        Map<String, Object> status = new LinkedHashMap<>();
+        boolean rateLimited = pipelineService.isAiRateLimited();
+        long cooldownUntil = pipelineService.getAiCooldownUntil();
+        status.put("rateLimited", rateLimited);
+        status.put("cooldownUntil", cooldownUntil);
+        if (rateLimited && cooldownUntil > 0) {
+            status.put("cooldownUntilIso", java.time.Instant.ofEpochMilli(cooldownUntil).toString());
+            long remainingMs = cooldownUntil - System.currentTimeMillis();
+            status.put("remainingMinutes", remainingMs / 60000);
+        }
+        return ResponseEntity.ok(status);
+    }
+
+    /**
      * Get notification settings.
      * GET /api/settings/notifications
      */

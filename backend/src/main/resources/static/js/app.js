@@ -709,6 +709,31 @@ async function saveSettings() {
   }
 }
 
+// ═══════ AI STATUS ═══════
+async function checkAiStatus() {
+  try {
+    const s = await api('/ai/status');
+    const banner = document.getElementById('ai-rate-banner');
+    if (s.rateLimited) {
+      const mins = s.remainingMinutes || '?';
+      const until = s.cooldownUntilIso ? new Date(s.cooldownUntilIso).toLocaleTimeString('ru-RU', {hour:'2-digit',minute:'2-digit'}) : '?';
+      if (banner) {
+        banner.innerHTML = `🚫 Лимит AI исчерпан — анализ до ${until} (≈${mins} мин)`;
+        banner.style.display = 'block';
+      } else {
+        const b = document.createElement('div');
+        b.id = 'ai-rate-banner';
+        b.className = 'ai-rate-banner';
+        b.innerHTML = `🚫 Лимит AI исчерпан — анализ до ${until} (≈${mins} мин)`;
+        const topbar = document.querySelector('.topbar');
+        if (topbar) topbar.prepend(b);
+      }
+    } else if (banner) {
+      banner.style.display = 'none';
+    }
+  } catch (e) { /* ignore */ }
+}
+
 // ═══════ DISTRICT FILTER ═══════
 async function loadDistricts() {
   try {
@@ -730,6 +755,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initTheme();
   loadStats(); // also populates district filter from topDistricts
   loadVacancies(1);
+  checkAiStatus(); // check rate limit status
 
   // Theme buttons
   document.querySelectorAll('.theme-b').forEach(btn => {
@@ -746,4 +772,7 @@ document.addEventListener('DOMContentLoaded', () => {
     el.addEventListener('change', () => loadVacancies(1));
   });
   document.getElementById('search-input')?.addEventListener('input', debounceSearch);
+
+  // Periodic AI status check every 5 min
+  setInterval(checkAiStatus, 300000);
 });
