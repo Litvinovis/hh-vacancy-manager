@@ -3,6 +3,7 @@ package com.hh.gui.controller;
 import com.hh.gui.config.AppConfig;
 import com.hh.gui.config.AppConfig.SearchProfile;
 import com.hh.gui.config.AppConfig.SearchEntry;
+import com.hh.gui.config.RuntimeConfig;
 import com.hh.gui.service.VacancyPipelineService;
 import com.hh.gui.service.VacancyPipelineService.PipelineResult;
 import com.hh.gui.repository.VacancyRepository;
@@ -29,9 +30,7 @@ public class PipelineController {
     private final VacancyPipelineService pipelineService;
     private final VacancyRepository vacancyRepo;
     private final SearchProfile profile;
-
-    @Value("${app.pipeline.enabled:true}")
-    private boolean pipelineEnabled;
+    private final RuntimeConfig runtimeConfig;
 
     @Value("${app.pipeline.profile:mom}")
     private String pipelineProfile;
@@ -39,10 +38,12 @@ public class PipelineController {
     @Autowired
     public PipelineController(VacancyPipelineService pipelineService,
                                VacancyRepository vacancyRepo,
-                               SearchProfile profile) {
+                               SearchProfile profile,
+                               RuntimeConfig runtimeConfig) {
         this.pipelineService = pipelineService;
         this.vacancyRepo = vacancyRepo;
         this.profile = profile;
+        this.runtimeConfig = runtimeConfig;
     }
 
     /**
@@ -143,7 +144,7 @@ public class PipelineController {
      */
     @Scheduled(cron = "${app.pipeline.cron:0 0 */2 * * *}")
     public void scheduledPipelineRun() {
-        if (!pipelineEnabled) {
+        if (!runtimeConfig.isPipelineEnabled()) {
             log.debug("Планировщик пайплайна отключён");
             return;
         }

@@ -286,3 +286,83 @@ body {
 .toast.ok { border-left: 3px solid var(--green); }
 .toast.err { border-left: 3px solid var(--red); }
 @keyframes slideIn { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: translateX(0); } }
+
+/* ═══════ SETTINGS MODAL ═══════ */
+.modal-overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,.6); display: flex; align-items: center; justify-content: center;
+  z-index: 1000;
+}
+.modal-box {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: var(--shadow); min-width: 360px; max-width: 480px; max-height: 85vh;
+  display: flex; flex-direction: column;
+}
+.modal-box-wide { max-width: 600px; }
+.modal-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 20px; border-bottom: 1px solid var(--border);
+}
+.modal-head h3 { margin: 0; font-size: 16px; font-weight: 600; }
+.modal-x {
+  background: none; border: none; color: var(--muted); cursor: pointer;
+  font-size: 18px; padding: 4px 8px; border-radius: 6px;
+}
+.modal-x:hover { color: var(--text); background: var(--surface3); }
+.modal-body { padding: 20px; overflow-y: auto; flex: 1; }
+.modal-foot {
+  display: flex; justify-content: flex-end; gap: 8px;
+  padding: 12px 20px; border-top: 1px solid var(--border);
+}
+.settings-body { max-height: 60vh; }
+.settings-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 0; border-bottom: 1px solid var(--border); gap: 12px;
+}
+.settings-row:last-child { border-bottom: none; }
+.settings-label {
+  font-size: 13px; font-weight: 500; color: var(--text2);
+  display: flex; align-items: center; gap: 6px; flex-shrink: 0; min-width: 140px;
+}
+.settings-help {
+  cursor: help; font-size: 12px; color: var(--accent);
+  position: relative;
+}
+.settings-help:hover::after {
+  content: attr(title); position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%);
+  background: var(--surface3); color: var(--text); border: 1px solid var(--border);
+  padding: 8px 12px; border-radius: 8px; font-size: 12px; font-weight: 400;
+  white-space: normal; width: 260px; z-index: 10; pointer-events: none;
+  box-shadow: var(--shadow-sm);
+}
+.settings-num {
+  background: var(--surface2); border: 1px solid var(--border); border-radius: 6px;
+  padding: 6px 10px; color: var(--text); font-size: 13px; width: 100px; text-align: right;
+}
+.settings-num:focus { border-color: var(--accent); outline: none; }
+.settings-num-mini {
+  background: var(--surface2); border: 1px solid var(--border); border-radius: 6px;
+  padding: 6px 8px; color: var(--text); font-size: 12px; width: 110px; text-align: right;
+  margin-left: 4px;
+}
+.settings-num-mini:focus { border-color: var(--accent); outline: none; }
+.settings-sel {
+  background: var(--surface2); border: 1px solid var(--border); border-radius: 6px;
+  padding: 6px 10px; color: var(--text); font-size: 13px;
+}
+.settings-sel:focus { border-color: var(--accent); outline: none; }
+
+/* Toggle switch */
+.switch { position: relative; display: inline-block; width: 44px; height: 24px; flex-shrink: 0; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.slider {
+  position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+  background: var(--surface3); border: 1px solid var(--border); border-radius: 24px;
+  transition: .2s;
+}
+.slider::before {
+  content: ""; position: absolute; height: 18px; width: 18px;
+  left: 2px; bottom: 2px; background: var(--muted); border-radius: 50%; transition: .2s;
+}
+.switch input:checked + .slider { background: var(--accent-bg); border-color: var(--accent); }
+.switch input:checked + .slider::before { transform: translateX(20px); background: var(--accent); }

@@ -1,5 +1,6 @@
 package com.hh.gui.client;
 
+import com.hh.gui.config.RuntimeConfig;
 import com.hh.gui.model.Vacancy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,7 +30,12 @@ public class HhApiClient {
 
     private static final Logger log = LoggerFactory.getLogger(HhApiClient.class);
     private static final String RSS_BASE = "https://hh.ru/search/vacancy/rss";
-    private static final int REQUEST_DELAY_MS = 1500;
+
+    private final RuntimeConfig runtimeConfig;
+
+    public HhApiClient(RuntimeConfig runtimeConfig) {
+        this.runtimeConfig = runtimeConfig;
+    }
 
     /**
      * Fetch vacancies via RSS for a single query.
@@ -88,7 +94,7 @@ public class HhApiClient {
                 seen.putIfAbsent(v.getHhId(), v);
             }
             try {
-                Thread.sleep(REQUEST_DELAY_MS);
+                Thread.sleep(runtimeConfig.getRequestDelayMs());
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 break;
@@ -103,8 +109,8 @@ public class HhApiClient {
         conn.setRequestMethod("GET");
         conn.setRequestProperty("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
         conn.setRequestProperty("Accept", "application/rss+xml");
-        conn.setConnectTimeout(15000);
-        conn.setReadTimeout(30000);
+        conn.setConnectTimeout(runtimeConfig.getHttpConnectTimeoutMs() > 0 ? runtimeConfig.getHttpConnectTimeoutMs() : 15000);
+        conn.setReadTimeout(runtimeConfig.getHttpReadTimeoutMs() > 0 ? Math.min(runtimeConfig.getHttpReadTimeoutMs(), 30000) : 30000);
 
         int code = conn.getResponseCode();
         if (code != 200) {

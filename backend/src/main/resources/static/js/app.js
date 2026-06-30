@@ -517,6 +517,198 @@ async function toggleNotifications() {
   }
 }
 
+// ═══════ SETTINGS ═══════
+let settingsAuthed = false;
+let settingsDescriptors = [];
+
+async function showSettingsModal() {
+  let modal = document.getElementById('settings-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'settings-modal';
+    modal.className = 'modal-overlay';
+    document.body.appendChild(modal);
+  }
+
+  if (!settingsAuthed) {
+    modal.innerHTML = `
+      <div class="modal-box">
+        <div class="modal-head"><h3>⚙️ Настройки</h3><button class="modal-x" onclick="closeSettingsModal()">✕</button></div>
+        <div class="modal-body">
+          <p style="color:var(--muted);margin-bottom:16px">Введите пароль для доступа к настройкам</p>
+          <input type="password" id="settings-pw" class="search-inp" placeholder="Пароль" style="width:100%;margin-bottom:12px"
+                 onkeydown="if(event.key==='Enter')settingsLogin()">
+          <button class="btn btn-prim" onclick="settingsLogin()" style="width:100%">Войти</button>
+        </div>
+      </div>`;
+    modal.style.display = 'flex';
+    setTimeout(() => document.getElementById('settings-pw')?.focus(), 100);
+    return;
+  }
+
+  // Authed — load settings
+  try {
+    const data = await api('/settings?password=1102');
+    settingsDescriptors = data.descriptors || [];
+    renderSettingsForm(data.values || {});
+  } catch (e) {
+    toast('✗ Ошибка загрузки настроек: ' + e.message, 'err');
+  }
+}
+
+function renderSettingsForm(values) {
+  const modal = document.getElementById('settings-modal');
+
+  // Build schedule options for pipelineIntervalMs
+  const intervalOpts = [];
+  for (let m = 10; m <= 60; m += 10) intervalOpts.push({ v: m * 60000, l: `Каждые ${m} мин` });
+  for (let h = 1; h <= 24; h++) intervalOpts.push({ v: h * 3600000, l: h === 1 ? 'Каждый 1 час' : `Каждые ${h} часа` });
+
+  // Build schedule options for dailyCron
+  const dailyCronOpts = [];
+  for (let h = 0; h <= 23; h++) {
+    const hh = String(h).padStart(2, '0');
+    dailyCronOpts.push({ v: `0 0 ${hh} * * *`, l: `Ежедневно в ${hh}:00` });
+    dailyCronOpts.push({ v: `0 30 ${hh} * * *`, l: `Ежедневно в ${hh}:30` });
+  }
+
+  let html = '';
+  for (const d of settingsDescriptors) {
+    const val = values[d.key] ?? d.currentValue;
+    const tooltip = d.description ? `<span class="settings-help" title="${escHtml(d.description)}">❓</span>` : '';
+
+    if (d.type === 'boolean') {
+      html += `
+        <div class="settings-row">
+          <div class="settings-label">${escHtml(d.label)} ${tooltip}</div>
+          <label class="switch">
+            <input type="checkbox" data-key="${d.key}" ${val ? 'checked' : ''}>
+            <span class="slider"></span>
+          </label>
+        </div>`;
+    } else if (d.key === 'pipelineIntervalMs') {
+      const selVal = intervalOpts.find(o => o.v === val) ? val : '';
+      html += `
+        <div class="settings-row">
+          <div class="settings-label">${escHtml(d.label)} ${tooltip}</div>
+          <select class="settings-sel" data-key="${d.key}">
+            ${intervalOpts.map(o => `<option value="${o.v}" ${o.v == selVal ? 'selected' : ''}>${o.l}</option>`).join('')}
+            <option value="" ${!selVal ? 'selected' : ''}>Свое значение (мс)</option>
+          </select>
+          <input type="number" class="settings-num-mini" data-key="${d.key}_custom" placeholder="мс" min="${d.min||1}" max="${d.max||86400000}" style="display:${selVal ? 'none' : 'inline-block'}">
+        </div>`;
+    } else if (d.key === 'dailyCron') {
+      const selVal = dailyCronOpts.find(o => o.v === val) ? val : '';
+      html += `
+        <div class="settings-row">
+          <div class="settings-label">${escHtml(d.label)} ${tooltip}</div>
+          <select class="settings-sel" data-key="${d.key}">
+            ${dailyCronOpts.map(o => `<option value="${o.v}" ${o.v === selVal ? 'selected' : ''}>${o.l}</option>`).join('')}
+            <option value="" ${!selVal ? 'selected' : ''}>Свой cron</option>
+          </select>
+          <input type="text" class="settings-num-mini" data-key="${d.key}_custom" placeholder="0 0 12 * * *" value="${!selVal ? escHtml(val) : ''}" style="display:${selVal ? 'none' : 'inline-block'}">
+        </div>`;
+    } else {
+      html += `
+        <div class="settings-row">
+          <div class="settings-label">${escHtml(d.label)} ${tooltip}</div>
+          <input type="number" class="settings-num" data-key="${d.key}" value="${val}" min="${d.min??0}" max="${d.max??999999}">
+        </div>`;
+    }
+  }
+
+  modal.innerHTML = `
+    <div class="modal-box modal-box-wide">
+      <div class="modal-head"><h3>⚙️ Настройки</h3><button class="modal-x" onclick="closeSettingsModal()">✕</button></div>
+      <div class="modal-body settings-body">${html}</div>
+      <div class="modal-foot">
+        <button class="btn btn-ghost" onclick="closeSettingsModal()">Отмена</button>
+        <button class="btn btn-prim" onclick="saveSettings()">💾 Сохранить</button>
+      </div>
+    </div>`;
+  modal.style.display = 'flex';
+
+  // Toggle custom input visibility for selects
+  modal.querySelectorAll('.settings-sel').forEach(sel => {
+    sel.addEventListener('change', () => {
+      const key = sel.dataset.key;
+      const custom = modal.querySelector(`[data-key="${key}_custom"]`);
+      if (custom) custom.style.display = sel.value === '' ? 'inline-block' : 'none';
+    });
+  });
+}
+
+async function settingsLogin() {
+  const pw = document.getElementById('settings-pw')?.value;
+  if (!pw) return;
+  try {
+    const r = await api('/settings/auth', { method: 'POST', body: JSON.stringify({ password: pw }) });
+    if (r.valid) {
+      settingsAuthed = true;
+      showSettingsModal(); // reload with settings
+    } else {
+      toast('✗ Неверный пароль', 'err');
+    }
+  } catch (e) {
+    toast('✗ ' + e.message, 'err');
+  }
+}
+
+function closeSettingsModal() {
+  const modal = document.getElementById('settings-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+async function saveSettings() {
+  const modal = document.getElementById('settings-modal');
+  const updates = { password: '1102' };
+
+  // Collect values
+  const processed = new Set();
+  modal.querySelectorAll('[data-key]').forEach(el => {
+    const key = el.dataset.key;
+    if (key.endsWith('_custom') || processed.has(key)) return;
+    processed.add(key);
+
+    if (el.type === 'checkbox') {
+      updates[key] = el.checked;
+    } else if (el.tagName === 'SELECT') {
+      if (el.value === '') {
+        // Custom value
+        const custom = modal.querySelector(`[data-key="${key}_custom"]`);
+        if (custom) {
+          updates[key] = custom.type === 'number' ? parseInt(custom.value) : custom.value;
+        }
+      } else if (key === 'pipelineIntervalMs') {
+        updates[key] = parseInt(el.value);
+      } else {
+        updates[key] = el.value;
+      }
+    } else if (el.type === 'number') {
+      const v = parseInt(el.value);
+      if (isNaN(v)) return;
+      // Validate min/max
+      const desc = settingsDescriptors.find(d => d.key === key);
+      if (desc && desc.min !== null && v < desc.min) { toast(`✗ ${desc.label}: минимум ${desc.min}`, 'err'); return; }
+      if (desc && desc.max !== null && v > desc.max) { toast(`✗ ${desc.label}: максимум ${desc.max}`, 'err'); return; }
+      updates[key] = v;
+    }
+  });
+
+  try {
+    const r = await api('/settings', { method: 'POST', body: JSON.stringify(updates) });
+    if (r.errors && Object.keys(r.errors).length) {
+      const msgs = Object.values(r.errors).join('; ');
+      toast('✗ ' + msgs, 'err');
+    } else {
+      toast('✓ Настройки сохранены', 'ok');
+      closeSettingsModal();
+    }
+  } catch (e) {
+    toast('✗ ' + e.message, 'err');
+  }
+}
+
 // ═══════ DISTRICT FILTER ═══════
 async function loadDistricts() {
   try {
