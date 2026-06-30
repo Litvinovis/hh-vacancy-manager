@@ -27,30 +27,20 @@ public class VacancyAiAnalyzer {
 
     private static final Logger log = LoggerFactory.getLogger(VacancyAiAnalyzer.class);
 
-    @Value("${app.ai.api-url:https://openrouter.ai/api/v1/chat/completions}")
-    private String apiUrl;
-
-    @Value("${app.ai.api-key:}")
-    private String apiKey;
-
-    @Value("${app.ai.model:openrouter/auto}")
-    private String model;
-
     @Value("${app.ai.batch-size:10}")
     private int batchSizeDefault;
 
     private final RuntimeConfig runtimeConfig;
+    private final AiProviderManager providerManager;
 
     // Rate limiter: free models need ~10-15s between requests to avoid 429
     private long lastRequestTime = 0;
 
-    // Rate limit cooldown: when set, all API calls are skipped until this timestamp (epoch ms)
-    private volatile long rateLimitCooldownUntil = 0;
-
     private final com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
 
-    public VacancyAiAnalyzer(RuntimeConfig runtimeConfig) {
+    public VacancyAiAnalyzer(RuntimeConfig runtimeConfig, AiProviderManager providerManager) {
         this.runtimeConfig = runtimeConfig;
+        this.providerManager = providerManager;
     }
 
     private int getBatchSize() {
@@ -59,31 +49,45 @@ public class VacancyAiAnalyzer {
 
     /**
      * Check if the rate limit cooldown is active.
-     * When true, all AI analysis calls will be skipped.
      */
     public boolean isRateLimited() {
-        return System.currentTimeMillis() < rateLimitCooldownUntil;
+        return providerManager.isInCooldown();
     }
 
     /**
      * Get rate limit cooldown until timestamp (epoch ms). 0 = not limited.
      */
     public long getRateLimitCooldownUntil() {
-        return rateLimitCooldownUntil;
+        return providerManager.getCooldownUntil();
+    }
+
+    /**
+     * Get current AI provider state label for UI banner.
+     */
+    public String getProviderStateLabel() {
+        return providerManager.getStateLabel();
+    }
+
+    /**
+     * Reset provider to primary (called from settings UI).
+     */
+    public void resetProvider() {
+        providerManager.reset();
     }
 
     /**
      * Analyze a batch of vacancies against the profile.
-     * Processes in large chunks with rate limiting and retry.
+     * Processes in large chunks with rate limiting and automatic provider fallback.
      */
     public List<AiResult> analyzeBatch(List<Vacancy> vacancies, SearchProfile profile) {
-        if (apiKey == null || apiKey.isEmpty()) {
-            log.warn("Ключ AI API не настроен, пропускаем анализ");
+        if (!providerManager.hasPrimary()) {
+            log.warn("AI API key не настроен, пропускаем анализ");
             return List.of();
         }
 
         // Check rate limit cooldown — skip all analysis if active
-        if (isRateLimited()) {
+        if (providerManager.isInCooldown()) {
+            log.debug("AI-анализ пропущен — активен период охлаждения");
             return List.of();
         }
 
@@ -91,7 +95,7 @@ public class VacancyAiAnalyzer {
 
         for (int i = 0; i < vacancies.size(); i += getBatchSize()) {
             // Check cooldown before each batch (may have been set by a previous batch failure)
-            if (isRateLimited()) {
+            if (providerManager.isInCooldown()) {
                 log.info("Остановка AI-анализа — активен период охлаждения после пакета {}", (i / getBatchSize()));
                 break;
             }
@@ -101,13 +105,13 @@ public class VacancyAiAnalyzer {
                 // Rate limiting
                 waitForRateLimit();
 
-                // Retry with exponential backoff
+                // Retry with exponential backoff (may switch providers on 429)
                 List<AiResult> batchResults = analyzeWithRetry(batch, profile, runtimeConfig.getMaxRetries());
                 results.addAll(batchResults);
 
-                log.debug("AI-пакет {}/{} готов ({} вакансий, {} результатов)",
+                log.debug("AI-пакет {}/{} готов ({} вакансий, {} результатов) via {}",
                     (i / getBatchSize()) + 1, (vacancies.size() + getBatchSize() - 1) / getBatchSize(),
-                    batch.size(), batchResults.size());
+                    batch.size(), batchResults.size(), providerManager.getCurrentProviderName());
 
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -135,26 +139,47 @@ public class VacancyAiAnalyzer {
 
     /**
      * Analyze with exponential backoff retry.
-     * On 429 (rate limit) uses longer backoff: 15s, 30s, 60s...
+     * On 429 (rate limit): switch to fallback provider if available.
+     * If both providers are rate limited, enter cooldown.
      */
     private List<AiResult> analyzeWithRetry(List<Vacancy> vacancies, SearchProfile profile, int maxRetries)
             throws Exception {
         int attempt = 0;
+        boolean switchedThisBatch = false;
+
         while (true) {
-            // Stop retrying if rate limit cooldown was set by a previous attempt
-            if (attempt > 0 && isRateLimited()) {
-                log.warn("Пробуем повторить — активен период охлаждения для ограничения запросов");
-                throw new RuntimeException("Rate limited, aborting retry");
+            // Stop retrying if cooldown active
+            if (providerManager.isInCooldown()) {
+                log.warn("Прерываем попытки — активен cooldown");
+                throw new RuntimeException("Cooldown active, aborting");
             }
             try {
                 return analyzeChunk(vacancies, profile);
             } catch (Exception e) {
                 attempt++;
+                boolean isRateLimit = e.getMessage() != null && e.getMessage().contains("429");
+
+                // On 429: try switching provider instead of just waiting
+                if (isRateLimit && !switchedThisBatch && providerManager.getState() != AiProviderManager.ProviderState.FALLBACK) {
+                    log.warn("429 от провайдера. Переключаемся на fallback...");
+                    providerManager.switchToFallback();
+                    switchedThisBatch = true;
+                    continue; // retry immediately with new provider
+                }
+
+                // On 429 from fallback (or already switched) — enter cooldown
+                if (isRateLimit && (switchedThisBatch || providerManager.getState() == AiProviderManager.ProviderState.FALLBACK)) {
+                    log.warn("429 от fallback провайдера. Entering cooldown.");
+                    providerManager.enterCooldown();
+                    throw new RuntimeException("Both providers rate limited, entering cooldown");
+                }
+
                 if (attempt >= maxRetries) {
                     log.error("AI-анализ не удался после {} попыток: {}", maxRetries, e.getMessage());
                     throw e;
                 }
-                // Longer backoff for rate limits: 15s, 30s, 60s...
+
+                // Standard backoff for transient errors (timeout, 5xx)
                 long backoff = (long) Math.pow(2, attempt) * 7500;
                 log.warn("Попытка AI-анализа {}/{} не удалась ({}), повторяем через {}с...",
                     attempt, maxRetries, e.getMessage(), backoff / 1000);
@@ -251,11 +276,19 @@ public class VacancyAiAnalyzer {
     }
 
     private String callLlm(String prompt) throws Exception {
-        URL url = new URL(apiUrl);
-        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+        String url = providerManager.getCurrentUrl();
+        String key = providerManager.getCurrentKey();
+        String model = providerManager.getCurrentModel();
+
+        if (key == null || key.isEmpty()) {
+            throw new RuntimeException("AI API key not configured for " + providerManager.getCurrentProviderName());
+        }
+
+        URL apiUrl = new URL(url);
+        HttpURLConnection conn = (HttpURLConnection) apiUrl.openConnection();
         conn.setRequestMethod("POST");
         conn.setRequestProperty("Content-Type", "application/json");
-        conn.setRequestProperty("Authorization", "Bearer " + apiKey);
+        conn.setRequestProperty("Authorization", "Bearer " + key);
         conn.setConnectTimeout(runtimeConfig.getHttpConnectTimeoutMs());
         conn.setReadTimeout(runtimeConfig.getHttpReadTimeoutMs());
         conn.setDoOutput(true);
@@ -282,26 +315,7 @@ public class VacancyAiAnalyzer {
                 sb.append(line);
             }
             if (code >= 400) {
-                log.error("Ошибка LLM API {}: {}", code, sb);
-                // On 429 (rate limit), set cooldown until midnight the next day
-                if (code == 429) {
-                    java.util.Calendar cal = java.util.Calendar.getInstance();
-                    int cooldownH = runtimeConfig.getCooldownHours();
-                    if (cooldownH > 0) {
-                        cal.add(java.util.Calendar.HOUR_OF_DAY, cooldownH);
-                    } else {
-                        // Default: until 06:00 next day
-                        cal.add(java.util.Calendar.DAY_OF_MONTH, 1);
-                        cal.set(java.util.Calendar.HOUR_OF_DAY, 6);
-                    }
-                    cal.set(java.util.Calendar.MINUTE, 0);
-                    cal.set(java.util.Calendar.SECOND, 0);
-                    cal.set(java.util.Calendar.MILLISECOND, 0);
-                    rateLimitCooldownUntil = cal.getTimeInMillis();
-                    String cooldownMsg = "=== RATE LIMIT COOLDOWN UNTIL " + new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm").format(new java.util.Date(rateLimitCooldownUntil)) + " ===";
-                    System.err.println(cooldownMsg);
-                    log.warn(cooldownMsg);
-                }
+                log.error("Ошибка LLM API {} ({}): {}", code, providerManager.getCurrentProviderName(), sb);
                 throw new RuntimeException("LLM API returned " + code);
             }
             return sb.toString();

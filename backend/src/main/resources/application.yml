@@ -28,9 +28,13 @@ app:
   search:
     profiles-dir: ${user.dir}/config/profiles
   ai:
+    provider: ${AI_PROVIDER:auto}
     api-url: ${AI_API_URL:https://openrouter.ai/api/v1/chat/completions}
-    api-key: ${AI_API_KEY:}
+    api-key: ${API_KEY:}
     model: ${AI_MODEL:openrouter/auto}
+    fallback-url: ${AI_FALLBACK_URL:https://api.x.ai/v1/chat/completions}
+    fallback-key: ${AI_FALLBACK_KEY:}
+    fallback-model: ${AI_FALLBACK_MODEL:grok-3-mini}
     batch-size: 5
   telegram:
     bot-token: ${TELEGRAM_BOT_TOKEN:}

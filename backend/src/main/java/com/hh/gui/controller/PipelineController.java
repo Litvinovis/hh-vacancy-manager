@@ -1,5 +1,6 @@
 package com.hh.gui.controller;
 
+import com.hh.gui.ai.AiProviderManager;
 import com.hh.gui.config.AppConfig;
 import com.hh.gui.config.AppConfig.SearchProfile;
 import com.hh.gui.config.AppConfig.SearchEntry;
@@ -31,6 +32,7 @@ public class PipelineController {
     private final VacancyRepository vacancyRepo;
     private final SearchProfile profile;
     private final RuntimeConfig runtimeConfig;
+    private final AiProviderManager aiProvider;
 
     @Value("${app.pipeline.profile:mom}")
     private String pipelineProfile;
@@ -39,11 +41,13 @@ public class PipelineController {
     public PipelineController(VacancyPipelineService pipelineService,
                                VacancyRepository vacancyRepo,
                                SearchProfile profile,
-                               RuntimeConfig runtimeConfig) {
+                               RuntimeConfig runtimeConfig,
+                               AiProviderManager aiProvider) {
         this.pipelineService = pipelineService;
         this.vacancyRepo = vacancyRepo;
         this.profile = profile;
         this.runtimeConfig = runtimeConfig;
+        this.aiProvider = aiProvider;
     }
 
     /**
@@ -183,12 +187,42 @@ public class PipelineController {
         long cooldownUntil = pipelineService.getAiCooldownUntil();
         status.put("rateLimited", rateLimited);
         status.put("cooldownUntil", cooldownUntil);
+        status.put("provider", aiProvider.getCurrentProviderName());
+        status.put("providerState", aiProvider.getStateLabel());
+        status.put("hasFallback", aiProvider.hasFallback());
         if (rateLimited && cooldownUntil > 0) {
             status.put("cooldownUntilIso", java.time.Instant.ofEpochMilli(cooldownUntil).toString());
             long remainingMs = cooldownUntil - System.currentTimeMillis();
             status.put("remainingMinutes", remainingMs / 60000);
         }
         return ResponseEntity.ok(status);
+    }
+
+    /**
+     * POST /api/ai/reset-provider — manually reset to primary
+     */
+    @PostMapping("/ai/reset-provider")
+    public ResponseEntity<Map<String, Object>> resetProvider() {
+        aiProvider.reset();
+        Map<String, Object> resp = new LinkedHashMap<>();
+        resp.put("status", "ok");
+        resp.put("provider", aiProvider.getCurrentProviderName());
+        return ResponseEntity.ok(resp);
+    }
+
+    /**
+     * POST /ai/force-fallback — manually switch to fallback (Grok)
+     */
+    @PostMapping("/ai/force-fallback")
+    public ResponseEntity<Map<String, Object>> forceFallback() {
+        if (aiProvider.hasFallback()) {
+            aiProvider.forceFallback();
+            Map<String, Object> resp = new LinkedHashMap<>();
+            resp.put("status", "ok");
+            resp.put("provider", aiProvider.getCurrentProviderName());
+            return ResponseEntity.ok(resp);
+        }
+        return ResponseEntity.badRequest().body(Map.of("error", "Fallback AI provider not configured"));
     }
 
     /**

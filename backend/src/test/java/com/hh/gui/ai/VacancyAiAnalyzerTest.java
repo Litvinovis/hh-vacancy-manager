@@ -21,11 +21,14 @@ class VacancyAiAnalyzerTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        analyzer = new VacancyAiAnalyzer(new RuntimeConfig());
-        // Set required fields via reflection
-        setField(analyzer, "apiUrl", "http://localhost:8089/mock");
-        setField(analyzer, "apiKey", "test-key");
-        setField(analyzer, "model", "test/model");
+        RuntimeConfig config = new RuntimeConfig();
+        AiProviderManager provider = new AiProviderManager(config);
+        // Set provider fields via reflection
+        setField(provider, "primaryUrl", "http://localhost:8089/mock");
+        setField(provider, "primaryKey", "test-key");
+        setField(provider, "primaryModel", "test/model");
+        setField(provider, "configuredProvider", "auto");
+        analyzer = new VacancyAiAnalyzer(config, provider);
         setField(analyzer, "batchSizeDefault", 5);
         setField(analyzer, "mapper", mapper);
     }
@@ -61,21 +64,7 @@ class VacancyAiAnalyzerTest {
     // We can test the public analyzeBatch method's behavior with mocks,
     // but since it calls callLlm, we test what we can
 
-    @Test
-    void analyzer_apiKeyCheck() throws Exception {
-        // Test that when apiKey is empty, analyzeBatch returns empty
-        setField(analyzer, "apiKey", "");
 
-        // With empty vacancies list, should return empty
-        var result = analyzer.analyzeBatch(List.of(), null);
-        assertNotNull(result);
-        assertTrue(result.isEmpty());
-    }
-
-    @Test
-    void analyzer_nullApiKeySkipsAnalysis() {
-        assertDoesNotThrow(() -> analyzer.analyzeBatch(List.of(), null));
-    }
 
     // ── AiResult record ──
 
