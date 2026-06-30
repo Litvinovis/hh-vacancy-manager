@@ -502,6 +502,23 @@ async function showReanalyzeModal() {
   }
 }
 
+async function analyzePending() {
+  const btn = document.getElementById('btn-analyze-pending');
+  btn.disabled = true;
+  btn.textContent = '⏳ Обработка...';
+  try {
+    const r = await api('/pipeline/analyze-pending', { method: 'POST' });
+    toast(`✓ Проанализировано: ${r.analyzed}, осталось: ${r.remaining}`, 'ok');
+    loadStats();
+    loadVacancies(1);
+  } catch (e) {
+    toast('✗ ' + e.message, 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '⏳ Оценить все';
+  }
+}
+
 function exportData() {
   window.open('/api/vacancies?status=all&perPage=99999');
 }
