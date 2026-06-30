@@ -96,6 +96,8 @@ body {
 .btn { padding: 9px 12px; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 12px; display: flex; align-items: center; justify-content: center; gap: 6px; transition: all .15s; }
 .btn-prim { background: var(--accent); color: #fff; }
 .btn-prim:hover { background: var(--accent2); transform: translateY(-1px); }
+.btn-second { background: var(--accent); color: #fff; opacity: .85; }
+.btn-second:hover { background: var(--accent); opacity: 1; transform: translateY(-1px); }
 .btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); padding: 7px 10px; }
 .btn-ghost:hover { background: var(--surface2); color: var(--text); }
 .btn-row { display: flex; gap: 6px; }
