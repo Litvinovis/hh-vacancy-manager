@@ -44,3 +44,6 @@ logging:
   level:
     com.hh.gui: DEBUG
     org.springframework.jdbc: DEBUG
+
+# Deployment: Security Scan runs on GitHub-hosted runners (weekly schedule only)
+# to avoid blocking self-hosted deploy runner.
