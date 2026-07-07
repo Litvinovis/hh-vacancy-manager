@@ -157,30 +157,61 @@ public class VacancyPipelineService {
         return result;
     }
 
+    // ScraperClient.scrape() tags connectivity/transport failures (sidecar down, refused,
+    // timed out, unparseable response) with this prefix, distinct from per-vacancy content
+    // failures like "not_found"/"no_job_posting_data" where the sidecar is clearly up and
+    // working, just this one URL is bad. Only the former means retrying more URLs in this
+    // same run is pointless — the whole sidecar is unreachable, not just this vacancy.
+    private static final String SCRAPER_CLIENT_ERROR_PREFIX = "client_error";
+    private static final int MAX_CONSECUTIVE_SCRAPE_FAILURES = 3;
+
     /**
      * Scrape full content for rows still pending (or previously failed) for this job.
      * Reuses already-scraped content for the same hh_id if a different (person,
      * search) already fetched it, instead of hitting the scraper sidecar again.
+     *
+     * Bails out early after several consecutive connectivity failures instead of
+     * grinding through the rest of the batch — each scrape can block for up to the
+     * configured HTTP read timeout, so a genuinely down/hung sidecar could otherwise
+     * stall this step for maxPerRun × timeout (worst case, well over an hour).
+     * Unscraped rows are simply left 'pending' and picked up on the next run.
      */
     private int scrapePending(SearchJob job) {
         int count = 0;
+        int consecutiveFailures = 0;
         List<Vacancy> pending = vacancyRepo.findScrapePending(job.personName, job.searchName, runtimeConfig.getMaxPerRun());
         for (Vacancy v : pending) {
             Optional<Vacancy> existing = vacancyRepo.findFirstScrapedByHhId(v.getHhId());
             if (existing.isPresent() && !existing.get().getId().equals(v.getId())) {
                 copyScraped(existing.get(), v);
+                vacancyRepo.updateScraped(v);
+                count++;
+                consecutiveFailures = 0;
+                continue;
+            }
+
+            ScrapeResult r = scraperClient.scrape(v.getHhId());
+            if (r.ok()) {
+                applyScrapeResult(v, r);
+                v.setScrapeStatus("ok");
+                consecutiveFailures = 0;
             } else {
-                ScrapeResult r = scraperClient.scrape(v.getHhId());
-                if (r.ok()) {
-                    applyScrapeResult(v, r);
-                    v.setScrapeStatus("ok");
+                v.setScrapeStatus("not_found".equals(r.reason()) ? "not_found" : "failed");
+                log.warn("Скрейпинг {} ({} · {}) не удался: {}", v.getHhId(), job.personName, job.searchName, r.reason());
+                if (r.reason() != null && r.reason().startsWith(SCRAPER_CLIENT_ERROR_PREFIX)) {
+                    consecutiveFailures++;
                 } else {
-                    v.setScrapeStatus("not_found".equals(r.reason()) ? "not_found" : "failed");
-                    log.warn("Скрейпинг {} ({} · {}) не удался: {}", v.getHhId(), job.personName, job.searchName, r.reason());
+                    consecutiveFailures = 0;
                 }
             }
             vacancyRepo.updateScraped(v);
             count++;
+
+            if (consecutiveFailures >= MAX_CONSECUTIVE_SCRAPE_FAILURES) {
+                log.warn("Скрейпинг ({} · {}) остановлен после {} подряд ошибок соединения — сайдкар недоступен, оставшиеся {} вакансий останутся в очереди",
+                    job.personName, job.searchName, consecutiveFailures, pending.size() - count);
+                break;
+            }
         }
         return count;
     }
@@ -205,16 +236,17 @@ public class VacancyPipelineService {
     }
 
     private void applyScrapeResult(Vacancy v, ScrapeResult r) {
+        String descriptionText = htmlToText(r.descriptionHtml());
         if (r.title() != null && !r.title().isBlank()) v.setTitle(r.title());
         v.setCompany(r.employerName());
         v.setEmployerName(r.employerName());
-        v.setDescription(htmlToText(r.descriptionHtml()));
+        v.setDescription(descriptionText);
         if (r.salaryFrom() != null) v.setSalaryFrom(r.salaryFrom());
         if (r.salaryTo() != null) v.setSalaryTo(r.salaryTo());
         if (r.currency() != null) v.setCurrency(r.currency());
         v.setSalaryGross(Boolean.TRUE.equals(r.salaryGross()));
         v.setAddress(String.join(", ", nonBlank(r.city(), r.street())));
-        v.setDistrict(extractDistrict(String.join(" ", nonBlank(r.city(), r.street(), htmlToText(r.descriptionHtml())))));
+        v.setDistrict(extractDistrict(String.join(" ", nonBlank(r.city(), r.street(), descriptionText))));
         v.setExperience(r.experience());
         v.setEmployment(r.employment());
         v.setKeySkills(r.keySkills() != null ? String.join(", ", r.keySkills()) : "");
@@ -297,11 +329,14 @@ public class VacancyPipelineService {
      */
     private int analyzeBatchWithDedup(List<Vacancy> batch, SearchJob job) {
         String criteriaHash = aiAnalyzer.computeCriteriaHash(job);
+        // Every vacancy in this batch gets the same hash (it's a property of the job, not
+        // the vacancy) — one batched UPDATE instead of one round-trip per vacancy.
+        vacancyRepo.updateCriteriaHashBatch(batch.stream().map(Vacancy::getId).toList(), criteriaHash);
+
         List<Vacancy> needsAi = new ArrayList<>();
         int deduped = 0;
 
         for (Vacancy v : batch) {
-            vacancyRepo.updateCriteriaHash(v.getId(), criteriaHash);
             Optional<Vacancy> match = vacancyRepo.findAnalyzedByHhIdAndCriteriaHash(v.getHhId(), criteriaHash);
             if (match.isPresent()) {
                 Vacancy m = match.get();
@@ -352,41 +387,90 @@ public class VacancyPipelineService {
         return result;
     }
 
+    // Telegram's sendMessage hard-caps text at 4096 chars; stay under that with margin.
+    // A single unbounded-size report (maxApproved goes up to 50 in settings) can easily
+    // exceed it, and a rejected too-long message previously meant NONE of the batch got
+    // marked notified — the same (now even larger) batch would be rebuilt and rejected
+    // again on every future run, forever. Chunking into multiple messages and marking
+    // each chunk's vacancies notified independently avoids that stuck state.
+    private static final int TELEGRAM_MAX_MESSAGE_CHARS = 4000;
+
     private void sendReport(List<Vacancy> approved, SearchJob job) {
         if (!runtimeConfig.isNotificationsEnabled()) {
             log.info("Уведомления отключены — отчёт ({} · {}, {} одобренных) не отправлен",
                 job.personName, job.searchName, approved.size());
             return;
         }
-        String report = formatReport(approved, job);
-        boolean sent = telegramNotifier.send(report);
-        if (sent) {
-            vacancyRepo.markNotified(approved.stream().map(Vacancy::getId).collect(Collectors.toList()));
-            log.info("Отчёт отправлен ({} · {}, {} вакансий)", job.personName, job.searchName, approved.size());
+
+        String header = "🔍 <b>" + escapeHtml(job.personName) + " · " + escapeHtml(job.searchName) + "</b>\n\n";
+        List<List<Vacancy>> chunks = chunkReport(approved, header);
+
+        int notifiedCount = 0;
+        for (List<Vacancy> chunk : chunks) {
+            String message = formatReport(chunk, header);
+            if (telegramNotifier.send(message)) {
+                vacancyRepo.markNotified(chunk.stream().map(Vacancy::getId).collect(Collectors.toList()));
+                notifiedCount += chunk.size();
+            } else {
+                log.warn("Не удалось отправить часть отчёта ({} · {}, {} вакансий) — останутся неуведомлёнными",
+                    job.personName, job.searchName, chunk.size());
+            }
         }
+        log.info("Отчёт отправлен ({} · {}, {}/{} вакансий, {} сообщени{})",
+            job.personName, job.searchName, notifiedCount, approved.size(), chunks.size(),
+            chunks.size() == 1 ? "е" : "я");
     }
 
-    private String formatReport(List<Vacancy> vacancies, SearchJob job) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("🔍 <b>").append(escapeHtml(job.personName)).append(" · ")
-          .append(escapeHtml(job.searchName)).append("</b>\n\n");
+    /** Splits vacancies into groups that each fit under TELEGRAM_MAX_MESSAGE_CHARS once formatted. */
+    private List<List<Vacancy>> chunkReport(List<Vacancy> vacancies, String header) {
+        List<List<Vacancy>> chunks = new ArrayList<>();
+        List<Vacancy> current = new ArrayList<>();
+        int currentLen = header.length();
+
+        for (Vacancy v : vacancies) {
+            int entryLen = formatVacancyEntry(v).length();
+            if (!current.isEmpty() && currentLen + entryLen > TELEGRAM_MAX_MESSAGE_CHARS) {
+                chunks.add(current);
+                current = new ArrayList<>();
+                currentLen = header.length();
+            }
+            current.add(v);
+            currentLen += entryLen;
+        }
+        if (!current.isEmpty()) chunks.add(current);
+        return chunks;
+    }
+
+    private String formatReport(List<Vacancy> vacancies, String header) {
+        StringBuilder sb = new StringBuilder(header);
         for (int i = 0; i < vacancies.size(); i++) {
-            appendVacancy(sb, i + 1, vacancies.get(i));
+            sb.append(formatVacancyEntry(vacancies.get(i)));
         }
         return sb.toString();
     }
 
-    private void appendVacancy(StringBuilder sb, int num, Vacancy v) {
+    private String formatVacancyEntry(Vacancy v) {
         int score = v.getAiScore() != null ? v.getAiScore() : 0;
         String emoji = score >= 80 ? "🟢" : score >= 60 ? "🟡" : "🟠";
         String salary = formatSalary(v);
         String company = v.getCompany() != null && !v.getCompany().isEmpty() ? escapeHtml(v.getCompany()) : "компания не указана";
-        String reason = v.getAiReason() != null ? escapeHtml(v.getAiReason()) : "";
+        // Title/reason are scraped/AI-generated text with no hard length cap upstream —
+        // truncate defensively so one unusually long entry can't alone blow past Telegram's
+        // 4096-char message limit regardless of how chunkReport groups entries.
+        String title = truncate(v.getTitle(), 150);
+        String reason = truncate(v.getAiReason(), 300);
 
-        sb.append(String.format("%d. %s <b>[%d%%]</b> %s\n", num, emoji, score, escapeHtml(v.getTitle())));
+        StringBuilder sb = new StringBuilder();
+        sb.append(String.format("%s <b>[%d%%]</b> %s\n", emoji, score, escapeHtml(title)));
         sb.append(String.format("   🏢 %s | 💰 %s\n", company, salary));
-        sb.append(String.format("   💡 %s\n", reason));
+        sb.append(String.format("   💡 %s\n", escapeHtml(reason)));
         sb.append(String.format("   🔗 %s\n\n", v.getUrl()));
+        return sb.toString();
+    }
+
+    private static String truncate(String s, int maxChars) {
+        if (s == null) return "";
+        return s.length() > maxChars ? s.substring(0, maxChars) + "…" : s;
     }
 
     private String escapeHtml(String text) {

@@ -437,14 +437,11 @@ public class VacancyAiAnalyzer {
         Map<?, ?> message = (Map<?, ?>) choice.get("message");
         String content = (String) message.get("content");
 
-        int start = content.indexOf('[');
-        int end = content.lastIndexOf(']');
-        if (start < 0 || end < 0) {
+        String jsonArray = extractJsonArray(content);
+        if (jsonArray == null) {
             throw new RuntimeException("JSON-массив не найден в ответе AI: "
                 + content.substring(0, Math.min(200, content.length())));
         }
-
-        String jsonArray = content.substring(start, end + 1);
         List<Map<String, Object>> items = mapper.readValue(jsonArray, List.class);
 
         for (Map<String, Object> item : items) {
@@ -461,6 +458,46 @@ public class VacancyAiAnalyzer {
             results.add(new AiResult(id, Math.max(0, Math.min(100, score)), verdict, reason));
         }
         return results;
+    }
+
+    /**
+     * Finds the outermost balanced JSON array in the model's response text, tracking
+     * bracket depth and string-literal state (so a `[`/`]` inside a quoted "reason"
+     * value — e.g. a model writing about "навыки [Excel, 1C]" — doesn't get mistaken
+     * for the array's real boundaries). Plain content.indexOf('[')/lastIndexOf(']')
+     * would misparse that case, or accidentally include trailing prose after the
+     * array as if it were part of it.
+     */
+    private static String extractJsonArray(String content) {
+        int startIdx = content.indexOf('[');
+        if (startIdx < 0) return null;
+
+        boolean inString = false;
+        boolean escaped = false;
+        int depth = 0;
+        for (int i = startIdx; i < content.length(); i++) {
+            char c = content.charAt(i);
+            if (escaped) {
+                escaped = false;
+                continue;
+            }
+            if (c == '\\' && inString) {
+                escaped = true;
+                continue;
+            }
+            if (c == '"') {
+                inString = !inString;
+                continue;
+            }
+            if (inString) continue;
+
+            if (c == '[') depth++;
+            else if (c == ']') {
+                depth--;
+                if (depth == 0) return content.substring(startIdx, i + 1);
+            }
+        }
+        return null; // never closed — truncated response
     }
 
     public record AiResult(String hhId, int score, String verdict, String reason) {}

@@ -11,7 +11,9 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
  * Builds the flat list of (user, search) jobs from the DB — single source of
@@ -34,15 +36,21 @@ public class SearchProfileFactory {
     }
 
     public List<SearchJob> build() {
+        List<SearchConfig> searches = searchRepo.findAllEnabled();
+        // One bulk load instead of a findById() per search — this runs on every manual
+        // pipeline trigger plus GET /api/pipeline/jobs (called on every frontend page
+        // load), so avoiding N+1 here isn't just tidiness, it's N+1 on a hot path.
+        Map<Long, User> usersById = userRepo.findAll().stream()
+            .collect(Collectors.toMap(User::getId, Function.identity()));
+
         List<SearchJob> jobs = new ArrayList<>();
-        for (SearchConfig search : searchRepo.findAllEnabled()) {
-            Optional<User> userOpt = userRepo.findById(search.getUserId());
-            if (userOpt.isEmpty() || !userOpt.get().isActive()) {
+        for (SearchConfig search : searches) {
+            User user = usersById.get(search.getUserId());
+            if (user == null || !user.isActive()) {
                 log.warn("Поиск '{}' (id={}) ссылается на несуществующего/неактивного пользователя, пропущен",
                     search.getName(), search.getId());
                 continue;
             }
-            User user = userOpt.get();
 
             SearchJob job = new SearchJob();
             job.userId = user.getId();

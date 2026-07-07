@@ -102,6 +102,10 @@ CREATE INDEX IF NOT EXISTS idx_vac_search_name ON vacancies(search_name);
 CREATE INDEX IF NOT EXISTS idx_vac_scrape_status ON vacancies(scrape_status);
 CREATE INDEX IF NOT EXISTS idx_vac_user_id ON vacancies(user_id);
 CREATE INDEX IF NOT EXISTS idx_vac_criteria_hash ON vacancies(hh_id, criteria_hash);
+-- Covers findScrapePending/findPending's "WHERE person=? AND search_name=? AND ..."
+-- shape directly, instead of relying on SQLite intersecting the single-column
+-- person/search_name/scrape_status/verdict indexes above for every pipeline run.
+CREATE INDEX IF NOT EXISTS idx_vac_person_search ON vacancies(person, search_name);
 CREATE INDEX IF NOT EXISTS idx_tags_vid ON tags(vacancy_id);
 CREATE INDEX IF NOT EXISTS idx_hist_vid ON history(vacancy_id);
 CREATE INDEX IF NOT EXISTS idx_searches_user_id ON searches(user_id);

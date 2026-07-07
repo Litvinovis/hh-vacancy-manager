@@ -527,6 +527,16 @@ public class VacancyRepository {
         jdbc.update("UPDATE vacancies SET criteria_hash=? WHERE id=?", criteriaHash, id);
     }
 
+    /** Same hash for every id — the whole point being one round-trip instead of one UPDATE per vacancy in a batch. */
+    public void updateCriteriaHashBatch(List<Long> ids, String criteriaHash) {
+        if (ids == null || ids.isEmpty()) return;
+        jdbc.batchUpdate("UPDATE vacancies SET criteria_hash=? WHERE id=?", ids, ids.size(),
+            (ps, id) -> {
+                ps.setString(1, criteriaHash);
+                ps.setLong(2, id);
+            });
+    }
+
     // Stats — every method below is scoped to userId unless null (admin sees everything)
     public Map<String, Integer> countByStatus(Long userId) {
         String scope = userId != null ? " AND user_id = ?" : "";

@@ -24,9 +24,15 @@ public class AiProviderManager {
 
     private final RuntimeConfig runtimeConfig;
     private final AiMetrics metrics;
+    // state/currentIndex/cooldownUntil are read-modify-write across several steps in
+    // methods like switchToFallback (check hasFallback, increment, set state) — a lone
+    // volatile per field doesn't make that sequence atomic. Every method touching any
+    // of these three fields is `synchronized` on `this` instead, so a scheduled run and
+    // a manually-triggered run hitting a 429 at the same moment can't interleave into a
+    // corrupted index/state (this manager is a shared singleton bean across all callers).
     private ProviderState state = ProviderState.PRIMARY;
-    private volatile int currentIndex = 0;
-    private volatile long cooldownUntil = 0;
+    private int currentIndex = 0;
+    private long cooldownUntil = 0;
 
     public AiProviderManager(RuntimeConfig runtimeConfig, AiMetrics metrics) {
         this.runtimeConfig = runtimeConfig;
@@ -34,7 +40,7 @@ public class AiProviderManager {
     }
 
     /** Get the current active provider config. */
-    private AiProviderConfig getCurrentProvider() {
+    private synchronized AiProviderConfig getCurrentProvider() {
         List<AiProviderConfig> providers = getActiveProviders();
         if (providers.isEmpty()) return null;
         if (currentIndex >= providers.size()) currentIndex = 0;
@@ -68,31 +74,31 @@ public class AiProviderManager {
     }
 
     /** Returns true if there is a next provider to fall back to. */
-    public boolean hasFallback() {
+    public synchronized boolean hasFallback() {
         List<AiProviderConfig> providers = getActiveProviders();
         return currentIndex + 1 < providers.size();
     }
 
-    public String getCurrentUrl() {
+    public synchronized String getCurrentUrl() {
         resolveState();
         AiProviderConfig p = getCurrentProvider();
         return p != null ? p.getUrl() : "";
     }
 
-    public String getCurrentKey() {
+    public synchronized String getCurrentKey() {
         resolveState();
         AiProviderConfig p = getCurrentProvider();
         return p != null ? p.getApiKey() : "";
     }
 
-    public String getCurrentModel() {
+    public synchronized String getCurrentModel() {
         resolveState();
         AiProviderConfig p = getCurrentProvider();
         return p != null ? p.getModel() : "";
     }
 
     /** Get the name of the currently active provider. */
-    public String getCurrentProviderName() {
+    public synchronized String getCurrentProviderName() {
         resolveState();
         if (state == ProviderState.COOLDOWN) {
             AiProviderConfig p = getCurrentProvider();
@@ -107,7 +113,7 @@ public class AiProviderManager {
      * Switch to the next provider in the chain.
      * If at the end of the list, enter cooldown.
      */
-    public void switchToFallback() {
+    public synchronized void switchToFallback() {
         if (hasFallback()) {
             String currentName = getCurrentProviderName();
             currentIndex++;
@@ -126,7 +132,7 @@ public class AiProviderManager {
     /**
      * If all providers failed, enter cooldown.
      */
-    public void enterCooldown() {
+    public synchronized void enterCooldown() {
         state = ProviderState.COOLDOWN;
         java.util.Calendar cal = java.util.Calendar.getInstance();
         int hours = runtimeConfig.getCooldownHours();
@@ -146,18 +152,18 @@ public class AiProviderManager {
     }
 
     /** Check if currently in cooldown. */
-    public boolean isInCooldown() {
+    public synchronized boolean isInCooldown() {
         resolveState();
         return state == ProviderState.COOLDOWN;
     }
 
     /** Get cooldown until timestamp (0 = not in cooldown). */
-    public long getCooldownUntil() {
+    public synchronized long getCooldownUntil() {
         return cooldownUntil;
     }
 
     /** Reset to the first provider in the list. */
-    public void reset() {
+    public synchronized void reset() {
         currentIndex = 0;
         state = ProviderState.PRIMARY;
         cooldownUntil = 0;
@@ -165,7 +171,7 @@ public class AiProviderManager {
     }
 
     /** Manual force to a specific provider by index. */
-    public void forceProvider(int index) {
+    public synchronized void forceProvider(int index) {
         List<AiProviderConfig> providers = getActiveProviders();
         if (index >= 0 && index < providers.size()) {
             currentIndex = index;
@@ -175,7 +181,7 @@ public class AiProviderManager {
     }
 
     /** Force fallback to next provider. */
-    public void forceFallback() {
+    public synchronized void forceFallback() {
         if (hasFallback()) {
             currentIndex++;
             state = ProviderState.FALLBACK;
@@ -183,16 +189,16 @@ public class AiProviderManager {
         }
     }
 
-    public ProviderState getState() {
+    public synchronized ProviderState getState() {
         resolveState();
         return state;
     }
 
-    public int getCurrentIndex() {
+    public synchronized int getCurrentIndex() {
         return currentIndex;
     }
 
-    public String getStateLabel() {
+    public synchronized String getStateLabel() {
         if (isInCooldown()) {
             return "cooldown-until-" + new java.text.SimpleDateFormat("HH:mm").format(new java.util.Date(cooldownUntil));
         }
@@ -230,7 +236,7 @@ public class AiProviderManager {
         return n.isBlank() ? "unknown" : name;
     }
 
-    private void resolveState() {
+    private synchronized void resolveState() {
         // If configured to use only one specific provider
         List<AiProviderConfig> providers = getActiveProviders();
         if (providers.isEmpty()) {

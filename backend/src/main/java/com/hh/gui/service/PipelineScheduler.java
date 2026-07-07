@@ -71,7 +71,7 @@ public class PipelineScheduler implements SchedulingConfigurer {
         log.info("=== Начало запланированного пайплайна ===");
         List<SearchJob> jobs = profileFactory.build();
         if (jobs.isEmpty()) {
-            log.warn("Ни одного (person, search) не настроено в config/profiles/default.yaml");
+            log.warn("Ни одного активного поиска не настроено ни у одного пользователя");
         }
         for (SearchJob job : jobs) {
             try {
