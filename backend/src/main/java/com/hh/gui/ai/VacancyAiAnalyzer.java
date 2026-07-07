@@ -26,6 +26,7 @@ import java.util.ArrayList;
 public class VacancyAiAnalyzer {
 
     private static final Logger log = LoggerFactory.getLogger(VacancyAiAnalyzer.class);
+    private static final java.util.Set<String> VALID_VERDICTS = java.util.Set.of("yes", "no", "fraud");
 
     @Value("${app.ai.batch-size:10}")
     private int batchSizeDefault;
@@ -132,7 +133,7 @@ public class VacancyAiAnalyzer {
     private synchronized void waitForRateLimit() throws InterruptedException {
         long now = System.currentTimeMillis();
         long elapsed = now - lastRequestTime;
-        long minInterval = 12000; // 12s default, can be configured via requestDelayMs for AI
+        long minInterval = runtimeConfig.getAiRequestDelayMs();
         if (elapsed < minInterval) {
             Thread.sleep(minInterval - elapsed);
         }
@@ -296,15 +297,16 @@ public class VacancyAiAnalyzer {
         conn.setReadTimeout(runtimeConfig.getHttpReadTimeoutMs());
         conn.setDoOutput(true);
 
-        String escapedPrompt = prompt.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n");
-        String messages = "[{\"role\":\"user\",\"content\":\"" + escapedPrompt + "\"}]";
-        String payload = "{\"model\":\"" + model + "\"," +
-            "\"messages\":" + messages + "," +
-            "\"temperature\":0.3," +
-            "\"max_tokens\":4000}";
+        Map<String, Object> requestBody = Map.of(
+            "model", model,
+            "messages", List.of(Map.of("role", "user", "content", prompt)),
+            "temperature", 0.3,
+            "max_tokens", 4000
+        );
+        byte[] payload = mapper.writeValueAsBytes(requestBody);
 
         try (OutputStream os = conn.getOutputStream()) {
-            os.write(payload.getBytes(StandardCharsets.UTF_8));
+            os.write(payload);
         }
 
         int code = conn.getResponseCode();
@@ -361,6 +363,11 @@ public class VacancyAiAnalyzer {
                 int score = ((Number) item.getOrDefault("score", 0)).intValue();
                 String verdict = (String) item.getOrDefault("verdict", "no");
                 String reason = (String) item.getOrDefault("reason", "");
+
+                if (!VALID_VERDICTS.contains(verdict)) {
+                    log.warn("AI вернул неожиданный verdict '{}' для вакансии {}, приводим к 'no'", verdict, id);
+                    verdict = "no";
+                }
 
                 AiResult r = new AiResult(id, Math.max(0, Math.min(100, score)),
                     verdict, reason);

@@ -37,6 +37,7 @@ public class RuntimeConfig {
     private volatile String dailyCron = "0 0 12 * * *"; // ежедневно 12:00
     private volatile int maxRetries = 3;
     private volatile int requestDelayMs = 1500; // HH RSS задержка
+    private volatile int aiRequestDelayMs = 12000; // Задержка между AI-запросами (free-tier rate limit)
     private volatile int httpConnectTimeoutMs = 30000;
     private volatile int httpReadTimeoutMs = 120000;
     private volatile int minScore = 50;
@@ -116,6 +117,12 @@ public class RuntimeConfig {
                 "Слишком частые запросы могут привести к блокировке IP. " +
                 "1500 = 1.5 секунды.",
                 "number", 500, 10000, requestDelayMs),
+
+            SettingDescriptor.of("aiRequestDelayMs", "Задержка AI-запросов",
+                "Задержка в миллисекундах между запросами к AI (LLM). " +
+                "Бесплатные модели (free-tier) требуют паузу, иначе 429 rate limit. " +
+                "12000 = 12 секунд.",
+                "number", 5000, 60000, aiRequestDelayMs),
 
             SettingDescriptor.of("httpConnectTimeoutMs", "Таймаут соединения",
                 "Таймаут подключения (в миллисекундах) для HTTP-запросов. " +
@@ -197,6 +204,7 @@ public class RuntimeConfig {
                     case "dailyCron" -> setDailyCron(toCron(value, errors, key));
                     case "maxRetries" -> setMaxRetries(toInt(value, errors, key, 1, 10));
                     case "requestDelayMs" -> setRequestDelayMs(toInt(value, errors, key, 500, 10000));
+                    case "aiRequestDelayMs" -> setAiRequestDelayMs(toInt(value, errors, key, 5000, 60000));
                     case "httpConnectTimeoutMs" -> setHttpConnectTimeoutMs(toInt(value, errors, key, 5000, 120000));
                     case "httpReadTimeoutMs" -> setHttpReadTimeoutMs(toInt(value, errors, key, 10000, 300000));
                     case "minScore" -> setMinScore(toInt(value, errors, key, 0, 100));
@@ -238,6 +246,7 @@ public class RuntimeConfig {
         m.put("dailyCron", dailyCron);
         m.put("maxRetries", maxRetries);
         m.put("requestDelayMs", requestDelayMs);
+        m.put("aiRequestDelayMs", aiRequestDelayMs);
         m.put("httpConnectTimeoutMs", httpConnectTimeoutMs);
         m.put("httpReadTimeoutMs", httpReadTimeoutMs);
         m.put("minScore", minScore);
@@ -319,6 +328,9 @@ public class RuntimeConfig {
 
     public int getRequestDelayMs() { return requestDelayMs; }
     public void setRequestDelayMs(int v) { this.requestDelayMs = v; }
+
+    public int getAiRequestDelayMs() { return aiRequestDelayMs; }
+    public void setAiRequestDelayMs(int v) { this.aiRequestDelayMs = v; }
 
     public int getHttpConnectTimeoutMs() { return httpConnectTimeoutMs; }
     public void setHttpConnectTimeoutMs(int v) { this.httpConnectTimeoutMs = v; }
