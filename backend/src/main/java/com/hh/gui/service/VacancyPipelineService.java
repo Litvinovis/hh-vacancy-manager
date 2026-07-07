@@ -14,6 +14,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -102,6 +103,107 @@ public class VacancyPipelineService {
         result.newVacancies = discovered;
         result.analyzed = analyzed;
         result.approved = approved.size();
+        return result;
+    }
+
+    // Safety cap on how many search-result pages a single manual "discover from URL"
+    // trigger will walk — each page is a real browser navigation through the sidecar's
+    // MIN_DELAY_MS throttle, so an unbounded loop here could turn one click into a
+    // multi-minute crawl. Callers can ask for fewer; they can't ask for more.
+    private static final int MAX_URL_SEARCH_PAGES = 10;
+
+    /**
+     * EXPERIMENTAL, manual-trigger only — discover-then-score a job's candidates
+     * from an hh.ru search-results URL the user built themselves (via hh.ru's own
+     * filter UI) instead of the job's configured RSS queries. Never called from
+     * PipelineScheduler. See ScraperClient.searchByUrl for why: RSS caps at 20
+     * results with no pagination, this gets ~50/page with real pagination.
+     */
+    public PipelineResult runFullPipelineFromUrl(SearchJob job, String url, int maxPages) {
+        log.info("=== Пайплайн по ссылке: {} · {} ({}) ===", job.personName, job.searchName, url);
+
+        int discovered = discoverFromUrl(job, url, maxPages);
+        log.info("Шаг 1 по ссылке ({} · {}): {} новых вакансий", job.personName, job.searchName, discovered);
+
+        int scraped = scrapePending(job);
+        log.info("Шаг 2 ({} · {}): скрейпинг обработал {} записей", job.personName, job.searchName, scraped);
+
+        int analyzed = analyzePending(job, runtimeConfig.getMaxPerRun());
+        log.info("Шаг 3 ({} · {}): {} вакансий проанализировано AI", job.personName, job.searchName, analyzed);
+
+        List<Vacancy> approved = vacancyRepo.findUnnotifiedApproved(
+            job.personName, job.searchName, runtimeConfig.getMinScore(), runtimeConfig.getMaxApproved());
+        log.info("Шаг 4 ({} · {}): {} одобренных неуведомлённых", job.personName, job.searchName, approved.size());
+
+        if (!approved.isEmpty()) {
+            sendReport(approved, job);
+        }
+
+        PipelineResult result = new PipelineResult();
+        result.collected = discovered;
+        result.newVacancies = discovered;
+        result.analyzed = analyzed;
+        result.approved = approved.size();
+        return result;
+    }
+
+    /**
+     * Walks search-result pages of a caller-supplied hh.ru URL (via the scraper
+     * sidecar's browser session, see ScraperClient.searchByUrl), filters out
+     * excluded titles the same way discoverNew does, and saves genuinely new hits
+     * as scrape-pending stubs. Stops early on an empty/failed page.
+     */
+    @Transactional
+    protected int discoverFromUrl(SearchJob job, String url, int maxPages) {
+        int pages = Math.min(Math.max(maxPages, 1), MAX_URL_SEARCH_PAGES);
+        int saved = 0;
+        for (int page = 0; page < pages; page++) {
+            ScraperClient.SearchPageResult result = scraperClient.searchByUrl(url, page);
+            if (!result.ok()) {
+                log.warn("Поиск по ссылке ({} · {}) остановлен на странице {}: {}",
+                    job.personName, job.searchName, page, result.reason());
+                break;
+            }
+            if (result.items().isEmpty()) break;
+
+            for (ScraperClient.SearchHit hit : filterExcludedHits(result.items(), job.excludeWords)) {
+                if (vacancyRepo.existsByHhIdPersonSearch(hit.hhId(), job.personName, job.searchName)) continue;
+                Vacancy v = new Vacancy();
+                v.setHhId(hit.hhId());
+                v.setTitle(hit.title());
+                v.setCompany(hit.employerName());
+                v.setUrl(hit.url());
+                v.setStatus("new");
+                v.setAiVerdict("pending");
+                v.setAiScore(0);
+                v.setCreatedAt(Instant.now().toString());
+                v.setSource("hh");
+                v.setSourceQuery(job.searchName);
+                v.setPerson(job.personName);
+                v.setSearchName(job.searchName);
+                v.setUserId(job.userId);
+                v.setSearchId(job.searchId);
+                v.setRemote(job.isRemote());
+                v.setScrapeStatus("pending");
+                try {
+                    vacancyRepo.save(v);
+                    saved++;
+                } catch (Exception e) {
+                    log.warn("Не удалось сохранить {} ({} · {}): {}", hit.hhId(), job.personName, job.searchName, e.getMessage());
+                }
+            }
+        }
+        return saved;
+    }
+
+    private List<ScraperClient.SearchHit> filterExcludedHits(List<ScraperClient.SearchHit> hits, List<String> excludeWords) {
+        if (excludeWords == null || excludeWords.isEmpty()) return hits;
+        List<String> lower = excludeWords.stream().map(String::toLowerCase).toList();
+        List<ScraperClient.SearchHit> result = new ArrayList<>();
+        for (ScraperClient.SearchHit h : hits) {
+            String title = h.title() != null ? h.title().toLowerCase() : "";
+            if (lower.stream().noneMatch(title::contains)) result.add(h);
+        }
         return result;
     }
 

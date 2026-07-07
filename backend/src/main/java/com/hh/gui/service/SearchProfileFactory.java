@@ -12,6 +12,7 @@ import org.springframework.stereotype.Component;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -51,25 +52,43 @@ public class SearchProfileFactory {
                     search.getName(), search.getId());
                 continue;
             }
-
-            SearchJob job = new SearchJob();
-            job.userId = user.getId();
-            job.searchId = search.getId();
-            job.personName = user.getDisplayName();
-            job.searchName = search.getName();
-            job.city = user.getCity();
-            job.experienceSummary = user.getExperienceSummary();
-            job.queries = search.getQueries();
-            job.area = search.getArea();
-            job.schedule = search.getSchedule();
-            job.salaryMin = search.getSalaryMin();
-            job.excludeWords = search.getExcludeWords();
-            job.priorityDistricts = search.getPriorityDistricts();
-            job.skills = search.getSkills();
-            job.notSuitable = search.getNotSuitable();
-            job.aiNotes = search.getAiNotes();
-            jobs.add(job);
+            jobs.add(toJob(search, user));
         }
         return jobs;
+    }
+
+    /**
+     * One job for a single search id, regardless of its enabled flag — used by the
+     * manual "discover from URL" trigger, where the caller explicitly picked this
+     * search. Empty if the search or its owning user don't exist, or the user is
+     * inactive.
+     */
+    public Optional<SearchJob> buildForSearchId(Long searchId) {
+        Optional<SearchConfig> searchOpt = searchRepo.findById(searchId);
+        if (searchOpt.isEmpty()) return Optional.empty();
+        SearchConfig search = searchOpt.get();
+        Optional<User> userOpt = userRepo.findById(search.getUserId());
+        if (userOpt.isEmpty() || !userOpt.get().isActive()) return Optional.empty();
+        return Optional.of(toJob(search, userOpt.get()));
+    }
+
+    private SearchJob toJob(SearchConfig search, User user) {
+        SearchJob job = new SearchJob();
+        job.userId = user.getId();
+        job.searchId = search.getId();
+        job.personName = user.getDisplayName();
+        job.searchName = search.getName();
+        job.city = user.getCity();
+        job.experienceSummary = user.getExperienceSummary();
+        job.queries = search.getQueries();
+        job.area = search.getArea();
+        job.schedule = search.getSchedule();
+        job.salaryMin = search.getSalaryMin();
+        job.excludeWords = search.getExcludeWords();
+        job.priorityDistricts = search.getPriorityDistricts();
+        job.skills = search.getSkills();
+        job.notSuitable = search.getNotSuitable();
+        job.aiNotes = search.getAiNotes();
+        return job;
     }
 }

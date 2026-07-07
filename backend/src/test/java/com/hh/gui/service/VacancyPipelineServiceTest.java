@@ -1,5 +1,6 @@
 package com.hh.gui.service;
 
+import com.hh.gui.client.ScraperClient;
 import com.hh.gui.config.RuntimeConfig;
 import com.hh.gui.model.Vacancy;
 import org.junit.jupiter.api.BeforeEach;
@@ -106,5 +107,36 @@ class VacancyPipelineServiceTest {
         // A single entry must never alone be able to blow past Telegram's message limit,
         // regardless of how unusually long scraped/AI-generated text gets.
         assertTrue(entry.length() < 1000, "a single formatted entry must stay bounded, was " + entry.length());
+    }
+
+    // ── filterExcludedHits (URL-discovery's title-exclusion filter — mirrors filterExcluded) ──
+
+    @SuppressWarnings("unchecked")
+    private List<ScraperClient.SearchHit> filterExcludedHits(List<ScraperClient.SearchHit> hits, List<String> excludeWords) throws Exception {
+        Method m = VacancyPipelineService.class.getDeclaredMethod("filterExcludedHits", List.class, List.class);
+        m.setAccessible(true);
+        return (List<ScraperClient.SearchHit>) m.invoke(service, hits, excludeWords);
+    }
+
+    private ScraperClient.SearchHit hit(String hhId, String title) {
+        return new ScraperClient.SearchHit(hhId, title, "ООО Ромашка", null, "Уфа", "https://hh.ru/vacancy/" + hhId);
+    }
+
+    @Test
+    void filterExcludedHits_noExcludeWords_keepsAll() throws Exception {
+        List<ScraperClient.SearchHit> hits = List.of(hit("1", "Продавец"), hit("2", "Кассир"));
+        assertEquals(2, filterExcludedHits(hits, List.of()).size());
+        assertEquals(2, filterExcludedHits(hits, null).size());
+    }
+
+    @Test
+    void filterExcludedHits_dropsTitlesContainingExcludedWord_caseInsensitive() throws Exception {
+        List<ScraperClient.SearchHit> hits = List.of(
+            hit("1", "Продавец-консультант"),
+            hit("2", "МЕНЕДЖЕР по продажам (страховка)"),
+            hit("3", "Кассир"));
+        List<ScraperClient.SearchHit> result = filterExcludedHits(hits, List.of("страховка"));
+        assertEquals(2, result.size());
+        assertTrue(result.stream().noneMatch(h -> h.hhId().equals("2")));
     }
 }
