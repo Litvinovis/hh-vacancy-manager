@@ -386,11 +386,13 @@ public class VacancyAiAnalyzer {
         );
         byte[] payload = mapper.writeValueAsBytes(requestBody);
 
+        long startNanos = System.nanoTime();
         try (OutputStream os = conn.getOutputStream()) {
             os.write(payload);
         }
 
         int code = conn.getResponseCode();
+        metrics.recordLatency(provider, (System.nanoTime() - startNanos) / 1_000_000);
 
         metrics.recordRequest(provider);
         if (code == 429) {
@@ -412,7 +414,22 @@ public class VacancyAiAnalyzer {
                 log.error("Ошибка LLM API {} ({}): {}", code, provider, sb);
                 throw new RuntimeException("LLM API returned " + code);
             }
+            recordTokenUsage(provider, sb.toString());
             return sb.toString();
+        }
+    }
+
+    /** Best-effort token accounting from the response's OpenAI-compatible "usage" object — a malformed or missing field must never break analysis. */
+    @SuppressWarnings("unchecked")
+    private void recordTokenUsage(String provider, String body) {
+        try {
+            Map<?, ?> resp = mapper.readValue(body, Map.class);
+            Object usage = resp.get("usage");
+            if (usage instanceof Map<?, ?> u) {
+                if (u.get("prompt_tokens") instanceof Number n) metrics.recordTokens(provider, "prompt", n.longValue());
+                if (u.get("completion_tokens") instanceof Number n) metrics.recordTokens(provider, "completion", n.longValue());
+            }
+        } catch (Exception ignored) {
         }
     }
 

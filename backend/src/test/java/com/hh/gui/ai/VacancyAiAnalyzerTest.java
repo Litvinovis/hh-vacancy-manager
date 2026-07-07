@@ -27,8 +27,8 @@ class VacancyAiAnalyzerTest {
         RuntimeConfig config = new RuntimeConfig();
         config.setAiProviders(List.of(
             new AiProviderConfig("test", "http://localhost:8089/mock", "test-key", "test/model")));
-        AiProviderManager provider = new AiProviderManager(config, new AiMetrics(new SimpleMeterRegistry()));
-        analyzer = new VacancyAiAnalyzer(config, provider, new AiMetrics(new SimpleMeterRegistry()));
+        AiProviderManager provider = new AiProviderManager(config, new AiMetrics(new SimpleMeterRegistry(), config));
+        analyzer = new VacancyAiAnalyzer(config, provider, new AiMetrics(new SimpleMeterRegistry(), config));
         setField(analyzer, "batchSizeDefault", 5);
         setField(analyzer, "mapper", mapper);
     }

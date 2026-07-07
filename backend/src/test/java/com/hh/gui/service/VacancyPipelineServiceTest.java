@@ -30,7 +30,7 @@ class VacancyPipelineServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new VacancyPipelineService(null, null, null, null, null, new RuntimeConfig());
+        service = new VacancyPipelineService(null, null, null, null, null, new RuntimeConfig(), null);
     }
 
     private List<List<Vacancy>> chunkReport(List<Vacancy> vacancies, String header) throws Exception {

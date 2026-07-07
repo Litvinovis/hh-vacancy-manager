@@ -1,5 +1,6 @@
 package com.hh.gui.service;
 
+import com.hh.gui.ai.AiMetrics;
 import com.hh.gui.ai.VacancyAiAnalyzer;
 import com.hh.gui.client.HhApiClient;
 import com.hh.gui.client.ScraperClient;
@@ -46,6 +47,7 @@ public class VacancyPipelineService {
     private final VacancyRepository vacancyRepo;
     private final TelegramNotifier telegramNotifier;
     private final RuntimeConfig runtimeConfig;
+    private final AiMetrics metrics;
 
     @Value("${app.pipeline.batch-size:10}")
     private int batchSizeDefault;
@@ -55,13 +57,14 @@ public class VacancyPipelineService {
 
     public VacancyPipelineService(HhApiClient hhApiClient, ScraperClient scraperClient, VacancyAiAnalyzer aiAnalyzer,
                                    VacancyRepository vacancyRepo, TelegramNotifier telegramNotifier,
-                                   RuntimeConfig runtimeConfig) {
+                                   RuntimeConfig runtimeConfig, AiMetrics metrics) {
         this.hhApiClient = hhApiClient;
         this.scraperClient = scraperClient;
         this.aiAnalyzer = aiAnalyzer;
         this.vacancyRepo = vacancyRepo;
         this.telegramNotifier = telegramNotifier;
         this.runtimeConfig = runtimeConfig;
+        this.metrics = metrics;
         runtimeConfig.setPipelineBatchSize(runtimeConfig.getPipelineBatchSize() > 0 ? runtimeConfig.getPipelineBatchSize() : batchSizeDefault);
         runtimeConfig.setNotificationsEnabled(notificationsEnabledDefault);
     }
@@ -451,6 +454,7 @@ public class VacancyPipelineService {
         }
         if (deduped > 0) {
             log.info("AI-дедуп ({} · {}): {} вакансий переиспользовано без вызова AI", job.personName, job.searchName, deduped);
+            metrics.recordVacanciesDeduped(deduped);
         }
 
         int aiAnalyzed = 0;
@@ -459,6 +463,7 @@ public class VacancyPipelineService {
                 vacancyRepo.updateAiResult(r.hhId(), job.personName, job.searchName, r.score(), r.verdict(), r.reason());
                 aiAnalyzed++;
             }
+            metrics.recordVacanciesAnalyzed(aiAnalyzed);
         }
         return deduped + aiAnalyzed;
     }
