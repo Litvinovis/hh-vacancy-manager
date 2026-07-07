@@ -46,6 +46,25 @@ jobs:
       - name: Build
         run: cd backend && mvn package -B -DskipTests
 
+      - name: Deploy scraper sidecar
+        run: |
+          DEPLOY_DIR=/opt/hh-gui/scraper
+          NPM_BIN=/home/clawd/.nvm/versions/node/v22.22.0/bin/npm
+
+          sudo mkdir -p ${DEPLOY_DIR}
+          sudo cp scraper/package.json scraper/package-lock.json scraper/server.js ${DEPLOY_DIR}/
+          sudo chown -R clawd:clawd ${DEPLOY_DIR}
+
+          cd ${DEPLOY_DIR}
+          ${NPM_BIN} ci --omit=dev
+          ${NPM_BIN} exec playwright install chromium
+
+          # Install/refresh the systemd unit
+          sudo cp "$GITHUB_WORKSPACE/scripts/hh-scraper.service" /etc/systemd/system/hh-scraper.service
+          sudo systemctl daemon-reload
+          sudo systemctl enable hh-scraper
+          sudo systemctl restart hh-scraper
+
       - name: Deploy
         run: |
           DEPLOY_DIR=/opt/hh-gui
@@ -61,7 +80,7 @@ jobs:
           sudo cp backend/target/hh-gui-*.jar ${DEPLOY_DIR}/${JAR_NAME}
 
           # Copy config if not exists
-          if [ ! -f "${DEPLOY_DIR}/config/rules.yaml" ]; then
+          if [ ! -f "${DEPLOY_DIR}/config/profiles/default.yaml" ]; then
             sudo cp -r config ${DEPLOY_DIR}/
           fi
 
@@ -75,6 +94,17 @@ jobs:
             sqlite3 "$DB_PATH" "ALTER TABLE vacancies ADD COLUMN notified INTEGER DEFAULT 0;" 2>/dev/null || true
             sqlite3 "$DB_PATH" "ALTER TABLE vacancies ADD COLUMN published_at TEXT DEFAULT '';" 2>/dev/null || true
             sqlite3 "$DB_PATH" "ALTER TABLE vacancies ADD COLUMN found_by_scan INTEGER DEFAULT 0;" 2>/dev/null || true
+
+            # One-time: archive the pre-browser-scraper data instead of mixing it with
+            # real (full-description) analysis. Only runs once — no-op if already renamed,
+            # and skipped entirely if a fresh `vacancies` table (created by the app's own
+            # schema.sql on next boot) hasn't appeared yet.
+            HAS_LEGACY=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='vacancies_legacy';")
+            HAS_PERSON_COL=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM pragma_table_info('vacancies') WHERE name='person';")
+            if [ "$HAS_LEGACY" = "0" ] && [ "$HAS_PERSON_COL" = "0" ]; then
+              echo "Archiving pre-scraper vacancies table to vacancies_legacy..."
+              sqlite3 "$DB_PATH" "ALTER TABLE vacancies RENAME TO vacancies_legacy;"
+            fi
             echo "DB migration done"
           fi
 
@@ -83,8 +113,9 @@ jobs:
 
       - name: Smoke test
         run: |
-          echo "Waiting for app to start..."
+          echo "Waiting for services to start..."
           sleep 10
+
           STATUS=$(sudo systemctl is-active hh-gui)
           if [ "$STATUS" != "active" ]; then
             echo "❌ App failed to start, rolling back..."
@@ -97,13 +128,27 @@ jobs:
           fi
           echo "✅ HH Vacancy Manager is running"
 
-          # HTTP check
+          SCRAPER_STATUS=$(sudo systemctl is-active hh-scraper)
+          if [ "$SCRAPER_STATUS" != "active" ]; then
+            echo "❌ Scraper sidecar failed to start (see: journalctl -u hh-scraper)"
+            exit 1
+          fi
+          echo "✅ Scraper sidecar is running"
+
+          # HTTP checks
           HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/api/stats)
           if [ "$HTTP_CODE" != "200" ]; then
             echo "❌ HTTP check failed (code: $HTTP_CODE)"
             exit 1
           fi
-          echo "✅ HTTP check passed (code: $HTTP_CODE)"
+          echo "✅ HH Vacancy Manager HTTP check passed (code: $HTTP_CODE)"
+
+          SCRAPER_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8095/health)
+          if [ "$SCRAPER_HTTP_CODE" != "200" ]; then
+            echo "❌ Scraper health check failed (code: $SCRAPER_HTTP_CODE)"
+            exit 1
+          fi
+          echo "✅ Scraper health check passed (code: $SCRAPER_HTTP_CODE)"
 
       - name: Notify Telegram
         if: always() && github.event_name != 'pull_request'

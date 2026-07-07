@@ -1,0 +1,14 @@
+{
+  "name": "hh-vacancy-scraper",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Headless-browser sidecar that fetches full hh.ru vacancy pages (api.hh.ru and plain HTTP requests are blocked by DDoS-Guard; a real browser session passes).",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "postinstall": "playwright install --with-deps chromium"
+  },
+  "dependencies": {
+    "playwright": "^1.61.1"
+  }
+}

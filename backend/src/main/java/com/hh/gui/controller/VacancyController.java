@@ -36,6 +36,8 @@ public class VacancyController {
             @RequestParam(name = "search", required = false) String search,
             @RequestParam(name = "tag", required = false) String tag,
             @RequestParam(name = "remote", required = false) Boolean remote,
+            @RequestParam(name = "person", required = false) String person,
+            @RequestParam(name = "searchName", required = false) String searchName,
             @RequestParam(name = "sort", defaultValue = "score_desc") String sort,
             @RequestParam(name = "page", defaultValue = "1") int page,
             @RequestParam(name = "perPage", defaultValue = "30") int perPage) {
@@ -46,7 +48,7 @@ public class VacancyController {
         if (perPage > 200) perPage = 200;
 
         PageResponse<VacancyWithTags> resp = vacancyService.list(
-            status, district, minSalary, minScore, search, tag, remote, sort, page, perPage);
+            status, district, minSalary, minScore, search, tag, remote, person, searchName, sort, page, perPage);
 
         List<VacancyWithTags> items = resp.getItems();
 
@@ -60,6 +62,8 @@ public class VacancyController {
             Map<String, Object> vm = new java.util.LinkedHashMap<>();
             vm.put("id", v.getId());
             vm.put("hhId", v.getHhId() != null ? v.getHhId() : "");
+            vm.put("person", v.getPerson() != null ? v.getPerson() : "");
+            vm.put("searchName", v.getSearchName() != null ? v.getSearchName() : "");
             vm.put("title", v.getTitle() != null ? v.getTitle() : "");
             vm.put("company", v.getCompany() != null ? v.getCompany() : "");
             vm.put("salaryFrom", v.getSalaryFrom() != null ? v.getSalaryFrom() : 0);
@@ -100,6 +104,8 @@ public class VacancyController {
         Map<String, Object> response = new java.util.LinkedHashMap<>();
         response.put("id", v.getId());
         response.put("hhId", v.getHhId() != null ? v.getHhId() : "");
+        response.put("person", v.getPerson() != null ? v.getPerson() : "");
+        response.put("searchName", v.getSearchName() != null ? v.getSearchName() : "");
         response.put("title", v.getTitle() != null ? v.getTitle() : "");
         response.put("company", v.getCompany() != null ? v.getCompany() : "");
         response.put("salaryFrom", v.getSalaryFrom() != null ? v.getSalaryFrom() : 0);
@@ -108,6 +114,10 @@ public class VacancyController {
         response.put("address", v.getAddress() != null ? v.getAddress() : "");
         response.put("district", v.getDistrict() != null ? v.getDistrict() : "");
         response.put("url", v.getUrl() != null ? v.getUrl() : "");
+        response.put("experience", v.getExperience() != null ? v.getExperience() : "");
+        response.put("employment", v.getEmployment() != null ? v.getEmployment() : "");
+        response.put("keySkills", v.getKeySkills() != null ? v.getKeySkills() : "");
+        response.put("trustedEmployer", v.isTrustedEmployer());
         response.put("aiScore", v.getAiScore() != null ? v.getAiScore() : 0);
         response.put("aiVerdict", v.getAiVerdict() != null ? v.getAiVerdict() : "pending");
         response.put("aiReason", v.getAiReason() != null ? v.getAiReason() : "");
@@ -118,6 +128,8 @@ public class VacancyController {
         response.put("appliedAt", v.getAppliedAt() != null ? v.getAppliedAt() : "");
         response.put("createdAt", v.getCreatedAt() != null ? v.getCreatedAt() : "");
         response.put("updatedAt", v.getUpdatedAt() != null ? v.getUpdatedAt() : "");
+        response.put("isRemote", v.isRemote());
+        response.put("publishedAt", v.getPublishedAt() != null ? v.getPublishedAt() : "");
         response.put("tags", d.getTags());
         response.put("history", d.getHistory().stream().map(h -> {
             Map<String, Object> hm = new java.util.LinkedHashMap<>();

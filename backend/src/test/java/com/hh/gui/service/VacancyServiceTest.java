@@ -270,16 +270,22 @@ class VacancyServiceTest {
     void importVacancies_skipsDuplicates() {
         Vacancy v1 = new Vacancy();
         v1.setHhId("dup-001");
+        v1.setPerson("test-person");
+        v1.setSearchName("test-search");
         v1.setTitle("First");
         v1.setStatus("new");
 
         Vacancy v2 = new Vacancy();
-        v2.setHhId("dup-001"); // duplicate
+        v2.setHhId("dup-001"); // duplicate — same (hh_id, person, search)
+        v2.setPerson("test-person");
+        v2.setSearchName("test-search");
         v2.setTitle("Second");
         v2.setStatus("new");
 
         Vacancy v3 = new Vacancy();
         v3.setHhId("dup-002");
+        v3.setPerson("test-person");
+        v3.setSearchName("test-search");
         v3.setTitle("Third");
         v3.setStatus("new");
 
@@ -313,7 +319,7 @@ class VacancyServiceTest {
         createServiceVacancy("list-001");
         createServiceVacancy("list-002");
 
-        var result = vacancyService.list("new", null, null, null, null, null, null, "score_desc", 1, 30);
+        var result = vacancyService.list("new", null, null, null, null, null, null, null, null, "score_desc", 1, 30);
         assertTrue(result.getTotal() >= 2);
     }
 
@@ -327,7 +333,7 @@ class VacancyServiceTest {
         v.setAiScore(0);
         vacancyRepo.save(v);
 
-        var result = vacancyService.list("fraud", null, null, null, null, null, null, "score_desc", 1, 30);
+        var result = vacancyService.list("fraud", null, null, null, null, null, null, null, null, "score_desc", 1, 30);
         assertEquals(1, result.getTotal());
     }
 
@@ -352,6 +358,8 @@ class VacancyServiceTest {
     private Vacancy createServiceVacancy(String hhId) {
         Vacancy v = new Vacancy();
         v.setHhId(hhId);
+        v.setPerson("test-person");
+        v.setSearchName("test-search");
         v.setTitle("Vacancy " + hhId);
         v.setCompany("Test");
         v.setStatus("new");

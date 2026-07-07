@@ -119,6 +119,37 @@ function statusLabel(status) {
   return map[status] || status || '—';
 }
 
+// ═══════ PEOPLE / SEARCHES ═══════
+let allJobs = []; // [{person, searchName}] — from config/profiles/default.yaml
+
+async function loadJobs() {
+  try {
+    allJobs = await api('/pipeline/jobs');
+    const personSel = document.getElementById('person-filter');
+    if (personSel) {
+      const current = personSel.value;
+      const people = [...new Set(allJobs.map(j => j.person))];
+      personSel.innerHTML = '<option value="">Все люди</option>' +
+        people.map(p => `<option value="${escHtml(p)}">${escHtml(p)}</option>`).join('');
+      if (current) personSel.value = current;
+    }
+    updateSearchNameOptions();
+  } catch (e) {
+    console.error('Jobs load error:', e);
+  }
+}
+
+function updateSearchNameOptions() {
+  const searchSel = document.getElementById('search-name-filter');
+  if (!searchSel) return;
+  const person = document.getElementById('person-filter')?.value;
+  const current = searchSel.value;
+  const searches = [...new Set(allJobs.filter(j => !person || j.person === person).map(j => j.searchName))];
+  searchSel.innerHTML = '<option value="">Все поиски</option>' +
+    searches.map(s => `<option value="${escHtml(s)}">${escHtml(s)}</option>`).join('');
+  if (current && searches.includes(current)) searchSel.value = current;
+}
+
 // ═══════ STATS ═══════
 async function loadStats() {
   try {
@@ -179,6 +210,12 @@ async function loadVacancies(page = 1) {
     else params.set('status', currentFilter);
   }
 
+  const person = document.getElementById('person-filter')?.value;
+  if (person) params.set('person', person);
+
+  const searchName = document.getElementById('search-name-filter')?.value;
+  if (searchName) params.set('searchName', searchName);
+
   const district = document.getElementById('district-filter')?.value;
   if (district) params.set('district', district);
 
@@ -214,6 +251,10 @@ async function loadVacancies(page = 1) {
 // ═══════ ACTIVE FILTER CHIPS ═══════
 function activeFilterList() {
   const list = [];
+  const person = document.getElementById('person-filter')?.value;
+  if (person) list.push({ key: 'person-filter', label: `👤 ${person}` });
+  const searchName = document.getElementById('search-name-filter')?.value;
+  if (searchName) list.push({ key: 'search-name-filter', label: `🔎 ${searchName}` });
   const district = document.getElementById('district-filter')?.value;
   if (district) list.push({ key: 'district-filter', label: `📍 ${district}` });
   const tag = document.getElementById('tag-filter')?.value;
@@ -246,16 +287,19 @@ function clearFilter(key) {
   if (!el) return;
   if (el.type === 'checkbox') el.checked = false;
   else el.value = '';
+  if (key === 'person-filter') updateSearchNameOptions();
   loadVacancies(1);
 }
 
 function clearAllFilters() {
-  ['district-filter', 'tag-filter', 'salary-filter', 'score-filter', 'remote-filter', 'search-input'].forEach(id => {
+  ['person-filter', 'search-name-filter', 'district-filter', 'tag-filter',
+   'salary-filter', 'score-filter', 'remote-filter', 'search-input'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.value = '';
   });
   const hasSalaryEl = document.getElementById('has-salary-filter');
   if (hasSalaryEl) hasSalaryEl.checked = false;
+  updateSearchNameOptions();
   loadVacancies(1);
 }
 
@@ -310,6 +354,7 @@ function renderList(vacancies) {
         </div>
         <div class="v-footer">
           ${statusChip}
+          ${(v.person || v.searchName) ? `<span class="chp">👤 ${escHtml(v.person)} · ${escHtml(v.searchName)}</span>` : ''}
           ${tags}
         </div>
       </div>`;
@@ -407,7 +452,7 @@ function renderDetail(v) {
   }
 
   container.innerHTML = `
-    <div class="db">Все вакансии › <span>${escHtml(statusLabel(v.status))}</span></div>
+    <div class="db">${escHtml(v.person || 'Все вакансии')}${v.searchName ? ' · ' + escHtml(v.searchName) : ''} › <span>${escHtml(statusLabel(v.status))}</span></div>
     ${typeTag}
     <div class="dtitle">${escHtml(v.title)}</div>
     <div class="dcomp">
@@ -947,6 +992,7 @@ async function loadDistricts() {
 document.addEventListener('DOMContentLoaded', () => {
   initTheme();
   loadStats(); // also populates district filter from topDistricts
+  loadJobs(); // populates person/search filters from configured (person, search) jobs
   loadVacancies(1);
   checkAiStatus(); // check rate limit status
 
@@ -964,6 +1010,7 @@ document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('.filter-sel').forEach(el => {
     el.addEventListener('change', () => loadVacancies(1));
   });
+  document.getElementById('person-filter')?.addEventListener('change', updateSearchNameOptions);
   document.getElementById('search-input')?.addEventListener('input', debounceSearch);
 
   // Periodic AI status check every 5 min

@@ -115,7 +115,7 @@ class VacancyRepositoryTest {
         saveWithStatus("3", "rejected");
         saveWithStatus("4", "favorite");
 
-        List<Vacancy> result = vacancyRepo.findAll("new", null, null, null, null, null, null, "score_desc", 0, 100);
+        List<Vacancy> result = vacancyRepo.findAll("new", null, null, null, null, null, null, null, null, "score_desc", 0, 100);
         assertEquals(2, result.size());
     }
 
@@ -124,7 +124,7 @@ class VacancyRepositoryTest {
         saveWithStatus("1", "new");
         saveWithStatus("2", "rejected");
 
-        List<Vacancy> result = vacancyRepo.findAll("rejected", null, null, null, null, null, null, "score_desc", 0, 100);
+        List<Vacancy> result = vacancyRepo.findAll("rejected", null, null, null, null, null, null, null, null, "score_desc", 0, 100);
         assertEquals(1, result.size());
         assertEquals("rejected", result.get(0).getStatus());
     }
@@ -134,7 +134,7 @@ class VacancyRepositoryTest {
         saveFraud("1");
         saveWithStatus("2", "new");
 
-        List<Vacancy> result = vacancyRepo.findAll("fraud", null, null, null, null, null, null, "score_desc", 0, 100);
+        List<Vacancy> result = vacancyRepo.findAll("fraud", null, null, null, null, null, null, null, null, "score_desc", 0, 100);
         assertEquals(1, result.size());
         assertEquals("fraud", result.get(0).getAiVerdict());
     }
@@ -144,7 +144,7 @@ class VacancyRepositoryTest {
         saveWithStatus("1", "new");
         saveWithStatus("2", "rejected");
 
-        List<Vacancy> result = vacancyRepo.findAll("all", null, null, null, null, null, null, "score_desc", 0, 100);
+        List<Vacancy> result = vacancyRepo.findAll("all", null, null, null, null, null, null, null, null, "score_desc", 0, 100);
         assertEquals(2, result.size());
     }
 
@@ -156,7 +156,7 @@ class VacancyRepositoryTest {
         saveWithStatus("2", "favorite");
         saveFraud("3");
 
-        List<Vacancy> result = vacancyRepo.findAll("fraud", null, null, null, null, null, null, "score_desc", 0, 100);
+        List<Vacancy> result = vacancyRepo.findAll("fraud", null, null, null, null, null, null, null, null, "score_desc", 0, 100);
         assertTrue(result.stream().allMatch(v -> "fraud".equals(v.getAiVerdict())));
         assertTrue(result.stream().noneMatch(v -> !"fraud".equals(v.getAiVerdict())));
     }
@@ -168,7 +168,7 @@ class VacancyRepositoryTest {
 
         // "new" filter matches by status, so fraud with status="new" IS included
         // This is expected behavior — fraud is filtered by ai_verdict, not status
-        List<Vacancy> result = vacancyRepo.findAll("new", null, null, null, null, null, null, "score_desc", 0, 100);
+        List<Vacancy> result = vacancyRepo.findAll("new", null, null, null, null, null, null, null, null, "score_desc", 0, 100);
         assertEquals(2, result.size());  // both "new" status rows returned
         // To exclude fraud, filter by verdict in service layer or use specific query
     }
@@ -181,7 +181,7 @@ class VacancyRepositoryTest {
         saveFraud("2");
         saveWithStatus("3", "new");
 
-        int count = vacancyRepo.countAll("fraud", null, null, null, null, null, null);
+        int count = vacancyRepo.countAll("fraud", null, null, null, null, null, null, null, null);
         assertEquals(2, count);
     }
 
@@ -191,7 +191,7 @@ class VacancyRepositoryTest {
         saveWithStatus("2", "new");
 
         // "new" filter matches by status, so fraud with status="new" is included
-        int count = vacancyRepo.countAll("new", null, null, null, null, null, null);
+        int count = vacancyRepo.countAll("new", null, null, null, null, null, null, null, null);
         assertEquals(2, count);
         // To exclude fraud, use fraud filter separately or filter in service layer
     }
@@ -319,7 +319,7 @@ class VacancyRepositoryTest {
     @Test
     void updateAiResult_toFraud() {
         Vacancy v = saveWithStatus("ai-fraud", "new");
-        vacancyRepo.updateAiResult(v.getHhId(), 0, "fraud", "Обман");
+        vacancyRepo.updateAiResult(v.getHhId(), v.getPerson(), v.getSearchName(), 0, "fraud", "Обман");
 
         Optional<Vacancy> found = vacancyRepo.findById(v.getId());
         assertTrue(found.isPresent());
@@ -331,7 +331,7 @@ class VacancyRepositoryTest {
     @Test
     void updateAiResult_toYes() {
         Vacancy v = saveWithStatus("ai-yes", "new");
-        vacancyRepo.updateAiResult(v.getHhId(), 80, "yes", "Подходит");
+        vacancyRepo.updateAiResult(v.getHhId(), v.getPerson(), v.getSearchName(), 80, "yes", "Подходит");
 
         Optional<Vacancy> found = vacancyRepo.findById(v.getId());
         assertTrue(found.isPresent());
@@ -342,13 +342,13 @@ class VacancyRepositoryTest {
     @Test
     void updateAiResult_emptyVerdict() {
         Vacancy v = saveWithStatus("ai-empty", "new");
-        assertDoesNotThrow(() -> vacancyRepo.updateAiResult(v.getHhId(), 50, "", ""));
+        assertDoesNotThrow(() -> vacancyRepo.updateAiResult(v.getHhId(), v.getPerson(), v.getSearchName(), 50, "", ""));
     }
 
     @Test
     void updateAiResult_nullVerdict() {
         Vacancy v = saveWithStatus("ai-null", "new");
-        assertDoesNotThrow(() -> vacancyRepo.updateAiResult(v.getHhId(), 50, null, null));
+        assertDoesNotThrow(() -> vacancyRepo.updateAiResult(v.getHhId(), v.getPerson(), v.getSearchName(), 50, null, null));
     }
 
     // ── Pagination ──
@@ -359,10 +359,10 @@ class VacancyRepositoryTest {
             saveWithStatus("page-" + i, "new");
         }
 
-        List<Vacancy> page1 = vacancyRepo.findAll("new", null, null, null, null, null, null, "id_desc", 0, 5);
+        List<Vacancy> page1 = vacancyRepo.findAll("new", null, null, null, null, null, null, null, null, "id_desc", 0, 5);
         assertEquals(5, page1.size());
 
-        List<Vacancy> page2 = vacancyRepo.findAll("new", null, null, null, null, null, null, "id_desc", 5, 5);
+        List<Vacancy> page2 = vacancyRepo.findAll("new", null, null, null, null, null, null, null, null, "id_desc", 5, 5);
         assertEquals(5, page2.size());
 
         // Ensure no overlap
@@ -374,7 +374,7 @@ class VacancyRepositoryTest {
     @Test
     void findAll_offsetBeyondTotal() {
         saveWithStatus("beyond-1", "new");
-        List<Vacancy> result = vacancyRepo.findAll("new", null, null, null, null, null, null, "score_desc", 1000, 10);
+        List<Vacancy> result = vacancyRepo.findAll("new", null, null, null, null, null, null, null, null, "score_desc", 1000, 10);
         assertTrue(result.isEmpty());
     }
 
@@ -382,7 +382,7 @@ class VacancyRepositoryTest {
     void findAll_zeroLimit() {
         saveWithStatus("zero-1", "new");
         // LIMIT 0 should return empty
-        List<Vacancy> result = vacancyRepo.findAll("new", null, null, null, null, null, null, "score_desc", 0, 0);
+        List<Vacancy> result = vacancyRepo.findAll("new", null, null, null, null, null, null, null, null, "score_desc", 0, 0);
         assertTrue(result.isEmpty());
     }
 
@@ -392,7 +392,7 @@ class VacancyRepositoryTest {
         // H2 doesn't support negative offset - it throws an exception
         // In production this shouldn't happen since page params are validated
         assertThrows(Exception.class, () ->
-            vacancyRepo.findAll("new", null, null, null, null, null, null, "score_desc", -1, 10));
+            vacancyRepo.findAll("new", null, null, null, null, null, null, null, null, "score_desc", -1, 10));
     }
 
     // ── Helper factory methods ──
@@ -400,6 +400,8 @@ class VacancyRepositoryTest {
     private Vacancy createTestVacancy(String hhId, String title, String status) {
         Vacancy v = new Vacancy();
         v.setHhId(hhId);
+        v.setPerson("test-person");
+        v.setSearchName("test-search");
         v.setTitle(title);
         v.setCompany("Test Company");
         v.setStatus(status);
@@ -410,6 +412,8 @@ class VacancyRepositoryTest {
     private Vacancy saveWithStatus(String hhId, String status) {
         Vacancy v = new Vacancy();
         v.setHhId(hhId);
+        v.setPerson("test-person");
+        v.setSearchName("test-search");
         v.setTitle("Vacancy " + hhId);
         v.setCompany("Test");
         v.setStatus(status);
@@ -421,6 +425,8 @@ class VacancyRepositoryTest {
     private Vacancy saveFraud(String hhId) {
         Vacancy v = new Vacancy();
         v.setHhId(hhId);
+        v.setPerson("test-person");
+        v.setSearchName("test-search");
         v.setTitle("Fake Vacancy " + hhId);
         v.setCompany("Scam Inc.");
         v.setStatus("new");

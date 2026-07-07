@@ -370,6 +370,8 @@ class VacancyControllerTest {
     private Vacancy createControllerVacancy(String hhId, String status) {
         Vacancy v = new Vacancy();
         v.setHhId(hhId);
+        v.setPerson("test-person");
+        v.setSearchName("test-search");
         v.setTitle("Vacancy " + hhId);
         v.setCompany("Test");
         v.setStatus(status);
