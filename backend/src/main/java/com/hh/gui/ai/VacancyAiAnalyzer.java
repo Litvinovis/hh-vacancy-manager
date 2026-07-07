@@ -18,6 +18,7 @@ import java.security.MessageDigest;
 import java.util.List;
 import java.util.Map;
 import java.util.ArrayList;
+import java.util.Set;
 
 /**
  * AI analyzer for vacancies — calls LLM API directly.
@@ -33,7 +34,19 @@ public class VacancyAiAnalyzer {
 
     private static final Logger log = LoggerFactory.getLogger(VacancyAiAnalyzer.class);
     private static final java.util.Set<String> VALID_VERDICTS = java.util.Set.of("yes", "no", "fraud");
-    private static final int MAX_DESCRIPTION_CHARS = 1200;
+    private static final int MAX_DESCRIPTION_CHARS = 600;
+    private static final int FALLBACK_DESCRIPTION_CHARS = 500;
+
+    // hh.ru descriptions are near-universally structured with these section headers
+    // (verified against real scraped postings). Duties/requirements decide the score;
+    // perks/company-intro are marketing filler the model doesn't need to see.
+    private static final Set<String> KEEP_HEADERS = Set.of(
+        "обязанност", "чем предстоит заниматься", "что нужно делать", "что будете делать",
+        "твои задачи", "ваши задачи", "задачи", "требовани", "кого мы ищем",
+        "мы ждём тебя", "мы ждем тебя", "ожидания от кандидата", "тебе предстоит", "вам предстоит");
+    private static final Set<String> DROP_HEADERS = Set.of(
+        "мы предлагаем", "что мы предлагаем", "услови", "о компании", "о нас",
+        "почему мы", "преимуществ", "льгот", "о вакансии", "как откликнуться", "контакты");
 
     @Value("${app.ai.batch-size:10}")
     private int batchSizeDefault;
@@ -221,7 +234,8 @@ public class VacancyAiAnalyzer {
         sb.append("- Вакансии-скам ставь verdict=\"fraud\" и score=0, но не пропускай их — они остаются в базе, чтобы не анализировать повторно\n\n");
 
         sb.append("Проанализируй каждую вакансию и верни JSON-массив с полями:\n");
-        sb.append("[{\"id\": \"...\", \"score\": 0-100, \"verdict\": \"yes\"|\"no\"|\"fraud\", \"reason\": \"краткое обоснование\"}]\n\n");
+        sb.append("[{\"id\": \"...\", \"score\": 0-100, \"verdict\": \"yes\"|\"no\"|\"fraud\", \"reason\": \"обоснование одной короткой фразой, до 12 слов\"}]\n");
+        sb.append("Никакого текста до или после массива. Никаких переносов строк внутри \"reason\".\n\n");
 
         sb.append("ВАКАНСИИ:\n");
         for (Vacancy v : vacancies) {
@@ -242,8 +256,7 @@ public class VacancyAiAnalyzer {
             }
             sb.append("Адрес: ").append(v.getAddress()).append("\n");
             sb.append("Удалёнка: ").append(v.isRemote() ? "да" : "нет").append("\n");
-            String description = v.getDescription() != null ? v.getDescription() : "";
-            sb.append("Описание: ").append(description.substring(0, Math.min(MAX_DESCRIPTION_CHARS, description.length()))).append("\n");
+            sb.append("Описание: ").append(extractKeyInfo(v.getDescription())).append("\n");
         }
 
         return sb.toString();
@@ -287,6 +300,53 @@ public class VacancyAiAnalyzer {
             .reduce((a, b) -> a + "," + b).orElse("");
     }
 
+    /**
+     * Cuts a raw scraped description down to the "обязанности"/"требования"-style
+     * sections and drops "мы предлагаем"/"о компании" marketing filler, since a flat
+     * character truncation regularly cut off before duties even started (verified
+     * against real postings — company intros and perk lists routinely run 500+ chars
+     * before the actually decision-relevant text begins). Salary/schedule are already
+     * passed as structured fields, so dropping "условия" prose loses nothing there.
+     */
+    private String extractKeyInfo(String description) {
+        if (description == null || description.isBlank()) return "";
+
+        boolean keeping = false;
+        boolean anyHeaderFound = false;
+        StringBuilder kept = new StringBuilder();
+
+        for (String rawLine : description.split("\n")) {
+            String line = rawLine.trim();
+            if (line.isEmpty()) continue;
+            String lower = line.toLowerCase();
+
+            String keepHeader = KEEP_HEADERS.stream().filter(lower::startsWith).findFirst().orElse(null);
+            if (keepHeader != null) {
+                // Headers are followed by a bullet list on subsequent lines in practice —
+                // skip the header line itself rather than trying to salvage inline text
+                // after it (that text is often just the rest of the header phrase).
+                keeping = true;
+                anyHeaderFound = true;
+                continue;
+            }
+            String dropHeader = DROP_HEADERS.stream().filter(lower::startsWith).findFirst().orElse(null);
+            if (dropHeader != null) {
+                keeping = false;
+                anyHeaderFound = true;
+                continue;
+            }
+            if (keeping) kept.append(line).append(" ");
+        }
+
+        String result = kept.toString().trim();
+        if (!anyHeaderFound || result.length() < 80) {
+            // Unstructured posting (short one-liner, no recognizable sections) — fall
+            // back to a flat truncation rather than risk keeping nothing useful.
+            return description.substring(0, Math.min(FALLBACK_DESCRIPTION_CHARS, description.length()));
+        }
+        return result.substring(0, Math.min(MAX_DESCRIPTION_CHARS, result.length()));
+    }
+
     private String formatSalary(Vacancy v) {
         boolean hasFrom = v.getSalaryFrom() != null && v.getSalaryFrom() > 0;
         boolean hasTo = v.getSalaryTo() != null && v.getSalaryTo() > 0;
@@ -322,7 +382,7 @@ public class VacancyAiAnalyzer {
             "model", model,
             "messages", List.of(Map.of("role", "user", "content", prompt)),
             "temperature", 0.3,
-            "max_tokens", 4000
+            "max_tokens", 6000
         );
         byte[] payload = mapper.writeValueAsBytes(requestBody);
 
@@ -356,43 +416,49 @@ public class VacancyAiAnalyzer {
         }
     }
 
+    /**
+     * Parses the LLM response. Throws on any malformed/incomplete response (missing
+     * choices, no JSON array, truncated array) instead of swallowing the failure —
+     * a swallowed failure previously looked like "success, zero results" to the
+     * caller, so the batch never retried and those vacancies stayed 'pending'
+     * forever. Letting the exception propagate lets analyzeWithRetry's existing
+     * backoff/provider-fallback logic actually engage.
+     */
     @SuppressWarnings("unchecked")
-    private List<AiResult> parseResponse(String json, List<Vacancy> vacancies) {
+    private List<AiResult> parseResponse(String json, List<Vacancy> vacancies) throws Exception {
         List<AiResult> results = new ArrayList<>();
-        try {
-            Map<?, ?> response = mapper.readValue(json, Map.class);
-            List<?> choices = (List<?>) response.get("choices");
-            if (choices == null || choices.isEmpty()) return results;
+        Map<?, ?> response = mapper.readValue(json, Map.class);
+        List<?> choices = (List<?>) response.get("choices");
+        if (choices == null || choices.isEmpty()) {
+            throw new RuntimeException("Ответ AI не содержит choices");
+        }
 
-            Map<?, ?> choice = (Map<?, ?>) choices.get(0);
-            Map<?, ?> message = (Map<?, ?>) choice.get("message");
-            String content = (String) message.get("content");
+        Map<?, ?> choice = (Map<?, ?>) choices.get(0);
+        Map<?, ?> message = (Map<?, ?>) choice.get("message");
+        String content = (String) message.get("content");
 
-            int start = content.indexOf('[');
-            int end = content.lastIndexOf(']');
-            if (start < 0 || end < 0) {
-                log.warn("JSON-массив не найден в ответе AI: {}", content.substring(0, Math.min(200, content.length())));
-                return results;
+        int start = content.indexOf('[');
+        int end = content.lastIndexOf(']');
+        if (start < 0 || end < 0) {
+            throw new RuntimeException("JSON-массив не найден в ответе AI: "
+                + content.substring(0, Math.min(200, content.length())));
+        }
+
+        String jsonArray = content.substring(start, end + 1);
+        List<Map<String, Object>> items = mapper.readValue(jsonArray, List.class);
+
+        for (Map<String, Object> item : items) {
+            String id = (String) item.get("id");
+            int score = ((Number) item.getOrDefault("score", 0)).intValue();
+            String verdict = (String) item.getOrDefault("verdict", "no");
+            String reason = (String) item.getOrDefault("reason", "");
+
+            if (!VALID_VERDICTS.contains(verdict)) {
+                log.warn("AI вернул неожиданный verdict '{}' для вакансии {}, приводим к 'no'", verdict, id);
+                verdict = "no";
             }
 
-            String jsonArray = content.substring(start, end + 1);
-            List<Map<String, Object>> items = mapper.readValue(jsonArray, List.class);
-
-            for (Map<String, Object> item : items) {
-                String id = (String) item.get("id");
-                int score = ((Number) item.getOrDefault("score", 0)).intValue();
-                String verdict = (String) item.getOrDefault("verdict", "no");
-                String reason = (String) item.getOrDefault("reason", "");
-
-                if (!VALID_VERDICTS.contains(verdict)) {
-                    log.warn("AI вернул неожиданный verdict '{}' для вакансии {}, приводим к 'no'", verdict, id);
-                    verdict = "no";
-                }
-
-                results.add(new AiResult(id, Math.max(0, Math.min(100, score)), verdict, reason));
-            }
-        } catch (Exception e) {
-            log.error("Не удалось разобрать ответ AI: {}", e.getMessage());
+            results.add(new AiResult(id, Math.max(0, Math.min(100, score)), verdict, reason));
         }
         return results;
     }

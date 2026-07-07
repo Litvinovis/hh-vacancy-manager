@@ -64,7 +64,85 @@ class VacancyAiAnalyzerTest {
     // We can test the public analyzeBatch method's behavior with mocks,
     // but since it calls callLlm, we test what we can
 
+    // ── extractKeyInfo (description section extraction) ──
 
+    private String extractKeyInfo(String description) throws Exception {
+        var method = analyzer.getClass().getDeclaredMethod("extractKeyInfo", String.class);
+        method.setAccessible(true);
+        return (String) method.invoke(analyzer, description);
+    }
+
+    @Test
+    void extractKeyInfo_keepsDutiesAndRequirements_dropsPerksAndCompanyIntro() throws Exception {
+        String description = """
+            Группа компаний работает на рынке 10 лет и является лидером отрасли.
+
+            Обязанности:
+            • Консультировать клиентов
+            • Вносить данные в CRM
+
+            Мы предлагаем:
+            • Оплачиваемый отпуск
+            • ДМС
+
+            Требования:
+            • Опыт работы от года
+            • Грамотная речь
+            """;
+        String result = extractKeyInfo(description);
+        assertTrue(result.contains("Консультировать клиентов"));
+        assertTrue(result.contains("Опыт работы от года"));
+        assertFalse(result.contains("ДМС"));
+        assertFalse(result.contains("лидером отрасли"));
+    }
+
+    @Test
+    void extractKeyInfo_noRecognizableSections_fallsBackToFlatTruncation() throws Exception {
+        String description = "Ищем продавца в новый магазин, зарплата от 40000 рублей, звоните по телефону.";
+        String result = extractKeyInfo(description);
+        assertEquals(description, result);
+    }
+
+    @Test
+    void extractKeyInfo_null_returnsEmpty() throws Exception {
+        assertEquals("", extractKeyInfo(null));
+    }
+
+    @Test
+    void extractKeyInfo_blank_returnsEmpty() throws Exception {
+        assertEquals("", extractKeyInfo("   "));
+    }
+
+    @Test
+    void extractKeyInfo_capsHeaders_noLeftoverArtifacts() throws Exception {
+        String description = """
+            О КОМПАНИИ: мы динамично развивающаяся компания.
+
+            ОБЯЗАННОСТИ:
+            • Продавать товар и консультировать покупателей по ассортименту
+            • Поддерживать порядок и чистоту в торговом зале
+            • Работать с кассой и вести отчётность по остаткам
+
+            ТРЕБОВАНИЯ:
+            • Опыт работы в продажах от 6 месяцев приветствуется
+            • Грамотная речь и доброжелательность к покупателям
+            """;
+        String result = extractKeyInfo(description);
+        assertTrue(result.contains("Продавать товар"));
+        assertTrue(result.contains("Опыт работы в продажах"));
+        // No leftover header-remainder artifacts like "И:" or ", ЕСЛИ ТЫ:" at the start
+        assertFalse(result.trim().startsWith("И:"));
+        assertFalse(result.contains("динамично развивающаяся"));
+    }
+
+    @Test
+    void extractKeyInfo_shortStructuredSection_fallsBackToFlatTruncation() throws Exception {
+        // Recognizable header present, but the kept content is too short to be useful
+        // on its own (< 80 chars) — should fall back rather than send near-nothing.
+        String description = "Обязанности: продавать.\n\nМы предлагаем: отличный коллектив и стабильность.";
+        String result = extractKeyInfo(description);
+        assertEquals(description, result);
+    }
 
     // ── computeCriteriaHash ──
 
