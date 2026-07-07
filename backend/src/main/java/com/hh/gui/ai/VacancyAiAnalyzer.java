@@ -142,13 +142,12 @@ public class VacancyAiAnalyzer {
 
     /**
      * Analyze with exponential backoff retry.
-     * On 429 (rate limit): switch to fallback provider if available.
-     * If both providers are rate limited, enter cooldown.
+     * On 429 (rate limit): switch to the next provider in the chain.
+     * If all providers are rate limited, enter cooldown.
      */
     private List<AiResult> analyzeWithRetry(List<Vacancy> vacancies, SearchProfile profile, int maxRetries)
             throws Exception {
         int attempt = 0;
-        boolean switchedThisBatch = false;
 
         while (true) {
             // Stop retrying if cooldown active
@@ -162,27 +161,25 @@ public class VacancyAiAnalyzer {
                 attempt++;
                 boolean isRateLimit = e.getMessage() != null && e.getMessage().contains("429");
 
-                // On 429: try switching provider instead of just waiting
-                if (isRateLimit && !switchedThisBatch && providerManager.getState() != AiProviderManager.ProviderState.FALLBACK) {
-                    log.warn("429 от провайдера. Переключаемся на fallback...");
-                    providerManager.switchToFallback();
-                    switchedThisBatch = true;
+                // On 429: try next provider (may enter cooldown if last in chain)
+                if (isRateLimit) {
+                    String currentProvider = providerManager.getCurrentProviderName();
+                    providerManager.switchToFallback(); // advances index or enters cooldown
+                    if (providerManager.isInCooldown()) {
+                        log.warn("Все провайдеры rate limited. Cooldown. Последний был: {}", currentProvider);
+                        throw new RuntimeException("All providers rate limited, entering cooldown");
+                    }
+                    String nextProvider = providerManager.getCurrentProviderName();
+                    log.warn("429 от {}. Переключаемся на провайдера: {}", currentProvider, nextProvider);
                     continue; // retry immediately with new provider
                 }
 
-                // On 429 from fallback (or already switched) — enter cooldown
-                if (isRateLimit && (switchedThisBatch || providerManager.getState() == AiProviderManager.ProviderState.FALLBACK)) {
-                    log.warn("429 от fallback провайдера. Entering cooldown.");
-                    providerManager.enterCooldown();
-                    throw new RuntimeException("Both providers rate limited, entering cooldown");
-                }
-
+                // Standard backoff for transient errors (timeout, 5xx)
                 if (attempt >= maxRetries) {
                     log.error("AI-анализ не удался после {} попыток: {}", maxRetries, e.getMessage());
                     throw e;
                 }
 
-                // Standard backoff for transient errors (timeout, 5xx)
                 long backoff = (long) Math.pow(2, attempt) * 7500;
                 log.warn("Попытка AI-анализа {}/{} не удалась ({}), повторяем через {}с...",
                     attempt, maxRetries, e.getMessage(), backoff / 1000);

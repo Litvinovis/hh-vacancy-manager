@@ -567,13 +567,15 @@ async function showSettingsModal() {
   try {
     const data = await api('/settings?password=1102');
     settingsDescriptors = data.descriptors || [];
-    renderSettingsForm(data.values || {});
+    // Also load providers
+    const provData = await api('/settings/providers?password=1102');
+    renderSettingsForm(data.values || {}, provData.providers || []);
   } catch (e) {
     toast('✗ Ошибка загрузки настроек: ' + e.message, 'err');
   }
 }
 
-function renderSettingsForm(values) {
+function renderSettingsForm(values, providers) {
   const modal = document.getElementById('settings-modal');
 
   // Build schedule options for pipelineIntervalMs
@@ -637,7 +639,12 @@ function renderSettingsForm(values) {
   modal.innerHTML = `
     <div class="modal-box modal-box-wide">
       <div class="modal-head"><h3>⚙️ Настройки</h3><button class="modal-x" onclick="closeSettingsModal()">✕</button></div>
-      <div class="modal-body settings-body">${html}</div>
+      <div class="modal-body settings-body">${html}
+        <div class="settings-separator"><span>🤖 AI Провайдеры</span></div>
+        <div class="providers-list" id="providers-list">
+          ${renderProvidersList(providers)}
+        </div>
+      </div>
       <div class="modal-foot">
         <button class="btn btn-ghost" onclick="closeSettingsModal()">Отмена</button>
         <button class="btn btn-prim" onclick="saveSettings()">💾 Сохранить</button>
@@ -714,6 +721,20 @@ async function saveSettings() {
 
   try {
     const r = await api('/settings', { method: 'POST', body: JSON.stringify(updates) });
+
+    // Save providers
+    const list = document.getElementById('providers-list');
+    if (list) {
+      const cards = list.querySelectorAll('.provider-card');
+      const providers = Array.from(cards).map(card => {
+        const inputs = card.querySelectorAll('.provider-inp');
+        const data = {};
+        inputs.forEach(inp => { data[inp.dataset.field] = inp.value; });
+        return data;
+      });
+      await api('/settings/providers?password=1102', { method: 'PUT', body: JSON.stringify(providers) });
+    }
+
     if (r.errors && Object.keys(r.errors).length) {
       const msgs = Object.values(r.errors).join('; ');
       toast('✗ ' + msgs, 'err');
@@ -724,6 +745,116 @@ async function saveSettings() {
   } catch (e) {
     toast('✗ ' + e.message, 'err');
   }
+}
+
+// ═══════ AI PROVIDERS EDITOR ═══════
+
+function renderProvidersList(providers) {
+  if (!providers || providers.length === 0) {
+    return `<div class="providers-empty">Нет провайдеров. Добавьте хотя бы один.</div>
+      <button class="btn btn-second" onclick="addProvider()" style="margin-top:8px;width:100%">+ Добавить провайдера</button>`;
+  }
+  return providers.map((p) => `
+    <div class="provider-card">
+      <div class="provider-header">
+        <span class="provider-num"></span>
+        <span class="provider-name-badge">${escHtml(p.name || '—')}</span>
+        <div class="provider-arrows">
+          <button class="provider-btn" onclick="moveProvider(this, -1)" title="Вверх">↑</button>
+          <button class="provider-btn" onclick="moveProvider(this, 1)" title="Вниз">↓</button>
+        </div>
+        <button class="provider-btn provider-del" onclick="removeProvider(this)" title="Удалить">✕</button>
+      </div>
+      <div class="provider-body">
+        <div class="provider-field">
+          <label>Название</label>
+          <input class="provider-inp" data-field="name" value="${escHtml(p.name)}" placeholder="GitHub Models">
+        </div>
+        <div class="provider-field">
+          <label>URL API</label>
+          <input class="provider-inp" data-field="url" value="${escHtml(p.url)}" placeholder="https://models.inference.ai.azure.com/chat/completions">
+        </div>
+        <div class="provider-field">
+          <label>API Key</label>
+          <input class="provider-inp provider-key" type="password" data-field="apiKey" value="${escHtml(p.apiKeyFull || '')}" placeholder="sk-...">
+        </div>
+        <div class="provider-field">
+          <label>Модель</label>
+          <input class="provider-inp" data-field="model" value="${escHtml(p.model)}" placeholder="gpt-4o-mini">
+        </div>
+      </div>
+    </div>
+  `).join('') + `
+    <button class="btn btn-second" onclick="addProvider()" style="margin-top:8px;width:100%">+ Добавить провайдера</button>`;
+}
+
+function addProvider() {
+  const list = document.getElementById('providers-list');
+  if (!list) return;
+  const addBtn = list.querySelector('.btn-second');
+  const card = document.createElement('div');
+  card.className = 'provider-card';
+  card.innerHTML = `
+    <div class="provider-header">
+      <span class="provider-num"></span>
+      <span class="provider-name-badge">Новый</span>
+      <div class="provider-arrows">
+        <button class="provider-btn" onclick="moveProvider(this, -1)" title="Вверх">↑</button>
+        <button class="provider-btn" onclick="moveProvider(this, 1)" title="Вниз">↓</button>
+      </div>
+      <button class="provider-btn provider-del" onclick="removeProvider(this)" title="Удалить">✕</button>
+    </div>
+    <div class="provider-body">
+      <div class="provider-field">
+        <label>Название</label>
+        <input class="provider-inp" data-field="name" placeholder="GitHub Models" value="">
+      </div>
+      <div class="provider-field">
+        <label>URL API</label>
+        <input class="provider-inp" data-field="url" placeholder="https://..." value="">
+      </div>
+      <div class="provider-field">
+        <label>API Key</label>
+        <input class="provider-inp provider-key" type="password" data-field="apiKey" placeholder="sk-..." value="">
+      </div>
+      <div class="provider-field">
+        <label>Модель</label>
+        <input class="provider-inp" data-field="model" placeholder="gpt-4o-mini" value="">
+      </div>
+    </div>`;
+  if (addBtn) list.insertBefore(card, addBtn);
+  else list.appendChild(card);
+  updateProviderNumbers();
+}
+
+function removeProvider(btn) {
+  const card = btn.closest('.provider-card');
+  if (card) card.remove();
+  updateProviderNumbers();
+}
+
+function moveProvider(btn, direction) {
+  const card = btn.closest('.provider-card');
+  if (!card) return;
+  const list = document.getElementById('providers-list');
+  const cards = Array.from(list.querySelectorAll('.provider-card'));
+  const idx = cards.indexOf(card);
+  const target = idx + direction;
+  if (target < 0 || target >= cards.length) return;
+  if (direction < 0) list.insertBefore(card, cards[target]);
+  else list.insertBefore(cards[target], card);
+  updateProviderNumbers();
+}
+
+function updateProviderNumbers() {
+  const list = document.getElementById('providers-list');
+  if (!list) return;
+  list.querySelectorAll('.provider-card').forEach((card, i) => {
+    const num = card.querySelector('.provider-num');
+    if (num) num.textContent = '#' + (i + 1);
+    const upBtn = card.querySelector('[title="Вверх"]');
+    if (upBtn) upBtn.disabled = i === 0;
+  });
 }
 
 // ═══════ AI STATUS ═══════

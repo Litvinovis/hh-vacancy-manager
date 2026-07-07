@@ -162,6 +162,8 @@ public class PipelineController {
         status.put("cooldownUntil", cooldownUntil);
         status.put("provider", aiProvider.getCurrentProviderName());
         status.put("providerState", aiProvider.getStateLabel());
+        status.put("providerIndex", aiProvider.getCurrentIndex());
+        status.put("providerCount", aiProvider.getProviderCount());
         status.put("hasFallback", aiProvider.hasFallback());
         if (rateLimited && cooldownUntil > 0) {
             status.put("cooldownUntilIso", java.time.Instant.ofEpochMilli(cooldownUntil).toString());

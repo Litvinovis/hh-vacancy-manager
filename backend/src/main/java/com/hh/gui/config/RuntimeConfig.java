@@ -30,6 +30,103 @@ public class RuntimeConfig {
     @Value("${app.data-dir:${user.dir}/data}")
     private String dataDir = System.getProperty("user.dir") + "/data";
 
+    // ═══════ Старые @Value пропсы для seed-инициализации провайдеров ═══════
+    @Value("${app.ai.api-url:https://openrouter.ai/api/v1/chat/completions}")
+    private String seedPrimaryUrl;
+
+    @Value("${app.ai.api-key:}")
+    private String seedPrimaryKey;
+
+    @Value("${app.ai.model:openrouter/auto}")
+    private String seedPrimaryModel;
+
+    @Value("${app.ai.fallback-url:https://api.x.ai/v1/chat/completions}")
+    private String seedFallbackUrl;
+
+    @Value("${app.ai.fallback-key:}")
+    private String seedFallbackKey;
+
+    @Value("${app.ai.fallback-model:grok-3-mini}")
+    private String seedFallbackModel;
+
+    // ═══════ Список AI провайдеров ═══════
+    private volatile List<AiProviderConfig> aiProviders = new ArrayList<>();
+
+    public List<AiProviderConfig> getAiProviders() {
+        return List.copyOf(aiProviders);
+    }
+
+    public synchronized void setAiProviders(List<AiProviderConfig> providers) {
+        this.aiProviders = new ArrayList<>(providers);
+        saveToFile();
+        log.info("Список AI провайдеров обновлён: {} провайдеров", providers.size());
+    }
+
+    @SuppressWarnings("unchecked")
+    private synchronized void deserializeProviders(String json) {
+        if (json == null || json.isBlank()) {
+            aiProviders = new ArrayList<>();
+            return;
+        }
+        try {
+            aiProviders = ((List<Map<String, Object>>) MAPPER.readValue(json, List.class)).stream()
+                .map(m -> {
+                    Map<String, Object> map = (Map<String, Object>) m;
+                    AiProviderConfig p = new AiProviderConfig();
+                    p.setName((String) map.getOrDefault("name", ""));
+                    p.setUrl((String) map.getOrDefault("url", ""));
+                    p.setApiKey((String) map.getOrDefault("apiKey", ""));
+                    p.setModel((String) map.getOrDefault("model", ""));
+                    return p;
+                })
+                .collect(java.util.stream.Collectors.toList());
+        } catch (Exception e) {
+            log.error("Ошибка десериализации провайдеров: {}", e.getMessage());
+            aiProviders = new ArrayList<>();
+        }
+    }
+
+    /** Инициализировать провайдеров из старых @Value пропсов. */
+    private synchronized void seedFromLegacyProps() {
+        List<AiProviderConfig> seed = new ArrayList<>();
+        if (seedPrimaryKey != null && !seedPrimaryKey.isBlank()) {
+            AiProviderConfig primary = new AiProviderConfig();
+            String name = detectNameFromUrl(seedPrimaryUrl);
+            primary.setName(name);
+            primary.setUrl(seedPrimaryUrl);
+            primary.setApiKey(seedPrimaryKey);
+            primary.setModel(seedPrimaryModel);
+            seed.add(primary);
+            log.info("Seed AI провайдер: {} (из app.ai.*)", name);
+        }
+        if (seedFallbackKey != null && !seedFallbackKey.isBlank()) {
+            AiProviderConfig fallback = new AiProviderConfig();
+            String name = detectNameFromUrl(seedFallbackUrl);
+            fallback.setName(name);
+            fallback.setUrl(seedFallbackUrl);
+            fallback.setApiKey(seedFallbackKey);
+            fallback.setModel(seedFallbackModel);
+            seed.add(fallback);
+            log.info("Seed AI провайдер: {} (из app.ai.fallback-*)", name);
+        }
+        if (!seed.isEmpty()) {
+            aiProviders = seed;
+            saveToFile();
+            log.info("Инициализировано {} AI провайдеров из legacy @Value пропсов", seed.size());
+        }
+    }
+
+    private static String detectNameFromUrl(String url) {
+        if (url == null) return "unknown";
+        String u = url.toLowerCase();
+        if (u.contains("github")) return "github-models";
+        if (u.contains("azure.com")) return "github-models";
+        if (u.contains("x.ai")) return "grok";
+        if (u.contains("openrouter")) return "openrouter";
+        if (u.contains("groq")) return "groq";
+        return "custom";
+    }
+
     // ═══════ Поля с defaults ═══════
 
     private volatile int maxPerRun = 30;
@@ -57,12 +154,30 @@ public class RuntimeConfig {
         File file = getConfigFile();
         if (!file.exists()) {
             log.info("Runtime config file не найден ({}), используем defaults", file.getAbsolutePath());
+            seedFromLegacyProps(); // всё равно пытаемся инициализировать провайдеров
             return;
         }
         try {
             Map<String, Object> saved = MAPPER.readValue(file, new TypeReference<>() {});
+            // Десериализуем список провайдеров отдельно
+            Object providersRaw = saved.remove("aiProviders");
+            if (providersRaw instanceof String providersJson) {
+                deserializeProviders(providersJson);
+            } else if (providersRaw instanceof List) {
+                try {
+                    String json = MAPPER.writeValueAsString(providersRaw);
+                    deserializeProviders(json);
+                } catch (Exception e) {
+                    log.warn("Не удалось разобрать aiProviders: {}", e.getMessage());
+                }
+            }
             apply(saved, true); // silent = true — не пишем лог и не триггерим save
-            log.info("Runtime config загружен из {} ({} параметров)", file.getAbsolutePath(), saved.size());
+            log.info("Runtime config загружен из {} ({} параметров, {} провайдеров)", file.getAbsolutePath(), saved.size(), aiProviders.size());
+
+            // Если провайдеров нет — инициализируем из старых @Value пропсов
+            if (aiProviders.isEmpty()) {
+                seedFromLegacyProps();
+            }
         } catch (Exception e) {
             log.warn("Не удалось загрузить runtime config из {}: {}", file.getAbsolutePath(), e.getMessage());
         }
@@ -241,6 +356,7 @@ public class RuntimeConfig {
      */
     public Map<String, Object> toMap() {
         Map<String, Object> m = new LinkedHashMap<>();
+        m.put("aiProviders", aiProviders); // сохраняем как список, не строку
         m.put("maxPerRun", maxPerRun);
         m.put("pipelineIntervalMs", pipelineIntervalMs);
         m.put("dailyCron", dailyCron);
