@@ -198,6 +198,56 @@ class VacancyAiAnalyzerTest {
         assertNotEquals(analyzer.computeCriteriaHash(a), analyzer.computeCriteriaHash(b));
     }
 
+    // ── extractJsonArray (robust bracket/string-aware JSON-array extraction) ──
+
+    private String extractJsonArray(String content) throws Exception {
+        var method = VacancyAiAnalyzer.class.getDeclaredMethod("extractJsonArray", String.class);
+        method.setAccessible(true);
+        return (String) method.invoke(null, content);
+    }
+
+    @Test
+    void extractJsonArray_plainArray() throws Exception {
+        String content = "[{\"id\":\"1\",\"score\":80,\"verdict\":\"yes\",\"reason\":\"ok\"}]";
+        assertEquals(content, extractJsonArray(content));
+    }
+
+    @Test
+    void extractJsonArray_withSurroundingProse() throws Exception {
+        String content = "Вот результат:\n[{\"id\":\"1\",\"score\":80}]\nНадеюсь, помогло!";
+        assertEquals("[{\"id\":\"1\",\"score\":80}]", extractJsonArray(content));
+    }
+
+    @Test
+    void extractJsonArray_bracketsInsideStringValue_notMistakenForArrayEnd() throws Exception {
+        // A naive lastIndexOf(']') would grab the ']' from inside "reason" instead of the real array end.
+        String content = "[{\"id\":\"1\",\"score\":50,\"reason\":\"навыки [Excel, 1C] не подходят\"}]";
+        assertEquals(content, extractJsonArray(content));
+    }
+
+    @Test
+    void extractJsonArray_escapedQuoteInsideString_doesNotConfuseStringTracking() throws Exception {
+        String content = "[{\"id\":\"1\",\"reason\":\"компания \\\"Ромашка\\\" [не проверена]\"}]";
+        assertEquals(content, extractJsonArray(content));
+    }
+
+    @Test
+    void extractJsonArray_truncatedResponse_returnsNull() throws Exception {
+        String content = "[{\"id\":\"1\",\"score\":80,\"reason\":\"обрезан";
+        assertNull(extractJsonArray(content));
+    }
+
+    @Test
+    void extractJsonArray_noArrayAtAll_returnsNull() throws Exception {
+        assertNull(extractJsonArray("User Safety: safe"));
+    }
+
+    @Test
+    void extractJsonArray_nestedArraysInsideObjects() throws Exception {
+        String content = "[{\"id\":\"1\",\"tags\":[\"a\",\"b\"]},{\"id\":\"2\",\"tags\":[]}]";
+        assertEquals(content, extractJsonArray(content));
+    }
+
     // ── AiResult record ──
 
     @Test

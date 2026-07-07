@@ -93,5 +93,6 @@ CREATE INDEX IF NOT EXISTS idx_vacancies_status ON vacancies(status);
 CREATE INDEX IF NOT EXISTS idx_vacancies_hh_id ON vacancies(hh_id);
 CREATE INDEX IF NOT EXISTS idx_vacancies_ai ON vacancies(ai_verdict, ai_score);
 CREATE INDEX IF NOT EXISTS idx_vacancies_user_id ON vacancies(user_id);
+CREATE INDEX IF NOT EXISTS idx_vacancies_person_search ON vacancies(person, search_name);
 CREATE INDEX IF NOT EXISTS idx_tags_vacancy ON tags(vacancy_id);
 CREATE INDEX IF NOT EXISTS idx_searches_user_id ON searches(user_id);
