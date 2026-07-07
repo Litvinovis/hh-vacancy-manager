@@ -23,8 +23,6 @@ spring:
 
 app:
   data-dir: ${user.dir}/data
-  scoring:
-    rules-file: ${user.dir}/config/rules.yaml
   search:
     profiles-dir: ${user.dir}/config/profiles
   ai:
