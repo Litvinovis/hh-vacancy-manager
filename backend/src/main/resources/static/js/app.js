@@ -96,6 +96,24 @@ function scoreClass(score) {
   return 's-ze';
 }
 
+function scoreColorVar(score, isPending) {
+  if (isPending) return 'var(--muted)';
+  if (score >= 60) return 'var(--good)';
+  if (score >= 40) return 'var(--warn)';
+  return 'var(--crit)';
+}
+
+function ringSvg(size, radius, strokeWidth, score, isPending) {
+  const c = 2 * Math.PI * radius;
+  const filled = isPending ? 0 : Math.max(0, Math.min(100, score)) / 100 * c;
+  const cx = size / 2, cy = size / 2;
+  const color = scoreColorVar(score, isPending);
+  return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
+    <circle cx="${cx}" cy="${cy}" r="${radius}" stroke="var(--surface3)" stroke-width="${strokeWidth}" fill="none"/>
+    <circle cx="${cx}" cy="${cy}" r="${radius}" stroke="${color}" stroke-width="${strokeWidth}" fill="none" stroke-dasharray="${filled.toFixed(1)} ${c.toFixed(1)}" stroke-linecap="round"/>
+  </svg>`;
+}
+
 function statusLabel(status) {
   const map = { new: 'Новые', favorite: 'Избранное', applied: 'Отклик', rejected: 'Отклонено', fraud: 'Обман' };
   return map[status] || status || '—';
@@ -132,6 +150,17 @@ async function loadStats() {
         ).join('');
       if (current) distSel.value = current;
     }
+
+    // Update tag filter from topTags
+    const tagSel = document.getElementById('tag-filter');
+    if (tagSel && s.topTags && s.topTags.length) {
+      const current = tagSel.value;
+      tagSel.innerHTML = '<option value="">Все теги</option>' +
+        s.topTags.filter(t => t.name).map(t =>
+          `<option value="${escHtml(t.name)}">${escHtml(t.name)} (${t.count})</option>`
+        ).join('');
+      if (current) tagSel.value = current;
+    }
   } catch (e) {
     console.error('Stats error:', e);
   }
@@ -140,6 +169,7 @@ async function loadStats() {
 // ═══════ VACANCY LIST ═══════
 async function loadVacancies(page = 1) {
   currentPage = page;
+  renderChips();
   const params = new URLSearchParams();
   params.set('page', page);
   params.set('perPage', 30);
@@ -152,8 +182,13 @@ async function loadVacancies(page = 1) {
   const district = document.getElementById('district-filter')?.value;
   if (district) params.set('district', district);
 
+  const tag = document.getElementById('tag-filter')?.value;
+  if (tag) params.set('tag', tag);
+
   const minSalary = document.getElementById('salary-filter')?.value;
+  const hasSalaryOnly = document.getElementById('has-salary-filter')?.checked;
   if (minSalary) params.set('minSalary', minSalary);
+  else if (hasSalaryOnly) params.set('minSalary', 1);
 
   const minScore = document.getElementById('score-filter')?.value;
   if (minScore) params.set('minScore', minScore);
@@ -176,6 +211,54 @@ async function loadVacancies(page = 1) {
   }
 }
 
+// ═══════ ACTIVE FILTER CHIPS ═══════
+function activeFilterList() {
+  const list = [];
+  const district = document.getElementById('district-filter')?.value;
+  if (district) list.push({ key: 'district-filter', label: `📍 ${district}` });
+  const tag = document.getElementById('tag-filter')?.value;
+  if (tag) list.push({ key: 'tag-filter', label: `🏷 ${tag}` });
+  const salary = document.getElementById('salary-filter')?.value;
+  if (salary) list.push({ key: 'salary-filter', label: `от ${fmtN(parseInt(salary, 10))} ₽` });
+  const score = document.getElementById('score-filter')?.value;
+  if (score) list.push({ key: 'score-filter', label: `скор ≥ ${score}` });
+  const hasSalaryOnly = document.getElementById('has-salary-filter')?.checked;
+  if (hasSalaryOnly && !salary) list.push({ key: 'has-salary-filter', label: 'только с ЗП' });
+  const remote = document.getElementById('remote-filter')?.value;
+  if (remote) list.push({ key: 'remote-filter', label: remote === 'true' ? '🌐 удалёнка' : '🏢 офис' });
+  const search = document.getElementById('search-input')?.value;
+  if (search) list.push({ key: 'search-input', label: `«${search}»` });
+  return list;
+}
+
+function renderChips() {
+  const row = document.getElementById('chips-row');
+  if (!row) return;
+  const filters = activeFilterList();
+  if (!filters.length) { row.innerHTML = ''; return; }
+  row.innerHTML = filters.map(f =>
+    `<span class="fchip">${escHtml(f.label)}<button onclick="clearFilter('${f.key}')" title="Убрать">✕</button></span>`
+  ).join('') + `<button class="fchip-clear" onclick="clearAllFilters()">Очистить всё</button>`;
+}
+
+function clearFilter(key) {
+  const el = document.getElementById(key);
+  if (!el) return;
+  if (el.type === 'checkbox') el.checked = false;
+  else el.value = '';
+  loadVacancies(1);
+}
+
+function clearAllFilters() {
+  ['district-filter', 'tag-filter', 'salary-filter', 'score-filter', 'remote-filter', 'search-input'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  const hasSalaryEl = document.getElementById('has-salary-filter');
+  if (hasSalaryEl) hasSalaryEl.checked = false;
+  loadVacancies(1);
+}
+
 function renderList(vacancies) {
   const container = document.getElementById('vacancy-list');
   const empty = document.getElementById('empty-state');
@@ -190,18 +273,18 @@ function renderList(vacancies) {
   container.innerHTML = vacancies.map(v => {
     const isSelected = v.id === selectedId ? 'selected' : '';
     const score = v.aiScore || 0;
-    const scoreCls = scoreClass(score);
+    const isPending = !v.aiVerdict || v.aiVerdict === 'pending';
 
     let statusChip = '';
     if (v.aiVerdict === 'fraud') {
       statusChip = `<span class="chp chp-fr">🚫 Обман</span>`;
     } else if (v.status === 'favorite') {
-      statusChip = `<span class="chp chp-fv">⭐</span>`;
+      statusChip = `<span class="chp chp-fv">⭐ Избранное</span>`;
     } else if (v.status === 'applied') {
-      statusChip = `<span class="chp chp-app">📤</span>`;
+      statusChip = `<span class="chp chp-app">📤 Отклик</span>`;
     } else if (v.status === 'rejected') {
-      statusChip = `<span class="chp chp-rej">❌</span>`;
-    } else if (!v.aiVerdict || v.aiVerdict === 'pending') {
+      statusChip = `<span class="chp chp-rej">❌ Отклонено</span>`;
+    } else if (isPending) {
       statusChip = `<span class="chp chp-nw">Новое</span>`;
     }
 
@@ -213,25 +296,21 @@ function renderList(vacancies) {
       : 'не указана';
 
     return `
-      <div class="vacancy ${isSelected}" onclick="openDetail(${v.id})">
-        <div class="cb ${v._checked ? 'checked' : ''}" onclick="event.stopPropagation(); toggleCheck(${v.id})"></div>
-        <div class="v-main">
-          <div class="v-top">
+      <div class="vacancy ${isSelected}" data-id="${v.id}" onclick="openDetail(${v.id})">
+        <div class="v-top">
+          <div class="v-main">
             <div class="v-title">${escHtml(v.title)}</div>
-            <div class="v-sal ${salClass}">${salText}</div>
+            <div class="v-co">${escHtml(v.company || '')}</div>
           </div>
-          <div class="v-meta">
-            <span>${escHtml(v.company || '')}</span>
-            <span class="dot"></span>
-            <span>${v.isRemote ? '🌐 Удалёнка' : ('📍 ' + (v.district || '—'))}</span>
-            <span class="dot"></span>
-            <span>🕐${formatDate(v.publishedAt || v.createdAt)}</span>
-          </div>
-          <div class="v-footer">
-            <span class="pill ${scoreCls}"><span class="s-dot"></span>${score}</span>
-            ${statusChip}
-            ${tags}
-          </div>
+          <div class="ring">${ringSvg(40, 17, 5, score, isPending)}<span class="n">${isPending ? '···' : score}</span></div>
+        </div>
+        <div class="v-meta">
+          <span class="v-sal ${salClass}">${salText}</span>
+          <span class="chp">${v.isRemote ? '🌐 Удалёнка' : ('📍 ' + (v.district || 'Офис'))}</span>
+        </div>
+        <div class="v-footer">
+          ${statusChip}
+          ${tags}
         </div>
       </div>`;
   }).join('');
@@ -263,7 +342,7 @@ function renderPagination(data) {
 async function openDetail(id) {
   selectedId = id;
   document.querySelectorAll('.vacancy').forEach(el => el.classList.remove('selected'));
-  const card = document.querySelector(`.vacancy[onclick="openDetail(${id})"]`);
+  const card = document.querySelector(`.vacancy[data-id="${id}"]`);
   if (card) card.classList.add('selected');
 
   const detail = document.getElementById('detail-panel');
@@ -282,103 +361,69 @@ async function openDetail(id) {
 function renderDetail(v) {
   const container = document.getElementById('detail-panel');
   const score = v.aiScore || 0;
-  const scoreCls = scoreClass(score);
   const isFraud = v.aiVerdict === 'fraud';
   const isPending = !v.aiVerdict || v.aiVerdict === 'pending';
 
-  // Stats strip
-  const hasSalary = v.salaryFrom || v.salaryTo;
-  const salDisplay = hasSalary
-    ? ((v.salaryFrom && v.salaryTo) ? `${fmtN(v.salaryFrom)}–${fmtN(v.salaryTo)}К` : (v.salaryFrom ? `от ${fmtN(v.salaryFrom)}К` : `до ${fmtN(v.salaryTo)}К`))
-    : 'не указана';
-  const salStatCls = hasSalary ? '' : 'no-data';
-
   // Type tag
   const typeTag = isFraud
-    ? '<div class="dtype fraud">⚠️ Обнаружен скамо-паттерн</div>'
+    ? '<div class="dtype fraud">⚠️ Похоже на обман</div>'
     : `<div class="dtype">${v.isRemote ? '🌐 Удалёнка' : '🏢 Офис'}</div>`;
 
   // Tags
   const tags = (v.tags || []).map(t => `<span class="chp" style="cursor:default">${escHtml(t)}</span>`).join('');
 
-  // AI section
-  // Build ai-section
-  let aiSection;
+  // Hero: ring + headline, colored by verdict/score band
+  let heroCls, heroHead, heroSub;
   if (isFraud) {
-    // Fraud: prominent reason box
-    aiSection = `
+    heroCls = 'crit'; heroHead = 'Похоже на обман'; heroSub = 'Рекомендуем пропустить эту вакансию';
+  } else if (isPending) {
+    heroCls = 'idle'; heroHead = 'Ожидает оценки'; heroSub = 'Появится после следующего запуска анализа';
+  } else if (score >= 60) {
+    heroCls = 'good'; heroHead = 'Отлично подходит'; heroSub = 'Одна из лучших вакансий на сегодня';
+  } else if (score >= 40) {
+    heroCls = 'warn'; heroHead = 'Есть сомнения'; heroSub = 'Подходит частично — читайте обоснование ниже';
+  } else {
+    heroCls = 'crit'; heroHead = 'Не подходит'; heroSub = 'Не соответствует вашему профилю поиска';
+  }
+
+  const heroSection = `
+    <div class="d-hero ${heroCls}">
+      <div class="ring-lg">${ringSvg(62, 26, 6, score, isPending)}<span class="n">${isPending ? '···' : score}</span></div>
+      <div class="txt"><div class="h">${heroHead}</div><div class="s">${heroSub}</div></div>
+    </div>`;
+
+  // Reason: prominent alarm box for fraud, plain paragraph otherwise
+  let reasonSection = '';
+  if (isFraud) {
+    reasonSection = v.aiReason ? `
       <div class="fraud-box">
         <div class="fb-inner">
-          <div class="fb-head"><span class="fb-badge">🚫 SCAM</span><span class="fb-title">Причина определения как обман</span></div>
-          <div class="fb-text">
-            ${v.aiReason ? `<div class="fb-reason"><strong>🔍 Что обнаружил AI:</strong><br>${escHtml(v.aiReason)}</div>` : ''}
-          </div>
+          <div class="fb-head"><span class="fb-badge">СКАМ</span><span class="fb-title">Что обнаружил AI</span></div>
+          <div class="fb-reason">${escHtml(v.aiReason)}</div>
         </div>
-      </div>
-      <div class="ai-line">
-        <span class="ai-sc" style="color:var(--red)">🧠 0/100</span>
-        <span>Verdict: <strong>fraud</strong> · повторный анализ не требуется</span>
-      </div>`;
+      </div>` : '';
   } else if (!isPending && v.aiReason) {
-    // Has AI analysis with reason
-    const verdictMap = { yes: ['verdict-yes', '✓ Подходит'], no: ['verdict-no', '✗ Не подходит'] };
-    const [vdClass, vdText] = verdictMap[v.aiVerdict] || ['verdict-no', v.aiVerdict];
-    aiSection = `
-      <div class="d-ai-box">
-        <div class="d-ai-head">
-          <span class="ai-ico">🧠</span>
-          <span class="ai-title">Анализ AI</span>
-          <div class="d-ai-score" style="color:var(--${score >= 60 ? 'green' : score >= 40 ? 'orange' : 'red'})">${score} / 100</div>
-        </div>
-        <div class="d-ai-body">
-          <div class="d-ai-reason">${escHtml(v.aiReason)}</div>
-          <div class="d-ai-verdict ${vdClass}">${vdText}${v.aiVerdict === 'yes' ? ' (score >= 60)' : ''}</div>
-        </div>
-      </div>`;
-  } else if (!isPending) {
-    aiSection = `
-      <div class="d-ai-box">
-        <div class="d-ai-head">
-          <span class="ai-ico">🧠</span>
-          <span class="ai-title">Анализ AI</span>
-          <div class="d-ai-score" style="color:var(--${score >= 60 ? 'green' : score >= 40 ? 'orange' : 'red'})">${score} / 100</div>
-        </div>
-        <div class="d-ai-body">
-          <div class="d-ai-verdict ${v.aiVerdict === 'yes' ? 'verdict-yes' : 'verdict-no'}">${v.aiVerdict === 'yes' ? '✓ Подходит' : '✗ Не подходит'}</div>
-        </div>
-      </div>`;
-  } else {
-    aiSection = `<div class="d-ai-box"><div class="d-ai-body"><div class="d-ai-verdict verdict-pending">⏳ Ожидает AI-анализа</div></div></div>`;
+    reasonSection = `<div class="d-reason">${escHtml(v.aiReason)}</div>`;
   }
 
   container.innerHTML = `
-    <div class="dh">
-      <div class="db">Все › <span>${escHtml(statusLabel(v.status))}</span></div>
-      ${typeTag}
-      <div class="dtitle">${escHtml(v.title)}</div>
-      <div class="dcomp">
-        🏢 ${escHtml(v.company || '')}
-        <span>·</span>
-        ${v.isRemote ? '🌐 Удалёнка' : ('📍 ' + escHtml(v.district || '—'))}
-        ${v.url ? `· <a class="durl" href="${escHtml(v.url)}" target="_blank">hh.ru ↗</a>` : ''}
-      </div>
+    <div class="db">Все вакансии › <span>${escHtml(statusLabel(v.status))}</span></div>
+    ${typeTag}
+    <div class="dtitle">${escHtml(v.title)}</div>
+    <div class="dcomp">
+      ${escHtml(v.company || '')}
+      ${v.url ? `· <a class="durl" href="${escHtml(v.url)}" target="_blank">hh.ru ↗</a>` : ''}
     </div>
 
-    <div class="d-stats">
-      <div class="ds sal ${salStatCls}"><div class="val">${salDisplay}</div><div class="lbl">Зарплата</div></div>
-      <div class="ds"><div class="val" style="color:var(--${score >= 60 ? 'green' : score >= 40 ? 'orange' : score > 0 ? 'red' : 'muted'});">${score}</div><div class="lbl">Скор AI</div></div>
-      <div class="ds"><div class="val">${escHtml(v.district || (v.isRemote ? 'Удалёнка' : '—'))}</div><div class="lbl">Район</div></div>
-    </div>
+    ${heroSection}
+    ${reasonSection}
 
     <div class="dacts">
       <button class="act act-fav" onclick="setStatus(${v.id}, 'favorite')">⭐ Избранное</button>
-      <button class="act act-app" onclick="setStatus(${v.id}, 'applied')">📤 Отклик</button>
-      <button class="act act-rej" onclick="setStatus(${v.id}, 'rejected')">❌ Отклонить</button>
-      <button class="act act-fra" onclick="setStatus(${v.id}, 'fraud')">🚫 Обман</button>
-      ${v.url ? `<a class="act act-lnk" href="${escHtml(v.url)}" target="_blank">🔗 HH.ru</a>` : ''}
+      <button class="act act-app" onclick="setStatus(${v.id}, 'applied')">Отклик подан</button>
+      <button class="act act-rej" onclick="setStatus(${v.id}, 'rejected')">Не подходит</button>
+      <button class="act act-fra" onclick="setStatus(${v.id}, 'fraud')">🚫 Похоже на обман</button>
     </div>
-
-    ${aiSection}
 
     <div class="d-sec">
       <h3>Детали</h3>
