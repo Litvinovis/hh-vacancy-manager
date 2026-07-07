@@ -205,7 +205,7 @@ class VacancyRepositoryTest {
         saveWithStatus("3", "new");
         saveWithStatus("4", "rejected");
 
-        var counts = vacancyRepo.countByStatus();
+        var counts = vacancyRepo.countByStatus(null);
         // Fraud vacancies have status="new", so "new" group includes them
         assertEquals(2, counts.get("fraud"));  // counted separately by ai_verdict
         assertEquals(3, counts.get("new"));    // 2 frauds (status="new") + 1 new
@@ -214,7 +214,7 @@ class VacancyRepositoryTest {
 
     @Test
     void countByStatus_emptyTable() {
-        var counts = vacancyRepo.countByStatus();
+        var counts = vacancyRepo.countByStatus(null);
         assertNotNull(counts);
     }
 
@@ -306,7 +306,7 @@ class VacancyRepositoryTest {
         Vacancy pending = saveWithStatus("pending-1", "new");
         jdbc.update("UPDATE vacancies SET ai_verdict='pending', ai_score=0 WHERE id=?", pending.getId());
 
-        int count = vacancyRepo.countUnassessed();
+        int count = vacancyRepo.countUnassessed(null);
         // Should count pending but NOT fraud (which has verdict=fraud, score=0)
         assertTrue(count >= 1);
         // Verify fraud is not counted

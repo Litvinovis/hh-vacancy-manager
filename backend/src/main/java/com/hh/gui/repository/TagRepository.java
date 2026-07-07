@@ -52,10 +52,16 @@ public class TagRepository {
             });
     }
 
-    public List<Object[]> topTags(int limit) {
+    public List<Object[]> topTags(int limit, Long userId) {
+        RowMapper<Object[]> mapper = (rs, rowNum) -> new Object[]{rs.getString("name"), rs.getInt("cnt")};
+        if (userId != null) {
+            return jdbc.query(
+                "SELECT t.name, COUNT(*) as cnt FROM tags t JOIN vacancies v ON v.id = t.vacancy_id " +
+                "WHERE v.user_id = ? GROUP BY t.name ORDER BY cnt DESC LIMIT ?",
+                mapper, userId, limit);
+        }
         return jdbc.query(
             "SELECT name, COUNT(*) as cnt FROM tags GROUP BY name ORDER BY cnt DESC LIMIT ?",
-            (rs, rowNum) -> new Object[]{rs.getString("name"), rs.getInt("cnt")},
-            limit);
+            mapper, limit);
     }
 }

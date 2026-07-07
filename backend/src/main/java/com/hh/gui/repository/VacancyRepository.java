@@ -434,11 +434,13 @@ public class VacancyRepository {
     }
 
     /**
-     * Count pending (not yet AI-analyzed) vacancies.
+     * Count pending (not yet AI-analyzed) vacancies, scoped to userId unless null (admin/global).
      */
-    public int countPending() {
-        Integer count = jdbc.queryForObject(
-            "SELECT COUNT(*) FROM vacancies WHERE ai_verdict = 'pending'", Integer.class);
+    public int countPending(Long userId) {
+        String sql = "SELECT COUNT(*) FROM vacancies WHERE ai_verdict = 'pending'" + (userId != null ? " AND user_id = ?" : "");
+        Integer count = userId != null
+            ? jdbc.queryForObject(sql, Integer.class, userId)
+            : jdbc.queryForObject(sql, Integer.class);
         return count != null ? count : 0;
     }
 
@@ -525,48 +527,60 @@ public class VacancyRepository {
         jdbc.update("UPDATE vacancies SET criteria_hash=? WHERE id=?", criteriaHash, id);
     }
 
-    // Stats
-    public Map<String, Integer> countByStatus() {
+    // Stats — every method below is scoped to userId unless null (admin sees everything)
+    public Map<String, Integer> countByStatus(Long userId) {
+        String scope = userId != null ? " AND user_id = ?" : "";
         Map<String, Integer> result = new LinkedHashMap<>();
-        jdbc.query("SELECT status, COUNT(*) as cnt FROM vacancies GROUP BY status", rs -> {
-            result.put(rs.getString("status"), rs.getInt("cnt"));
-        });
-        // Add pending (unassessed) count
-        Integer pending = jdbc.queryForObject(
-            "SELECT COUNT(*) FROM vacancies WHERE ai_verdict = 'pending'", Integer.class);
-        result.put("pending", pending != null ? pending : 0);
-        // Add fraud count
-        Integer fraud = jdbc.queryForObject(
-            "SELECT COUNT(*) FROM vacancies WHERE ai_verdict = 'fraud'", Integer.class);
-        result.put("fraud", fraud != null ? fraud : 0);
-        // Add truly new count: status='new' AND ai_verdict='pending' (not yet AI-analyzed)
-        Integer newPending = jdbc.queryForObject(
-            "SELECT COUNT(*) FROM vacancies WHERE status = 'new' AND ai_verdict = 'pending'", Integer.class);
-        result.put("newPending", newPending != null ? newPending : 0);
+        if (userId != null) {
+            jdbc.query("SELECT status, COUNT(*) as cnt FROM vacancies WHERE user_id = ? GROUP BY status",
+                (rs) -> { result.put(rs.getString("status"), rs.getInt("cnt")); }, userId);
+        } else {
+            jdbc.query("SELECT status, COUNT(*) as cnt FROM vacancies GROUP BY status",
+                (rs) -> { result.put(rs.getString("status"), rs.getInt("cnt")); });
+        }
+
+        Integer pending = queryCount("SELECT COUNT(*) FROM vacancies WHERE ai_verdict = 'pending'" + scope, userId);
+        result.put("pending", pending);
+        Integer fraud = queryCount("SELECT COUNT(*) FROM vacancies WHERE ai_verdict = 'fraud'" + scope, userId);
+        result.put("fraud", fraud);
+        Integer newPending = queryCount("SELECT COUNT(*) FROM vacancies WHERE status = 'new' AND ai_verdict = 'pending'" + scope, userId);
+        result.put("newPending", newPending);
         return result;
     }
 
-    public int countTotal() {
-        Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM vacancies", Integer.class);
+    private int queryCount(String sql, Long userId) {
+        Integer count = userId != null
+            ? jdbc.queryForObject(sql, Integer.class, userId)
+            : jdbc.queryForObject(sql, Integer.class);
         return count != null ? count : 0;
     }
 
-    public Double avgScoreNew() {
-        return jdbc.queryForObject(
-            "SELECT AVG(ai_score) FROM vacancies WHERE status='new'", Double.class);
+    public int countTotal(Long userId) {
+        String sql = "SELECT COUNT(*) FROM vacancies" + (userId != null ? " WHERE user_id = ?" : "");
+        return queryCount(sql, userId);
     }
 
-    public Double avgSalaryNew() {
-        return jdbc.queryForObject(
-            "SELECT AVG(CASE WHEN salary_to > 0 THEN salary_to ELSE salary_from END) " +
-            "FROM vacancies WHERE (salary_to > 0 OR salary_from > 0) AND status='new'", Double.class);
+    public Double avgScoreNew(Long userId) {
+        String sql = "SELECT AVG(ai_score) FROM vacancies WHERE status='new'" + (userId != null ? " AND user_id = ?" : "");
+        return userId != null
+            ? jdbc.queryForObject(sql, Double.class, userId)
+            : jdbc.queryForObject(sql, Double.class);
     }
 
-    public int countAppliedLast7Days() {
+    public Double avgSalaryNew(Long userId) {
+        String sql = "SELECT AVG(CASE WHEN salary_to > 0 THEN salary_to ELSE salary_from END) " +
+            "FROM vacancies WHERE (salary_to > 0 OR salary_from > 0) AND status='new'" + (userId != null ? " AND user_id = ?" : "");
+        return userId != null
+            ? jdbc.queryForObject(sql, Double.class, userId)
+            : jdbc.queryForObject(sql, Double.class);
+    }
+
+    public int countAppliedLast7Days(Long userId) {
         String sevenDaysAgo = Instant.now().minusSeconds(7 * 24 * 3600).toString();
-        Integer count = jdbc.queryForObject(
-            "SELECT COUNT(*) FROM vacancies WHERE status='applied' AND applied_at > ?",
-            Integer.class, sevenDaysAgo);
+        String sql = "SELECT COUNT(*) FROM vacancies WHERE status='applied' AND applied_at > ?" + (userId != null ? " AND user_id = ?" : "");
+        Integer count = userId != null
+            ? jdbc.queryForObject(sql, Integer.class, sevenDaysAgo, userId)
+            : jdbc.queryForObject(sql, Integer.class, sevenDaysAgo);
         return count != null ? count : 0;
     }
 
@@ -584,21 +598,19 @@ public class VacancyRepository {
     /**
      * Count vacancies eligible for re-analysis.
      */
-    public int countRescanable() {
-        Integer count = jdbc.queryForObject(
-            "SELECT COUNT(*) FROM vacancies WHERE ai_verdict NOT IN ('no', 'fraud') AND (status IS NULL OR status != 'rejected')",
-            Integer.class);
-        return count != null ? count : 0;
+    public int countRescanable(Long userId) {
+        String sql = "SELECT COUNT(*) FROM vacancies WHERE ai_verdict NOT IN ('no', 'fraud') AND (status IS NULL OR status != 'rejected')"
+            + (userId != null ? " AND user_id = ?" : "");
+        return queryCount(sql, userId);
     }
 
     /**
      * Count unassessed vacancies (ai_score = 0 or no verdict).
      */
-    public int countUnassessed() {
-        Integer count = jdbc.queryForObject(
-            "SELECT COUNT(*) FROM vacancies WHERE (ai_score = 0 OR ai_verdict IS NULL OR ai_verdict = '') AND ai_verdict != 'fraud'",
-            Integer.class);
-        return count != null ? count : 0;
+    public int countUnassessed(Long userId) {
+        String sql = "SELECT COUNT(*) FROM vacancies WHERE (ai_score = 0 OR ai_verdict IS NULL OR ai_verdict = '') AND ai_verdict != 'fraud'"
+            + (userId != null ? " AND user_id = ?" : "");
+        return queryCount(sql, userId);
     }
 
     /**
@@ -616,26 +628,34 @@ public class VacancyRepository {
             now, person, searchName);
     }
 
-    public List<Map<String, Object>> topDistricts(int limit) {
-        return jdbc.queryForList(
-            "SELECT district, COUNT(*) as cnt FROM vacancies WHERE district != '' " +
-            "GROUP BY district ORDER BY cnt DESC LIMIT ?", limit);
+    public List<Map<String, Object>> topDistricts(int limit, Long userId) {
+        String sql = "SELECT district, COUNT(*) as cnt FROM vacancies WHERE district != ''"
+            + (userId != null ? " AND user_id = ?" : "") + " GROUP BY district ORDER BY cnt DESC LIMIT ?";
+        return userId != null
+            ? jdbc.queryForList(sql, userId, limit)
+            : jdbc.queryForList(sql, limit);
     }
 
-    public List<Map<String, Object>> listPeople() {
-        return jdbc.queryForList(
-            "SELECT person, COUNT(*) as cnt FROM vacancies WHERE person != '' " +
-            "GROUP BY person ORDER BY person");
+    public List<Map<String, Object>> listPeople(Long userId) {
+        String sql = "SELECT person, COUNT(*) as cnt FROM vacancies WHERE person != ''"
+            + (userId != null ? " AND user_id = ?" : "") + " GROUP BY person ORDER BY person";
+        return userId != null ? jdbc.queryForList(sql, userId) : jdbc.queryForList(sql);
     }
 
-    public List<Map<String, Object>> listSearches(String person) {
+    public List<Map<String, Object>> listSearches(String person, Long userId) {
+        List<String> conditions = new ArrayList<>();
+        List<Object> params = new ArrayList<>();
+        conditions.add("search_name != ''");
         if (person != null && !person.isEmpty()) {
-            return jdbc.queryForList(
-                "SELECT search_name, COUNT(*) as cnt FROM vacancies WHERE search_name != '' AND person = ? " +
-                "GROUP BY search_name ORDER BY search_name", person);
+            conditions.add("person = ?");
+            params.add(person);
         }
-        return jdbc.queryForList(
-            "SELECT search_name, COUNT(*) as cnt FROM vacancies WHERE search_name != '' " +
-            "GROUP BY search_name ORDER BY search_name");
+        if (userId != null) {
+            conditions.add("user_id = ?");
+            params.add(userId);
+        }
+        String sql = "SELECT search_name, COUNT(*) as cnt FROM vacancies WHERE "
+            + String.join(" AND ", conditions) + " GROUP BY search_name ORDER BY search_name";
+        return jdbc.queryForList(sql, params.toArray());
     }
 }
