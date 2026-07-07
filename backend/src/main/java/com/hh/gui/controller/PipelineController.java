@@ -101,6 +101,60 @@ public class PipelineController {
     }
 
     /**
+     * EXPERIMENTAL, manual-trigger only — discover candidates from an hh.ru
+     * search-results URL the caller built themselves (via hh.ru's own filter UI)
+     * instead of the search's configured RSS queries, then run them through the
+     * normal scrape → AI-analyze → notify steps scored against that search's own
+     * criteria. Never invoked by the scheduler.
+     * POST /api/pipeline/discover-from-url  body: {searchId, url, maxPages?}
+     */
+    @PostMapping("/pipeline/discover-from-url")
+    public ResponseEntity<Map<String, Object>> discoverFromUrl(
+            @RequestBody Map<String, Object> body,
+            @RequestAttribute("currentUser") User currentUser) {
+        Object searchIdRaw = body.get("searchId");
+        String url = body.get("url") != null ? body.get("url").toString().trim() : null;
+        if (searchIdRaw == null || url == null || url.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Укажите searchId и url"));
+        }
+        Long searchId;
+        try {
+            searchId = Long.valueOf(searchIdRaw.toString());
+        } catch (NumberFormatException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Некорректный searchId"));
+        }
+        int maxPages = 3;
+        if (body.get("maxPages") instanceof Number n) maxPages = n.intValue();
+
+        Optional<SearchJob> jobOpt = profileFactory.buildForSearchId(searchId);
+        if (jobOpt.isEmpty()) {
+            return ResponseEntity.status(404).body(Map.of("error", "Поиск не найден"));
+        }
+        SearchJob job = jobOpt.get();
+        if (!currentUser.isAdmin() && !currentUser.getId().equals(job.userId)) {
+            return ResponseEntity.status(404).body(Map.of("error", "Поиск не найден"));
+        }
+
+        log.info("Запуск поиска по ссылке для {} · {}: {}", job.personName, job.searchName, url);
+        try {
+            PipelineResult r = pipelineService.runFullPipelineFromUrl(job, url, maxPages);
+            Map<String, Object> response = new LinkedHashMap<>();
+            response.put("status", "ok");
+            response.put("collected", r.collected);
+            response.put("newVacancies", r.newVacancies);
+            response.put("analyzed", r.analyzed);
+            response.put("approved", r.approved);
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            log.error("Ошибка поиска по ссылке: {}", e.getMessage(), e);
+            Map<String, Object> error = new LinkedHashMap<>();
+            error.put("status", "error");
+            error.put("message", e.getMessage());
+            return ResponseEntity.internalServerError().body(error);
+        }
+    }
+
+    /**
      * Re-analyze all eligible vacancies (not rejected by AI or user), for every
      * configured (person, search) or just one.
      * POST /api/pipeline/reanalyze[?person=...&searchName=...]

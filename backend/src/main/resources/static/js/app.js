@@ -1053,10 +1053,53 @@ function cabinetSearchCardHtml(s) {
           <textarea class="provider-textarea cab-ai-notes" placeholder="Например: близость к дому важнее интересности задач">${escHtml(s.aiNotes || '')}</textarea>
         </div>
       </div>
+      ${id ? urlDiscoverySectionHtml() : ''}
       <div class="modal-foot" style="padding:10px 12px">
         <button class="btn btn-prim" onclick="saveCabinetSearch(this)" style="width:100%">💾 Сохранить поиск</button>
       </div>
     </div>`;
+}
+
+function urlDiscoverySectionHtml() {
+  return `
+    <div class="provider-body" style="grid-template-columns:1fr;border-top:1px solid var(--border);padding-top:12px">
+      <div class="provider-field provider-field-full">
+        <label>🧪 Поиск по ссылке (экспериментально) — вставьте ссылку на результаты поиска hh.ru, собранную с фильтрами в браузере; найденные вакансии оценятся по критериям этого поиска</label>
+        <input class="provider-inp cab-url-discover" placeholder="https://hh.ru/search/vacancy?text=...&amp;area=99&amp;...">
+      </div>
+      <div class="provider-field" style="max-width:160px">
+        <label>Страниц (≈50 вак./стр.)</label>
+        <input class="provider-inp cab-url-discover-pages" type="number" min="1" max="10" value="3">
+      </div>
+      <button class="btn btn-second cab-url-discover-btn" onclick="runUrlDiscovery(this)" style="width:100%">🔎 Найти и оценить по ссылке</button>
+    </div>`;
+}
+
+async function runUrlDiscovery(btn) {
+  const card = btn.closest('.provider-card');
+  if (!card) return;
+  const searchId = card.dataset.searchId;
+  const url = card.querySelector('.cab-url-discover')?.value?.trim();
+  const maxPages = parseInt(card.querySelector('.cab-url-discover-pages')?.value) || 3;
+  if (!url) { toast('✗ Вставьте ссылку на поиск hh.ru', 'err'); return; }
+
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '⏳ Ищу и оцениваю...';
+  try {
+    const result = await api('/pipeline/discover-from-url', {
+      method: 'POST',
+      body: JSON.stringify({ searchId: parseInt(searchId), url, maxPages }),
+    });
+    toast(`✓ Найдено: ${result.newVacancies}, оценено: ${result.analyzed}, одобрено: ${result.approved}`, 'ok');
+    loadVacancies();
+    loadStats();
+  } catch (e) {
+    toast('✗ ' + e.message, 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalText;
+  }
 }
 
 function addCabinetSearchCard() {

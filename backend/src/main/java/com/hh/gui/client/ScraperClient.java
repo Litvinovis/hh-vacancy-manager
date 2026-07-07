@@ -13,6 +13,7 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -103,5 +104,64 @@ public class ScraperClient {
     private static Integer asInt(Object o) {
         if (o instanceof Number n) return n.intValue();
         return null;
+    }
+
+    /** One vacancy card as listed on an hh.ru search-results page (see /search on the sidecar). */
+    public record SearchHit(String hhId, String title, String employerName, String salaryRawText, String address, String url) {}
+
+    public record SearchPageResult(boolean ok, String reason, List<SearchHit> items, String lastPageLabel) {
+        static SearchPageResult failure(String reason) {
+            return new SearchPageResult(false, reason, List.of(), null);
+        }
+    }
+
+    /**
+     * EXPERIMENTAL, manual-trigger only (see VacancyPipelineService.discoverFromUrl) —
+     * drives a real hh.ru search-results page (a URL the caller built themselves using
+     * hh.ru's own filter UI) through the same headless-browser session used for
+     * /scrape, instead of the 20-results-no-pagination RSS feed HhApiClient uses for
+     * the normal automated discovery.
+     */
+    public SearchPageResult searchByUrl(String searchUrl, int page) {
+        try {
+            String u = scraperBaseUrl + "/search?url=" + URLEncoder.encode(searchUrl, StandardCharsets.UTF_8)
+                + "&page=" + page;
+            HttpURLConnection conn = (HttpURLConnection) new URL(u).openConnection();
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(10000);
+            conn.setReadTimeout(runtimeConfig.getHttpReadTimeoutMs() > 0 ? runtimeConfig.getHttpReadTimeoutMs() : 30000);
+
+            int code = conn.getResponseCode();
+            String body;
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(
+                    code >= 400 ? conn.getErrorStream() : conn.getInputStream(), StandardCharsets.UTF_8))) {
+                StringBuilder sb = new StringBuilder();
+                String line;
+                while ((line = reader.readLine()) != null) sb.append(line);
+                body = sb.toString();
+            }
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> json = mapper.readValue(body, Map.class);
+            if (!Boolean.TRUE.equals(json.get("ok"))) {
+                String reason = String.valueOf(json.getOrDefault("reason", "unknown"));
+                log.warn("Поиск по ссылке не удался (страница {}): {}", page, reason);
+                return SearchPageResult.failure(reason);
+            }
+
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> rawItems = (List<Map<String, Object>>) json.getOrDefault("items", List.of());
+            List<SearchHit> items = new ArrayList<>();
+            for (Map<String, Object> item : rawItems) {
+                String hhId = str(item.get("hhId"));
+                if (hhId == null || hhId.isBlank()) continue;
+                items.add(new SearchHit(hhId, str(item.get("title")), str(item.get("employerName")),
+                    str(item.get("salaryRawText")), str(item.get("address")), str(item.get("url"))));
+            }
+            return new SearchPageResult(true, null, items, str(json.get("lastPageLabel")));
+        } catch (Exception e) {
+            log.error("Ошибка обращения к scraper-сервису (поиск по ссылке, страница {}): {}", page, e.getMessage());
+            return SearchPageResult.failure("client_error: " + e.getMessage());
+        }
     }
 }

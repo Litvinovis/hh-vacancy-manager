@@ -84,6 +84,89 @@ function parseSalary(rawText) {
   return { salaryFrom, salaryTo, currency, gross };
 }
 
+// Search results are only ever fetched from hh.ru itself — a caller-supplied
+// `url` still has to pass this check before the browser will navigate to it,
+// so this endpoint can't be turned into an open fetch proxy for arbitrary hosts.
+const ALLOWED_SEARCH_HOST = /(^|\.)hh\.ru$/i;
+
+/**
+ * EXPERIMENTAL — wired into the Java pipeline only via the explicit
+ * "discover from URL" trigger (VacancyPipelineService.discoverFromUrl), never
+ * the scheduled/automatic run. RSS discovery (HhApiClient.fetchRss) caps out
+ * at 20 results per query with no pagination; this drives a real search on
+ * hh.ru like a person typing a query (or pasting a URL they built themselves
+ * with hh.ru's own filter UI), which returns ~50 results per page with
+ * pagination (dozens of pages for a broad query).
+ */
+async function searchVacancies({ url: rawUrl, text, area, page: pageNum, schedule, salary }) {
+  const b = await getBrowser();
+  const context = await b.newContext({
+    userAgent:
+      'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    locale: 'ru-RU',
+  });
+  const page = await context.newPage();
+  try {
+    let url;
+    if (rawUrl) {
+      let parsed;
+      try {
+        parsed = new URL(rawUrl);
+      } catch (e) {
+        return { ok: false, reason: 'bad_url' };
+      }
+      if (!ALLOWED_SEARCH_HOST.test(parsed.hostname)) {
+        return { ok: false, reason: 'host_not_allowed' };
+      }
+      if (pageNum) parsed.searchParams.set('page', pageNum);
+      url = parsed.toString();
+    } else {
+      url = `https://hh.ru/search/vacancy?text=${encodeURIComponent(text)}&area=${encodeURIComponent(area)}&page=${encodeURIComponent(pageNum)}`;
+      if (schedule) url += `&schedule=${encodeURIComponent(schedule)}`;
+      if (salary) url += `&salary=${encodeURIComponent(salary)}`;
+    }
+
+    const resp = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
+    const status = resp ? resp.status() : 0;
+    if (status >= 400) return { ok: false, reason: `http_${status}` };
+
+    await page.waitForTimeout(800); // let the client-side app finish rendering result cards
+
+    const items = await page.$$eval('[data-qa="vacancy-serp__vacancy"]', (cards) =>
+      cards.map((c) => {
+        const idEl = c.querySelector('[id]');
+        const titleLink = c.querySelector('[data-qa="serp-item__title"]');
+        const titleText = c.querySelector('[data-qa="serp-item__title-text"]');
+        const salaryEl = c.querySelector('[data-qa="vacancy-serp__vacancy-compensation"]');
+        const employerEl = c.querySelector('[data-qa="vacancy-serp__vacancy-employer-text"]');
+        const addrEl = c.querySelector('[data-qa="vacancy-serp__vacancy-address"]');
+        return {
+          hhId: idEl ? idEl.id : null,
+          title: titleText ? titleText.textContent.trim() : null,
+          employerName: employerEl ? employerEl.textContent.trim() : null,
+          salaryRawText: salaryEl ? salaryEl.textContent.trim() : null,
+          address: addrEl ? addrEl.textContent.trim() : null,
+          url: titleLink ? titleLink.getAttribute('href') : null,
+        };
+      })
+    );
+
+    const pagerLabels = await page.locator('[data-qa="pager-page"]').allTextContents().catch(() => []);
+    const lastPageLabel = pagerLabels.length ? pagerLabels[pagerLabels.length - 1] : null;
+
+    return {
+      ok: true,
+      items: items.filter((i) => i.hhId),
+      lastPageLabel,
+    };
+  } catch (e) {
+    return { ok: false, reason: `error: ${e.message}` };
+  } finally {
+    await page.close().catch(() => {});
+    await context.close().catch(() => {});
+  }
+}
+
 async function scrapeVacancy(hhId) {
   const b = await getBrowser();
   const context = await b.newContext({
@@ -191,6 +274,31 @@ const server = http.createServer((req, res) => {
     }
 
     enqueue(() => scrapeVacancy(hhId))
+      .then((result) => {
+        res.writeHead(result.ok ? 200 : 502, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(result));
+      })
+      .catch((e) => {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, reason: `unhandled: ${e.message}` }));
+      });
+    return;
+  }
+
+  if (url.pathname === '/search') {
+    const rawUrl = url.searchParams.get('url');
+    const text = url.searchParams.get('text');
+    if (!rawUrl && !text) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, reason: 'missing_text_or_url' }));
+      return;
+    }
+    const area = url.searchParams.get('area') || '113';
+    const pageNum = url.searchParams.get('page') || '0';
+    const schedule = url.searchParams.get('schedule') || '';
+    const salary = url.searchParams.get('salary') || '';
+
+    enqueue(() => searchVacancies({ url: rawUrl, text, area, page: pageNum, schedule, salary }))
       .then((result) => {
         res.writeHead(result.ok ? 200 : 502, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(result));
