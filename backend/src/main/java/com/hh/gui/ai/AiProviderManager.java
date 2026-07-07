@@ -1,18 +1,19 @@
 package com.hh.gui.ai;
 
+import com.hh.gui.config.AiProviderConfig;
 import com.hh.gui.config.RuntimeConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import java.util.List;
+
 /**
- * Manages AI provider selection with automatic fallback.
+ * Manages a chain of AI providers with automatic fallback.
  *
- * Provider chain:
- *   1. Primary (OpenRouter or configured main provider)
- *   2. Fallback (Grok/xAI) — used when primary returns 429 or fails
- *   3. Cooldown — if both fail, stop making requests for a configurable period
+ * Providers are configured in RuntimeConfig as an ordered list.
+ * On 429 (rate limit) the manager advances to the next provider.
+ * If all providers are exhausted, enters cooldown.
  */
 @Component
 public class AiProviderManager {
@@ -21,30 +22,10 @@ public class AiProviderManager {
 
     public enum ProviderState { PRIMARY, FALLBACK, COOLDOWN }
 
-    @Value("${app.ai.api-url:https://openrouter.ai/api/v1/chat/completions}")
-    private String primaryUrl;
-
-    @Value("${app.ai.api-key:}")
-    private String primaryKey;
-
-    @Value("${app.ai.model:openrouter/auto}")
-    private String primaryModel;
-
-    @Value("${app.ai.fallback-url:https://api.x.ai/v1/chat/completions}")
-    private String fallbackUrl;
-
-    @Value("${app.ai.fallback-key:}")
-    private String fallbackKey;
-
-    @Value("${app.ai.fallback-model:grok-3-mini}")
-    private String fallbackModel;
-
-    @Value("${app.ai.provider:auto}")
-    private String configuredProvider;
-
     private final RuntimeConfig runtimeConfig;
     private final AiMetrics metrics;
     private ProviderState state = ProviderState.PRIMARY;
+    private volatile int currentIndex = 0;
     private volatile long cooldownUntil = 0;
 
     public AiProviderManager(RuntimeConfig runtimeConfig, AiMetrics metrics) {
@@ -52,90 +33,98 @@ public class AiProviderManager {
         this.metrics = metrics;
     }
 
-    /** Returns true if fallback provider is configured. */
-    public boolean hasFallback() {
-        return fallbackKey != null && !fallbackKey.isBlank()
-            && fallbackUrl != null && !fallbackUrl.isBlank();
+    /** Get the current active provider config. */
+    private AiProviderConfig getCurrentProvider() {
+        List<AiProviderConfig> providers = getActiveProviders();
+        if (providers.isEmpty()) return null;
+        if (currentIndex >= providers.size()) currentIndex = 0;
+        return providers.get(currentIndex);
     }
 
-    /** Returns true if primary provider is configured. */
+    /** Get the next provider (for fallback), or null if current is last. */
+    private AiProviderConfig getNextProvider() {
+        List<AiProviderConfig> providers = getActiveProviders();
+        if (providers.isEmpty()) return null;
+        int next = currentIndex + 1;
+        if (next >= providers.size()) return null;
+        return providers.get(next);
+    }
+
+    private List<AiProviderConfig> getActiveProviders() {
+        List<AiProviderConfig> all = runtimeConfig.getAiProviders();
+        // Filter out providers without a configured key
+        return all.stream()
+            .filter(p -> p.getApiKey() != null && !p.getApiKey().isBlank())
+            .toList();
+    }
+
+    /** Returns the total number of configured (active) providers. */
+    public int getProviderCount() {
+        return getActiveProviders().size();
+    }
+
     public boolean hasPrimary() {
-        return primaryKey != null && !primaryKey.isBlank();
+        return getProviderCount() > 0;
     }
 
-    /**
-     * Get the current API endpoint URL based on provider state.
-     */
+    /** Returns true if there is a next provider to fall back to. */
+    public boolean hasFallback() {
+        List<AiProviderConfig> providers = getActiveProviders();
+        return currentIndex + 1 < providers.size();
+    }
+
     public String getCurrentUrl() {
         resolveState();
-        return switch (state) {
-            case PRIMARY, COOLDOWN -> primaryUrl;
-            case FALLBACK -> hasFallback() ? fallbackUrl : primaryUrl;
-        };
+        AiProviderConfig p = getCurrentProvider();
+        return p != null ? p.getUrl() : "";
     }
 
-    /**
-     * Get the current API key based on provider state.
-     */
     public String getCurrentKey() {
         resolveState();
-        return switch (state) {
-            case PRIMARY, COOLDOWN -> primaryKey;
-            case FALLBACK -> hasFallback() ? fallbackKey : primaryKey;
-        };
+        AiProviderConfig p = getCurrentProvider();
+        return p != null ? p.getApiKey() : "";
     }
 
-    /**
-     * Get the current model name based on provider state.
-     */
     public String getCurrentModel() {
         resolveState();
-        return switch (state) {
-            case PRIMARY, COOLDOWN -> primaryModel;
-            case FALLBACK -> hasFallback() ? fallbackModel : primaryModel;
-        };
+        AiProviderConfig p = getCurrentProvider();
+        return p != null ? p.getModel() : "";
     }
 
     /** Get the name of the currently active provider. */
     public String getCurrentProviderName() {
         resolveState();
-        return switch (state) {
-            case PRIMARY -> detectProviderName(primaryUrl);
-            case FALLBACK -> detectProviderName(fallbackUrl);
-            case COOLDOWN -> detectProviderName(fallbackUrl) + " (cooldown)";
-        };
-    }
-
-    /** Detect provider name from URL. */
-    private static String detectProviderName(String url) {
-        if (url == null) return "unknown";
-        String u = url.toLowerCase();
-        if (u.contains("github")) return "github-models";
-        if (u.contains("x.ai")) return "grok";
-        if (u.contains("openrouter")) return "openrouter";
-        if (u.contains("groq")) return "groq";
-        return "custom";
+        if (state == ProviderState.COOLDOWN) {
+            AiProviderConfig p = getCurrentProvider();
+            String name = p != null ? p.getName() : "unknown";
+            return name + " (cooldown)";
+        }
+        AiProviderConfig p = getCurrentProvider();
+        return p != null ? p.getName() : "unknown";
     }
 
     /**
-     * Switch to fallback provider after 429 from primary.
+     * Switch to the next provider in the chain.
+     * If at the end of the list, enter cooldown.
      */
     public void switchToFallback() {
         if (hasFallback()) {
-            if (state != ProviderState.FALLBACK) {
-                log.warn("Primary provider rate limited (429). Switching to fallback {}.", detectProviderName(fallbackUrl));
-                metrics.recordRateLimit(detectProviderName(primaryUrl));
-                state = ProviderState.FALLBACK;
-            }
+            String currentName = getCurrentProviderName();
+            currentIndex++;
+            String nextName = getCurrentProviderName();
+            log.warn("Провайдер {} rate limited (429). Переключаемся на {}.", currentName, nextName);
+            metrics.recordRateLimit(detectProviderName(currentName));
+            state = ProviderState.FALLBACK;
         } else {
-            log.warn("Primary provider (429) but no fallback configured. Entering cooldown.");
-            metrics.recordRateLimit(detectProviderName(primaryUrl));
+            String currentName = getCurrentProviderName();
+            log.warn("Последний провайдер {} (429), fallback недоступен. Входим в cooldown.", currentName);
+            metrics.recordRateLimit(detectProviderName(currentName));
             enterCooldown();
         }
     }
 
     /**
-     * If both providers failed, enter cooldown.
+     * If all providers failed, enter cooldown.
      */
     public void enterCooldown() {
         state = ProviderState.COOLDOWN;
@@ -151,9 +140,9 @@ public class AiProviderManager {
         cal.set(java.util.Calendar.SECOND, 0);
         cal.set(java.util.Calendar.MILLISECOND, 0);
         cooldownUntil = cal.getTimeInMillis();
-        log.warn("AI providers exhausted. Entering cooldown until " +
-            new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm").format(new java.util.Date(cooldownUntil)) +
-            " (hours=" + hours + ")");
+        log.warn("AI провайдеры исчерпаны. Cooldown до {} (hours={})",
+            new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm").format(new java.util.Date(cooldownUntil)),
+            hours);
     }
 
     /** Check if currently in cooldown. */
@@ -167,25 +156,40 @@ public class AiProviderManager {
         return cooldownUntil;
     }
 
-    /** Reset to primary provider (e.g., after manual intervention). */
+    /** Reset to the first provider in the list. */
     public void reset() {
+        currentIndex = 0;
         state = ProviderState.PRIMARY;
         cooldownUntil = 0;
-        log.info("AI provider reset to primary");
+        log.info("AI провайдер сброшен на первый в списке");
     }
 
-    /** Manual force to fallback. */
-    public void forceFallback() {
-        if (hasFallback()) {
-            state = ProviderState.FALLBACK;
-            log.info("AI provider manually switched to fallback (Grok)");
+    /** Manual force to a specific provider by index. */
+    public void forceProvider(int index) {
+        List<AiProviderConfig> providers = getActiveProviders();
+        if (index >= 0 && index < providers.size()) {
+            currentIndex = index;
+            state = ProviderState.PRIMARY;
+            log.info("AI провайдер принудительно переключён на: {}", providers.get(index).getName());
         }
     }
 
-    /** Get current provider state. */
+    /** Force fallback to next provider. */
+    public void forceFallback() {
+        if (hasFallback()) {
+            currentIndex++;
+            state = ProviderState.FALLBACK;
+            log.info("AI провайдер принудительно переключён на fallback: {}", getCurrentProviderName());
+        }
+    }
+
     public ProviderState getState() {
         resolveState();
         return state;
+    }
+
+    public int getCurrentIndex() {
+        return currentIndex;
     }
 
     public String getStateLabel() {
@@ -193,40 +197,55 @@ public class AiProviderManager {
             return "cooldown-until-" + new java.text.SimpleDateFormat("HH:mm").format(new java.util.Date(cooldownUntil));
         }
         return switch (state) {
-            case PRIMARY -> getProviderLabel(false);
-            case FALLBACK -> getProviderLabel(true);
+            case PRIMARY -> getProviderLabel(currentIndex);
+            case FALLBACK -> getProviderLabel(currentIndex);
             case COOLDOWN -> "cooldown";
         };
     }
 
-    private String getProviderLabel(boolean isFallback) {
-        String url = isFallback ? fallbackUrl : primaryUrl;
-        String model = isFallback ? fallbackModel : primaryModel;
-        String shortName = detectProviderName(url);
+    private String getProviderLabel(int index) {
+        List<AiProviderConfig> providers = getActiveProviders();
+        if (index >= providers.size()) return "unknown";
+        AiProviderConfig p = providers.get(index);
+        String shortName = p.getName();
+        String model = p.getModel();
         if (model != null && !model.isBlank()) {
-            // Short model name
             String[] parts = model.split("/");
-            String shortModel = parts[parts.length - 1].replace("-3-mini", "").replace("-2-vision", "");
+            String shortModel = parts[parts.length - 1]
+                .replace("-3-mini", "")
+                .replace("-2-vision", "");
             return shortName + "/" + shortModel;
         }
         return shortName;
     }
 
+    /** Detect provider name from a name string or URL. */
+    private static String detectProviderName(String name) {
+        if (name == null) return "unknown";
+        String n = name.toLowerCase();
+        if (n.contains("github")) return "github-models";
+        if (n.contains("x.ai")) return "grok";
+        if (n.contains("openrouter")) return "openrouter";
+        if (n.contains("groq")) return "groq";
+        return n.isBlank() ? "unknown" : name;
+    }
+
     private void resolveState() {
-        // If configured to use only primary
-        if ("primary".equalsIgnoreCase(configuredProvider)) {
-            state = ProviderState.PRIMARY;
+        // If configured to use only one specific provider
+        List<AiProviderConfig> providers = getActiveProviders();
+        if (providers.isEmpty()) {
+            state = ProviderState.COOLDOWN;
             return;
         }
-        // If configured to use only fallback
-        if ("fallback".equalsIgnoreCase(configuredProvider)) {
-            state = hasFallback() ? ProviderState.FALLBACK : ProviderState.PRIMARY;
-            return;
-        }
-        // "auto" — use chain logic. Check if cooldown expired.
+        // Check if cooldown expired
         if (state == ProviderState.COOLDOWN && System.currentTimeMillis() >= cooldownUntil) {
-            state = hasFallback() ? ProviderState.FALLBACK : ProviderState.PRIMARY;
-            log.info("Cooldown expired. Switching to " + (hasFallback() ? "fallback" : "primary"));
+            currentIndex = 0;
+            state = ProviderState.PRIMARY;
+            log.info("Cooldown истёк. Переключаемся на первый провайдер: {}", providers.get(0).getName());
+        }
+        // Fix out-of-bounds index
+        if (currentIndex >= providers.size()) {
+            currentIndex = 0;
         }
     }
 }

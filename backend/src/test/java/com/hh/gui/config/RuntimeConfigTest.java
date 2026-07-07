@@ -43,6 +43,7 @@ class RuntimeConfigTest {
     @Test
     void toMapContainsAllKeys() {
         Map<String, Object> m = config.toMap();
+        assertTrue(m.containsKey("aiProviders"));
         assertTrue(m.containsKey("maxPerRun"));
         assertTrue(m.containsKey("pipelineIntervalMs"));
         assertTrue(m.containsKey("dailyCron"));
@@ -59,7 +60,7 @@ class RuntimeConfigTest {
         assertTrue(m.containsKey("notificationsEnabled"));
         assertTrue(m.containsKey("aiBatchSize"));
         assertTrue(m.containsKey("pipelineEnabled"));
-        assertEquals(16, m.size());
+        assertEquals(17, m.size());
     }
 
     // ═══════ Descriptors ═══════
@@ -76,7 +77,12 @@ class RuntimeConfigTest {
             assertNotNull(d.type);
             keys.add(d.key);
         }
-        assertEquals(config.toMap().keySet(), keys);
+        // aiProviders is intentionally excluded from the generic descriptor-driven
+        // settings form — it's a list edited through its own dedicated UI section
+        // and /api/settings/providers endpoint, not a single scalar value.
+        Set<String> mapKeysExcludingProviders = new HashSet<>(config.toMap().keySet());
+        mapKeysExcludingProviders.remove("aiProviders");
+        assertEquals(mapKeysExcludingProviders, keys);
     }
 
     @Test
