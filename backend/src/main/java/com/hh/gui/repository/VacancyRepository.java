@@ -61,8 +61,10 @@ public class VacancyRepository {
             v.setNotified(rs.getInt("notified") == 1);
             v.setPublishedAt(rs.getString("published_at"));
             v.setFoundByScan(rs.getInt("found_by_scan"));
-            v.setUserId(rs.getObject("user_id", Long.class));
-            v.setSearchId(rs.getObject("search_id", Long.class));
+            long userId = rs.getLong("user_id");
+            v.setUserId(rs.wasNull() ? null : userId);
+            long searchId = rs.getLong("search_id");
+            v.setSearchId(rs.wasNull() ? null : searchId);
             v.setCriteriaHash(rs.getString("criteria_hash"));
             return v;
         };
