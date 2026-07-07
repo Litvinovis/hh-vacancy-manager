@@ -25,7 +25,7 @@ class AiProviderManagerTest {
         config.setAiProviders(List.of(
             new AiProviderConfig("primary", "http://localhost/a", "key-a", "model-a"),
             new AiProviderConfig("fallback", "http://localhost/b", "key-b", "model-b")));
-        manager = new AiProviderManager(config, new AiMetrics(new SimpleMeterRegistry()));
+        manager = new AiProviderManager(config, new AiMetrics(new SimpleMeterRegistry(), config));
     }
 
     @Test

@@ -37,6 +37,8 @@ public class AiProviderManager {
     public AiProviderManager(RuntimeConfig runtimeConfig, AiMetrics metrics) {
         this.runtimeConfig = runtimeConfig;
         this.metrics = metrics;
+        metrics.gauge("ai_cooldown_active", "1 if all AI providers are exhausted and in cooldown, 0 otherwise",
+            this, m -> m.isInCooldown() ? 1 : 0);
     }
 
     /** Get the current active provider config. */
@@ -119,12 +121,14 @@ public class AiProviderManager {
             currentIndex++;
             String nextName = getCurrentProviderName();
             log.warn("Провайдер {} rate limited (429). Переключаемся на {}.", currentName, nextName);
-            metrics.recordRateLimit(detectProviderName(currentName));
+            metrics.recordRateLimit(currentName);
+            metrics.recordProviderSwitch(currentName, nextName);
             state = ProviderState.FALLBACK;
         } else {
             String currentName = getCurrentProviderName();
             log.warn("Последний провайдер {} (429), fallback недоступен. Входим в cooldown.", currentName);
-            metrics.recordRateLimit(detectProviderName(currentName));
+            metrics.recordRateLimit(currentName);
+            metrics.recordProviderSwitch(currentName, "cooldown");
             enterCooldown();
         }
     }
@@ -223,17 +227,6 @@ public class AiProviderManager {
             return shortName + "/" + shortModel;
         }
         return shortName;
-    }
-
-    /** Detect provider name from a name string or URL. */
-    private static String detectProviderName(String name) {
-        if (name == null) return "unknown";
-        String n = name.toLowerCase();
-        if (n.contains("github")) return "github-models";
-        if (n.contains("x.ai")) return "grok";
-        if (n.contains("openrouter")) return "openrouter";
-        if (n.contains("groq")) return "groq";
-        return n.isBlank() ? "unknown" : name;
     }
 
     private synchronized void resolveState() {
