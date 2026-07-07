@@ -32,11 +32,12 @@ public class VacancyService {
 
     public PageResponse<VacancyWithTags> list(String status, String district, Integer minSalary,
                                                Integer minScore, String search, String tag,
-                                               Boolean remote, String sort, int page, int perPage) {
+                                               Boolean remote, String person, String searchName,
+                                               String sort, int page, int perPage) {
         int offset = (page - 1) * perPage;
         List<Vacancy> vacancies = vacancyRepo.findAll(status, district, minSalary, minScore,
-            search, tag, remote, sort, offset, perPage);
-        int total = vacancyRepo.countAll(status, district, minSalary, minScore, search, tag, remote);
+            search, tag, remote, person, searchName, sort, offset, perPage);
+        int total = vacancyRepo.countAll(status, district, minSalary, minScore, search, tag, remote, person, searchName);
 
         List<VacancyWithTags> items = new ArrayList<>();
         for (Vacancy v : vacancies) {
@@ -152,11 +153,11 @@ public class VacancyService {
         Vacancy v = vOpt.get();
         // When moving to/from fraud, also update ai_verdict for consistency
         if ("fraud".equals(status)) {
-            vacancyRepo.updateAiResult(v.getHhId(), 0, "fraud", "Помечена как обман вручную");
+            vacancyRepo.updateAiResult(v.getHhId(), v.getPerson(), v.getSearchName(), 0, "fraud", "Помечена как обман вручную");
         } else {
             // When restoring from fraud, reset to pending if it was fraud
             if ("fraud".equals(v.getAiVerdict())) {
-                vacancyRepo.updateAiResult(v.getHhId(), 0, "pending", "Восстановлена из обмана");
+                vacancyRepo.updateAiResult(v.getHhId(), v.getPerson(), v.getSearchName(), 0, "pending", "Восстановлена из обмана");
             }
         }
         vacancyRepo.updateStatus(id, status);
@@ -188,7 +189,8 @@ public class VacancyService {
         int imported = 0;
         int skipped = 0;
         for (Vacancy v : vacancies) {
-            if (v.getHhId() != null && !v.getHhId().isEmpty() && vacancyRepo.existsByHhId(v.getHhId())) {
+            if (v.getHhId() != null && !v.getHhId().isEmpty()
+                    && vacancyRepo.existsByHhIdPersonSearch(v.getHhId(), v.getPerson(), v.getSearchName())) {
                 skipped++;
                 continue;
             }

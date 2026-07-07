@@ -47,6 +47,11 @@ public class StatsService {
         }
         stats.put("topTags", topTags);
 
+        stats.put("people", vacancyRepo.listPeople().stream()
+            .map(p -> Map.of("name", p.get("person"), "count", p.get("cnt"))).toList());
+        stats.put("searches", vacancyRepo.listSearches(null).stream()
+            .map(s -> Map.of("name", s.get("search_name"), "count", s.get("cnt"))).toList());
+
         return stats;
     }
 }

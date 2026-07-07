@@ -1,0 +1,17 @@
+[Unit]
+Description=HH Vacancy Scraper (headless-browser sidecar)
+After=network.target
+
+[Service]
+Type=simple
+User=clawd
+Group=clawd
+WorkingDirectory=/opt/hh-gui/scraper
+ExecStart=/home/clawd/.nvm/versions/node/v22.22.0/bin/node server.js
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

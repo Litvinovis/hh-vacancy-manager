@@ -3,6 +3,7 @@ package com.hh.gui.ai;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hh.gui.config.AiProviderConfig;
 import com.hh.gui.config.RuntimeConfig;
+import com.hh.gui.model.SearchJob;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -90,14 +91,24 @@ class VacancyAiAnalyzerTest {
         assertEquals(30, result.score());
     }
 
-    // ── SearchProfile ──
+    // ── SearchJob ──
 
     @Test
-    void searchProfile_creation() {
-        var profile = VacancyAiAnalyzer.SearchProfile.defaultProfile();
-        assertEquals("Уфа", profile.city);
-        assertEquals(List.of("Шакша", "Калининский"), profile.priorityDistricts);
-        assertEquals(List.of("Работа с клиентами", "Касса", "Консультирование"), profile.skills);
-        assertEquals(40000, profile.salaryMin);
+    void searchJob_creation() {
+        SearchJob job = new SearchJob();
+        job.personName = "Мама";
+        job.searchName = "Рядом с домом";
+        job.city = "Уфа";
+        job.priorityDistricts = List.of("Шакша", "Калининский");
+        job.skills = List.of("Работа с клиентами", "Касса", "Консультирование");
+        job.salaryMin = 40000;
+        job.schedule = "fullTime";
+        job.area = 99;
+
+        assertEquals("Уфа", job.city);
+        assertEquals(List.of("Шакша", "Калининский"), job.priorityDistricts);
+        assertEquals(List.of("Работа с клиентами", "Касса", "Консультирование"), job.skills);
+        assertEquals(40000, job.salaryMin);
+        assertFalse(job.isRemote());
     }
 }

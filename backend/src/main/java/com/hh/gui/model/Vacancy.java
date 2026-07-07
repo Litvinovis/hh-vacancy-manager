@@ -31,6 +31,18 @@ public class Vacancy {
     private String publishedAt;
     private int foundByScan; // 1 = full scan, 0 = incremental
 
+    // Multi-profile + browser-scraper fields
+    private String person;
+    private String searchName;
+    private String employerName;
+    private boolean salaryGross;
+    private String experience;
+    private String employment;
+    private String keySkills; // comma-joined
+    private boolean trustedEmployer;
+    private String validThrough;
+    private String scrapeStatus; // pending / ok / failed
+
     // Default constructor
     public Vacancy() {}
 
@@ -112,4 +124,34 @@ public class Vacancy {
 
     public int getFoundByScan() { return foundByScan; }
     public void setFoundByScan(int foundByScan) { this.foundByScan = foundByScan; }
+
+    public String getPerson() { return person; }
+    public void setPerson(String person) { this.person = person; }
+
+    public String getSearchName() { return searchName; }
+    public void setSearchName(String searchName) { this.searchName = searchName; }
+
+    public String getEmployerName() { return employerName; }
+    public void setEmployerName(String employerName) { this.employerName = employerName; }
+
+    public boolean isSalaryGross() { return salaryGross; }
+    public void setSalaryGross(boolean salaryGross) { this.salaryGross = salaryGross; }
+
+    public String getExperience() { return experience; }
+    public void setExperience(String experience) { this.experience = experience; }
+
+    public String getEmployment() { return employment; }
+    public void setEmployment(String employment) { this.employment = employment; }
+
+    public String getKeySkills() { return keySkills; }
+    public void setKeySkills(String keySkills) { this.keySkills = keySkills; }
+
+    public boolean isTrustedEmployer() { return trustedEmployer; }
+    public void setTrustedEmployer(boolean trustedEmployer) { this.trustedEmployer = trustedEmployer; }
+
+    public String getValidThrough() { return validThrough; }
+    public void setValidThrough(String validThrough) { this.validThrough = validThrough; }
+
+    public String getScrapeStatus() { return scrapeStatus; }
+    public void setScrapeStatus(String scrapeStatus) { this.scrapeStatus = scrapeStatus; }
 }

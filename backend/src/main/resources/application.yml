@@ -25,6 +25,8 @@ app:
   data-dir: ${user.dir}/data
   search:
     profiles-dir: ${user.dir}/config/profiles
+  scraper:
+    url: ${SCRAPER_URL:http://127.0.0.1:8095}
   ai:
     api-url: ${AI_API_URL:https://openrouter.ai/api/v1/chat/completions}
     api-key: ${AI_API_KEY:***}

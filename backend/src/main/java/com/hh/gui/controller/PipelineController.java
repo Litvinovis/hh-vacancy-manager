@@ -2,6 +2,7 @@ package com.hh.gui.controller;
 
 import com.hh.gui.ai.AiProviderManager;
 import com.hh.gui.config.RuntimeConfig;
+import com.hh.gui.model.SearchJob;
 import com.hh.gui.service.SearchProfileFactory;
 import com.hh.gui.service.VacancyPipelineService;
 import com.hh.gui.service.VacancyPipelineService.PipelineResult;
@@ -43,26 +44,44 @@ public class PipelineController {
         this.aiProvider = aiProvider;
     }
 
+    /** All configured jobs, optionally narrowed to one (person, search). */
+    private List<SearchJob> jobsFor(String person, String searchName) {
+        List<SearchJob> jobs = profileFactory.build();
+        if (person == null && searchName == null) return jobs;
+        return jobs.stream()
+            .filter(j -> person == null || j.personName.equals(person))
+            .filter(j -> searchName == null || j.searchName.equals(searchName))
+            .toList();
+    }
+
     /**
-     * Run full pipeline for a profile.
-     * POST /api/pipeline/run?profile=mom
+     * Run the full pipeline (discover → scrape → AI-analyze → notify) for every
+     * configured (person, search), or just one if person/searchName are given.
+     * POST /api/pipeline/run[?person=Мама&searchName=Рядом с домом]
      */
     @PostMapping("/pipeline/run")
     public ResponseEntity<Map<String, Object>> runPipeline(
-            @RequestParam(name = "profile", defaultValue = "mom") String profileName) {
-        log.info("Запуск пайплайна для профиля: {}", profileName);
-
+            @RequestParam(name = "person", required = false) String person,
+            @RequestParam(name = "searchName", required = false) String searchName) {
+        List<SearchJob> jobs = jobsFor(person, searchName);
+        log.info("Запуск пайплайна для {} поисков", jobs.size());
         try {
-            VacancyPipelineService.SearchProfile sp = profileFactory.build();
-            PipelineResult result = pipelineService.runFullPipeline(sp);
+            PipelineResult total = new PipelineResult();
+            for (SearchJob job : jobs) {
+                PipelineResult r = pipelineService.runFullPipeline(job);
+                total.collected += r.collected;
+                total.newVacancies += r.newVacancies;
+                total.analyzed += r.analyzed;
+                total.approved += r.approved;
+            }
 
             Map<String, Object> response = new LinkedHashMap<>();
             response.put("status", "ok");
-            response.put("profile", profileName);
-            response.put("collected", result.collected);
-            response.put("newVacancies", result.newVacancies);
-            response.put("analyzed", result.analyzed);
-            response.put("approved", result.approved);
+            response.put("jobs", jobs.size());
+            response.put("collected", total.collected);
+            response.put("newVacancies", total.newVacancies);
+            response.put("analyzed", total.analyzed);
+            response.put("approved", total.approved);
             return ResponseEntity.ok(response);
         } catch (Exception e) {
             log.error("Ошибка пайплайна: {}", e.getMessage(), e);
@@ -74,22 +93,29 @@ public class PipelineController {
     }
 
     /**
-     * Re-analyze all eligible vacancies (not rejected by AI or user).
-     /**
-      * Re-analyze all eligible vacancies (not rejected by AI or user).
-      * POST /api/pipeline/reanalyze
-      */
+     * Re-analyze all eligible vacancies (not rejected by AI or user), for every
+     * configured (person, search) or just one.
+     * POST /api/pipeline/reanalyze[?person=...&searchName=...]
+     */
      @PostMapping("/pipeline/reanalyze")
-     public ResponseEntity<Map<String, Object>> reanalyze() {
-         log.info("Запрошена повторная оценка");
+     public ResponseEntity<Map<String, Object>> reanalyze(
+             @RequestParam(name = "person", required = false) String person,
+             @RequestParam(name = "searchName", required = false) String searchName) {
+         List<SearchJob> jobs = jobsFor(person, searchName);
+         log.info("Запрошена повторная оценка для {} поисков", jobs.size());
          try {
-             VacancyPipelineService.SearchProfile sp = profileFactory.build();
-             VacancyPipelineService.ReanalyzeResult result = pipelineService.reanalyzeAll(sp);
+             VacancyPipelineService.ReanalyzeResult total = new VacancyPipelineService.ReanalyzeResult();
+             for (SearchJob job : jobs) {
+                 VacancyPipelineService.ReanalyzeResult r = pipelineService.reanalyzeJob(job);
+                 total.reset += r.reset;
+                 total.analyzed += r.analyzed;
+                 total.approved += r.approved;
+             }
              Map<String, Object> response = new LinkedHashMap<>();
              response.put("status", "ok");
-             response.put("reset", result.reset);
-             response.put("analyzed", result.analyzed);
-             response.put("approved", result.approved);
+             response.put("reset", total.reset);
+             response.put("analyzed", total.analyzed);
+             response.put("approved", total.approved);
              return ResponseEntity.ok(response);
          } catch (Exception e) {
              log.error("Ошибка повторной оценки: {}", e.getMessage(), e);
@@ -101,15 +127,21 @@ public class PipelineController {
      }
 
      /**
-      * Analyze only pending (unassessed) vacancies — no cap, runs until queue empty.
-      * POST /api/pipeline/analyze-pending
+      * Analyze only pending (unassessed) vacancies — no cap, runs until queue empty,
+      * for every configured (person, search) or just one.
+      * POST /api/pipeline/analyze-pending[?person=...&searchName=...]
       */
      @PostMapping("/pipeline/analyze-pending")
-     public ResponseEntity<Map<String, Object>> analyzePending() {
-         log.info("Запрошен анализ необработанных");
+     public ResponseEntity<Map<String, Object>> analyzePending(
+             @RequestParam(name = "person", required = false) String person,
+             @RequestParam(name = "searchName", required = false) String searchName) {
+         List<SearchJob> jobs = jobsFor(person, searchName);
+         log.info("Запрошен анализ необработанных для {} поисков", jobs.size());
          try {
-             VacancyPipelineService.SearchProfile sp = profileFactory.build();
-             int analyzed = pipelineService.analyzeAllPending(sp);
+             int analyzed = 0;
+             for (SearchJob job : jobs) {
+                 analyzed += pipelineService.analyzeAllPending(job);
+             }
              Map<String, Object> response = new LinkedHashMap<>();
              response.put("status", "ok");
              response.put("analyzed", analyzed);
@@ -134,6 +166,20 @@ public class PipelineController {
         response.put("rescanable", vacancyRepo.countRescanable());
         response.put("total", vacancyRepo.countTotal());
         return ResponseEntity.ok(response);
+    }
+
+    /**
+     * List all (person, search) jobs configured in config/profiles/default.yaml —
+     * lets the frontend build a person/search filter without waiting for a
+     * newly-added search to have collected at least one vacancy.
+     * GET /api/pipeline/jobs
+     */
+    @GetMapping("/pipeline/jobs")
+    public ResponseEntity<List<Map<String, String>>> listJobs() {
+        List<Map<String, String>> jobs = profileFactory.build().stream()
+            .map(j -> Map.of("person", j.personName, "searchName", j.searchName))
+            .toList();
+        return ResponseEntity.ok(jobs);
     }
 
     /**

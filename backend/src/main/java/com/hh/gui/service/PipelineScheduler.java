@@ -2,6 +2,7 @@ package com.hh.gui.service;
 
 import com.hh.gui.ai.VacancyAiAnalyzer;
 import com.hh.gui.config.RuntimeConfig;
+import com.hh.gui.model.SearchJob;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Configuration;
@@ -12,6 +13,7 @@ import org.springframework.scheduling.config.ScheduledTaskRegistrar;
 import org.springframework.scheduling.support.CronTrigger;
 
 import java.time.Instant;
+import java.util.List;
 
 /**
  * Single source of scheduled pipeline execution.
@@ -67,12 +69,18 @@ public class PipelineScheduler implements SchedulingConfigurer {
             return;
         }
         log.info("=== Начало запланированного пайплайна ===");
-        try {
-            VacancyPipelineService.PipelineResult result = pipelineService.runFullPipeline(profileFactory.build());
-            log.info("Пайплайн завершён: собрано={}, новых={}, проанализировано={}, одобрено={}",
-                result.collected, result.newVacancies, result.analyzed, result.approved);
-        } catch (Exception e) {
-            log.error("Запланированный пайплайн завершился ошибкой: {}", e.getMessage(), e);
+        List<SearchJob> jobs = profileFactory.build();
+        if (jobs.isEmpty()) {
+            log.warn("Ни одного (person, search) не настроено в config/profiles/default.yaml");
+        }
+        for (SearchJob job : jobs) {
+            try {
+                VacancyPipelineService.PipelineResult result = pipelineService.runFullPipeline(job);
+                log.info("Пайплайн {} · {} завершён: собрано={}, проанализировано={}, одобрено={}",
+                    job.personName, job.searchName, result.collected, result.analyzed, result.approved);
+            } catch (Exception e) {
+                log.error("Пайплайн {} · {} завершился ошибкой: {}", job.personName, job.searchName, e.getMessage(), e);
+            }
         }
         log.info("=== Конец запланированного пайплайна ===");
     }
@@ -87,11 +95,14 @@ public class PipelineScheduler implements SchedulingConfigurer {
             return;
         }
         log.info("=== Начало ежедневного анализа необработанных ===");
-        try {
-            int analyzed = pipelineService.analyzeAllPending(profileFactory.build());
-            log.info("=== Конец ежедневного анализа необработанных: {} вакансий проанализировано ===", analyzed);
-        } catch (Exception e) {
-            log.error("Ежедневный анализ необработанных завершился ошибкой: {}", e.getMessage(), e);
+        for (SearchJob job : profileFactory.build()) {
+            try {
+                int analyzed = pipelineService.analyzeAllPending(job);
+                log.info("Ежедневный анализ {} · {}: {} вакансий проанализировано", job.personName, job.searchName, analyzed);
+            } catch (Exception e) {
+                log.error("Ежедневный анализ {} · {} завершился ошибкой: {}", job.personName, job.searchName, e.getMessage(), e);
+            }
         }
+        log.info("=== Конец ежедневного анализа необработанных ===");
     }
 }
