@@ -2,6 +2,7 @@ package com.hh.gui.controller;
 
 import com.hh.gui.config.AiProviderConfig;
 import com.hh.gui.config.RuntimeConfig;
+import com.hh.gui.model.User;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
@@ -11,17 +12,17 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 /**
- * REST API для runtime-настроек.
- * GET /api/settings — текущие значения + дескрипторы (требуется пароль)
- * POST /api/settings — обновить значения (требуется пароль)
- * POST /api/settings/auth — проверить пароль
+ * REST API for runtime settings — admin-only (AuthInterceptor already
+ * guarantees a logged-in user; this just adds the role check per endpoint,
+ * replacing the old shared hardcoded password).
+ * GET /api/settings — current values + descriptors
+ * POST /api/settings — update values
  */
 @RestController
 @RequestMapping("/api/settings")
 public class SettingsController {
 
     private static final Logger log = LoggerFactory.getLogger(SettingsController.class);
-    private static final String SETTINGS_PASSWORD = "1102";
 
     private final RuntimeConfig runtimeConfig;
 
@@ -29,30 +30,9 @@ public class SettingsController {
         this.runtimeConfig = runtimeConfig;
     }
 
-    /**
-     * Проверка пароля.
-     * POST /api/settings/auth  body: {"password": "..."}
-     */
-    @PostMapping("/auth")
-    public ResponseEntity<Map<String, Object>> auth(@RequestBody Map<String, Object> body) {
-        String password = (String) body.get("password");
-        boolean valid = SETTINGS_PASSWORD.equals(password);
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("valid", valid);
-        return ResponseEntity.ok(result);
-    }
-
-    /**
-     * Получить все настройки с дескрипторами (требуется пароль).
-     * GET /api/settings?password=...
-     */
     @GetMapping
-    public ResponseEntity<?> getSettings(@RequestParam String password) {
-        if (!SETTINGS_PASSWORD.equals(password)) {
-            Map<String, Object> error = new LinkedHashMap<>();
-            error.put("error", "Неверный пароль");
-            return ResponseEntity.status(403).body(error);
-        }
+    public ResponseEntity<?> getSettings(@RequestAttribute("currentUser") User currentUser) {
+        if (!currentUser.isAdmin()) return forbidden();
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("values", runtimeConfig.toMap());
@@ -60,24 +40,12 @@ public class SettingsController {
         return ResponseEntity.ok(result);
     }
 
-    /**
-     * Обновить настройки (требуется пароль).
-     * POST /api/settings  body: {"password": "...", "maxPerRun": 50, ...}
-     */
     @PostMapping
-    public ResponseEntity<Map<String, Object>> updateSettings(@RequestBody Map<String, Object> body) {
-        String password = (String) body.get("password");
-        if (!SETTINGS_PASSWORD.equals(password)) {
-            Map<String, Object> error = new LinkedHashMap<>();
-            error.put("error", "Неверный пароль");
-            return ResponseEntity.status(403).body(error);
-        }
+    public ResponseEntity<Map<String, Object>> updateSettings(@RequestBody Map<String, Object> body,
+                                                                @RequestAttribute("currentUser") User currentUser) {
+        if (!currentUser.isAdmin()) return ResponseEntity.status(403).body(Map.of("error", "Требуются права администратора"));
 
-        // Убираем пароль из данных для обновления
-        Map<String, Object> updates = new LinkedHashMap<>(body);
-        updates.remove("password");
-
-        Map<String, String> errors = runtimeConfig.apply(updates);
+        Map<String, String> errors = runtimeConfig.apply(body);
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("values", runtimeConfig.toMap());
@@ -87,15 +55,9 @@ public class SettingsController {
         return ResponseEntity.ok(result);
     }
 
-    /**
-     * Получить список AI провайдеров (с маскированными ключами).
-     * GET /api/settings/providers?password=...
-     */
     @GetMapping("/providers")
-    public ResponseEntity<?> getProviders(@RequestParam String password) {
-        if (!SETTINGS_PASSWORD.equals(password)) {
-            return ResponseEntity.status(403).body(Map.of("error", "Неверный пароль"));
-        }
+    public ResponseEntity<?> getProviders(@RequestAttribute("currentUser") User currentUser) {
+        if (!currentUser.isAdmin()) return forbidden();
 
         List<Map<String, Object>> result = runtimeConfig.getAiProviders().stream()
             .map(p -> {
@@ -122,17 +84,10 @@ public class SettingsController {
         return ResponseEntity.ok(response);
     }
 
-    /**
-     * Обновить список AI провайдеров.
-     * PUT /api/settings/providers?password=...
-     * body: [{"name": "...", "url": "...", "apiKey": "...", "model": "..."}, ...]
-     */
     @PutMapping("/providers")
-    public ResponseEntity<?> updateProviders(@RequestParam String password,
-                                              @RequestBody List<Map<String, Object>> providersList) {
-        if (!SETTINGS_PASSWORD.equals(password)) {
-            return ResponseEntity.status(403).body(Map.of("error", "Неверный пароль"));
-        }
+    public ResponseEntity<?> updateProviders(@RequestBody List<Map<String, Object>> providersList,
+                                              @RequestAttribute("currentUser") User currentUser) {
+        if (!currentUser.isAdmin()) return forbidden();
 
         List<AiProviderConfig> providers = new ArrayList<>();
         for (Map<String, Object> m : providersList) {
@@ -155,5 +110,9 @@ public class SettingsController {
         result.put("status", "ok");
         result.put("count", providers.size());
         return ResponseEntity.ok(result);
+    }
+
+    private ResponseEntity<?> forbidden() {
+        return ResponseEntity.status(403).body(Map.of("error", "Требуются права администратора"));
     }
 }

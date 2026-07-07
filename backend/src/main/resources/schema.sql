@@ -1,11 +1,45 @@
 -- HH Vacancy Manager — Schema
 -- Compatible with SQLite
 
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'user',
+    city TEXT DEFAULT '',
+    experience_summary TEXT DEFAULT '',
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS searches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    queries TEXT NOT NULL DEFAULT '[]',
+    area INTEGER NOT NULL DEFAULT 113,
+    schedule TEXT DEFAULT '',
+    salary_min INTEGER DEFAULT 0,
+    priority_districts TEXT DEFAULT '[]',
+    skills TEXT DEFAULT '[]',
+    not_suitable TEXT DEFAULT '[]',
+    exclude_words TEXT DEFAULT '[]',
+    ai_notes TEXT DEFAULT '',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(user_id, name)
+);
+
 CREATE TABLE IF NOT EXISTS vacancies (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     hh_id TEXT,
     person TEXT DEFAULT '',
     search_name TEXT DEFAULT '',
+    user_id INTEGER DEFAULT NULL,
+    search_id INTEGER DEFAULT NULL,
+    criteria_hash TEXT DEFAULT '',
     title TEXT NOT NULL DEFAULT '',
     company TEXT DEFAULT '',
     employer_name TEXT DEFAULT '',
@@ -66,5 +100,8 @@ CREATE INDEX IF NOT EXISTS idx_vac_source ON vacancies(source);
 CREATE INDEX IF NOT EXISTS idx_vac_person ON vacancies(person);
 CREATE INDEX IF NOT EXISTS idx_vac_search_name ON vacancies(search_name);
 CREATE INDEX IF NOT EXISTS idx_vac_scrape_status ON vacancies(scrape_status);
+CREATE INDEX IF NOT EXISTS idx_vac_user_id ON vacancies(user_id);
+CREATE INDEX IF NOT EXISTS idx_vac_criteria_hash ON vacancies(hh_id, criteria_hash);
 CREATE INDEX IF NOT EXISTS idx_tags_vid ON tags(vacancy_id);
 CREATE INDEX IF NOT EXISTS idx_hist_vid ON history(vacancy_id);
+CREATE INDEX IF NOT EXISTS idx_searches_user_id ON searches(user_id);

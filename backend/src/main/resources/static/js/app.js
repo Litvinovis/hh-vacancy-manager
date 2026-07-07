@@ -14,6 +14,9 @@ async function api(path, opts = {}) {
     headers: { 'Content-Type': 'application/json' },
     ...opts
   });
+  if (res.status === 401 && path !== '/auth/me' && path !== '/auth/login') {
+    showLoginView();
+  }
   if (!res.ok) throw new Error(`${res.status}: ${res.statusText}`);
   return res.json();
 }
@@ -120,7 +123,7 @@ function statusLabel(status) {
 }
 
 // ═══════ PEOPLE / SEARCHES ═══════
-let allJobs = []; // [{person, searchName}] — from config/profiles/default.yaml
+let allJobs = []; // [{person, searchName}] — the current user's own jobs (all of them if admin)
 
 async function loadJobs() {
   try {
@@ -624,8 +627,7 @@ async function toggleNotifications() {
   }
 }
 
-// ═══════ SETTINGS ═══════
-let settingsAuthed = false;
+// ═══════ SETTINGS (admin-only, session-authenticated — see AuthController) ═══════
 let settingsDescriptors = [];
 
 async function showSettingsModal() {
@@ -637,28 +639,10 @@ async function showSettingsModal() {
     document.body.appendChild(modal);
   }
 
-  if (!settingsAuthed) {
-    modal.innerHTML = `
-      <div class="modal-box">
-        <div class="modal-head"><h3>⚙️ Настройки</h3><button class="modal-x" onclick="closeSettingsModal()">✕</button></div>
-        <div class="modal-body">
-          <p style="color:var(--muted);margin-bottom:16px">Введите пароль для доступа к настройкам</p>
-          <input type="password" id="settings-pw" class="search-inp" placeholder="Пароль" style="width:100%;margin-bottom:12px"
-                 onkeydown="if(event.key==='Enter')settingsLogin()">
-          <button class="btn btn-prim" onclick="settingsLogin()" style="width:100%">Войти</button>
-        </div>
-      </div>`;
-    modal.style.display = 'flex';
-    setTimeout(() => document.getElementById('settings-pw')?.focus(), 100);
-    return;
-  }
-
-  // Authed — load settings
   try {
-    const data = await api('/settings?password=1102');
+    const data = await api('/settings');
     settingsDescriptors = data.descriptors || [];
-    // Also load providers
-    const provData = await api('/settings/providers?password=1102');
+    const provData = await api('/settings/providers');
     renderSettingsForm(data.values || {}, provData.providers || []);
   } catch (e) {
     toast('✗ Ошибка загрузки настроек: ' + e.message, 'err');
@@ -752,22 +736,6 @@ function renderSettingsForm(values, providers) {
   });
 }
 
-async function settingsLogin() {
-  const pw = document.getElementById('settings-pw')?.value;
-  if (!pw) return;
-  try {
-    const r = await api('/settings/auth', { method: 'POST', body: JSON.stringify({ password: pw }) });
-    if (r.valid) {
-      settingsAuthed = true;
-      showSettingsModal(); // reload with settings
-    } else {
-      toast('✗ Неверный пароль', 'err');
-    }
-  } catch (e) {
-    toast('✗ ' + e.message, 'err');
-  }
-}
-
 function closeSettingsModal() {
   const modal = document.getElementById('settings-modal');
   if (modal) modal.style.display = 'none';
@@ -775,7 +743,7 @@ function closeSettingsModal() {
 
 async function saveSettings() {
   const modal = document.getElementById('settings-modal');
-  const updates = { password: '1102' };
+  const updates = {};
 
   // Collect values
   const processed = new Set();
@@ -822,7 +790,7 @@ async function saveSettings() {
         inputs.forEach(inp => { data[inp.dataset.field] = inp.value; });
         return data;
       });
-      await api('/settings/providers?password=1102', { method: 'PUT', body: JSON.stringify(providers) });
+      await api('/settings/providers', { method: 'PUT', body: JSON.stringify(providers) });
     }
 
     if (r.errors && Object.keys(r.errors).length) {
@@ -947,6 +915,240 @@ function updateProviderNumbers() {
   });
 }
 
+// ═══════ PERSONAL CABINET ═══════
+const MAX_SEARCHES = 3;
+
+async function showCabinetModal() {
+  let modal = document.getElementById('cabinet-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'cabinet-modal';
+    modal.className = 'modal-overlay';
+    document.body.appendChild(modal);
+  }
+  try {
+    const searches = await api('/searches');
+    renderCabinetModal(searches);
+  } catch (e) {
+    toast('✗ Ошибка загрузки кабинета: ' + e.message, 'err');
+  }
+}
+
+function closeCabinetModal() {
+  const modal = document.getElementById('cabinet-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+function renderCabinetModal(searches) {
+  const modal = document.getElementById('cabinet-modal');
+  const u = currentUser || {};
+
+  modal.innerHTML = `
+    <div class="modal-box modal-box-wide">
+      <div class="modal-head"><h3>👤 Личный кабинет — ${escHtml(u.displayName || '')}</h3><button class="modal-x" onclick="closeCabinetModal()">✕</button></div>
+      <div class="modal-body settings-body">
+        <div class="cabinet-section-title">Профиль</div>
+        <div class="provider-body" style="grid-template-columns:1fr 1fr;padding:0 0 14px">
+          <div class="provider-field">
+            <label>Город</label>
+            <input class="provider-inp" id="cab-city" value="${escHtml(u.city || '')}" placeholder="Уфа">
+          </div>
+          <div class="provider-field provider-field-full">
+            <label>Опыт и бэкграунд (для ИИ-анализа)</label>
+            <textarea class="provider-textarea" id="cab-experience" placeholder="Например: 5 лет в рознице, опыт работы с кассой и клиентами">${escHtml(u.experienceSummary || '')}</textarea>
+          </div>
+        </div>
+        <button class="btn btn-second" onclick="saveCabinetProfile()" style="width:100%;margin-bottom:18px">💾 Сохранить профиль</button>
+
+        <div class="cabinet-section-title">Смена пароля</div>
+        <div class="provider-body" style="grid-template-columns:1fr 1fr;padding:0 0 14px">
+          <div class="provider-field">
+            <label>Текущий пароль</label>
+            <input class="provider-inp" type="password" id="cab-old-password">
+          </div>
+          <div class="provider-field">
+            <label>Новый пароль</label>
+            <input class="provider-inp" type="password" id="cab-new-password">
+          </div>
+        </div>
+        <button class="btn btn-second" onclick="changeCabinetPassword()" style="width:100%;margin-bottom:18px">🔑 Сменить пароль</button>
+
+        <div class="settings-separator"><span>🔍 Мои поиски (${searches.length}/${MAX_SEARCHES})</span></div>
+        <div class="providers-list" id="cabinet-searches-list">
+          ${renderCabinetSearches(searches)}
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-ghost" onclick="closeCabinetModal()">Закрыть</button>
+      </div>
+    </div>`;
+  modal.style.display = 'flex';
+}
+
+function renderCabinetSearches(searches) {
+  const cards = searches.map(s => cabinetSearchCardHtml(s)).join('');
+  const addBtn = searches.length < MAX_SEARCHES
+    ? `<button class="btn btn-second" onclick="addCabinetSearchCard()" style="margin-top:8px;width:100%">+ Добавить поиск</button>`
+    : `<div class="providers-empty">Достигнут лимит: ${MAX_SEARCHES} поиска на пользователя</div>`;
+  return cards + addBtn;
+}
+
+function cabinetSearchCardHtml(s) {
+  const id = s.id != null ? s.id : '';
+  const listVal = (arr) => (arr || []).join('\n');
+  return `
+    <div class="provider-card" data-search-id="${id}">
+      <div class="provider-header">
+        <span class="provider-name-badge">${escHtml(s.name || 'Новый поиск')}</span>
+        <label class="switch" style="width:36px;height:20px" title="Активен">
+          <input type="checkbox" class="cab-enabled" ${s.enabled !== false ? 'checked' : ''}>
+          <span class="slider"></span>
+        </label>
+        <button class="provider-btn provider-del" onclick="deleteCabinetSearch(this)" title="Удалить">✕</button>
+      </div>
+      <div class="provider-body">
+        <div class="provider-field">
+          <label>Название</label>
+          <input class="provider-inp cab-name" value="${escHtml(s.name || '')}" placeholder="Рядом с домом">
+        </div>
+        <div class="provider-field">
+          <label>Код региона hh.ru (99 = Уфа, 113 = вся Россия)</label>
+          <input class="provider-inp cab-area" type="number" value="${s.area || 113}">
+        </div>
+        <div class="provider-field">
+          <label>График</label>
+          <select class="provider-inp cab-schedule">
+            <option value="fullTime" ${s.schedule === 'fullTime' ? 'selected' : ''}>Полный день</option>
+            <option value="remote" ${s.schedule === 'remote' ? 'selected' : ''}>Удалённо</option>
+            <option value="shift" ${s.schedule === 'shift' ? 'selected' : ''}>Сменный график</option>
+            <option value="flexible" ${s.schedule === 'flexible' ? 'selected' : ''}>Гибкий график</option>
+          </select>
+        </div>
+        <div class="provider-field">
+          <label>Мин. зарплата, ₽</label>
+          <input class="provider-inp cab-salary-min" type="number" value="${s.salaryMin || 0}">
+        </div>
+        <div class="provider-field provider-field-full">
+          <label>Поисковые запросы (по одному на строку)</label>
+          <textarea class="provider-textarea cab-queries" placeholder="продавец&#10;консультант">${listVal(s.queries)}</textarea>
+        </div>
+        <div class="provider-field">
+          <label>Приоритетные районы</label>
+          <textarea class="provider-textarea cab-districts">${listVal(s.priorityDistricts)}</textarea>
+        </div>
+        <div class="provider-field">
+          <label>Желаемые навыки</label>
+          <textarea class="provider-textarea cab-skills">${listVal(s.skills)}</textarea>
+        </div>
+        <div class="provider-field">
+          <label>Не подходит</label>
+          <textarea class="provider-textarea cab-not-suitable">${listVal(s.notSuitable)}</textarea>
+        </div>
+        <div class="provider-field">
+          <label>Слова-исключения из названия</label>
+          <textarea class="provider-textarea cab-exclude">${listVal(s.excludeWords)}</textarea>
+        </div>
+        <div class="provider-field provider-field-full">
+          <label>Заметка для ИИ-оценки</label>
+          <textarea class="provider-textarea cab-ai-notes" placeholder="Например: близость к дому важнее интересности задач">${escHtml(s.aiNotes || '')}</textarea>
+        </div>
+      </div>
+      <div class="modal-foot" style="padding:10px 12px">
+        <button class="btn btn-prim" onclick="saveCabinetSearch(this)" style="width:100%">💾 Сохранить поиск</button>
+      </div>
+    </div>`;
+}
+
+function addCabinetSearchCard() {
+  const list = document.getElementById('cabinet-searches-list');
+  if (!list) return;
+  const addBtn = list.querySelector('.btn-second, .providers-empty');
+  const wrap = document.createElement('div');
+  wrap.innerHTML = cabinetSearchCardHtml({});
+  const card = wrap.firstElementChild;
+  if (addBtn) list.insertBefore(card, addBtn); else list.appendChild(card);
+  if (addBtn && addBtn.classList.contains('btn-second')) addBtn.remove(); // will be re-added on next full render if still under limit
+}
+
+function readCabinetSearchCard(card) {
+  const splitLines = (el) => (el.value || '').split('\n').map(s => s.trim()).filter(Boolean);
+  return {
+    name: card.querySelector('.cab-name')?.value?.trim() || '',
+    area: parseInt(card.querySelector('.cab-area')?.value) || 113,
+    schedule: card.querySelector('.cab-schedule')?.value || '',
+    salaryMin: parseInt(card.querySelector('.cab-salary-min')?.value) || 0,
+    queries: splitLines(card.querySelector('.cab-queries')),
+    priorityDistricts: splitLines(card.querySelector('.cab-districts')),
+    skills: splitLines(card.querySelector('.cab-skills')),
+    notSuitable: splitLines(card.querySelector('.cab-not-suitable')),
+    excludeWords: splitLines(card.querySelector('.cab-exclude')),
+    aiNotes: card.querySelector('.cab-ai-notes')?.value?.trim() || '',
+    enabled: card.querySelector('.cab-enabled')?.checked !== false,
+  };
+}
+
+async function saveCabinetSearch(btn) {
+  const card = btn.closest('.provider-card');
+  if (!card) return;
+  const id = card.dataset.searchId;
+  const payload = readCabinetSearchCard(card);
+  if (!payload.name) { toast('✗ Укажите название поиска', 'err'); return; }
+  try {
+    if (id) {
+      await api(`/searches/${id}`, { method: 'PUT', body: JSON.stringify(payload) });
+    } else {
+      await api('/searches', { method: 'POST', body: JSON.stringify(payload) });
+    }
+    toast('✓ Поиск сохранён', 'ok');
+    showCabinetModal(); // reload with fresh state (ids, limit)
+    loadJobs();
+  } catch (e) {
+    toast('✗ ' + e.message, 'err');
+  }
+}
+
+async function deleteCabinetSearch(btn) {
+  const card = btn.closest('.provider-card');
+  if (!card) return;
+  const id = card.dataset.searchId;
+  if (!id) { card.remove(); return; } // never-saved new card, just drop it locally
+  if (!confirm('Удалить этот поиск?')) return;
+  try {
+    await api(`/searches/${id}`, { method: 'DELETE' });
+    toast('✓ Поиск удалён', 'ok');
+    showCabinetModal();
+    loadJobs();
+  } catch (e) {
+    toast('✗ ' + e.message, 'err');
+  }
+}
+
+async function saveCabinetProfile() {
+  const city = document.getElementById('cab-city')?.value?.trim() || '';
+  const experienceSummary = document.getElementById('cab-experience')?.value?.trim() || '';
+  try {
+    await api('/auth/me', { method: 'PUT', body: JSON.stringify({ city, experienceSummary }) });
+    if (currentUser) { currentUser.city = city; currentUser.experienceSummary = experienceSummary; }
+    toast('✓ Профиль сохранён', 'ok');
+  } catch (e) {
+    toast('✗ ' + e.message, 'err');
+  }
+}
+
+async function changeCabinetPassword() {
+  const oldPassword = document.getElementById('cab-old-password')?.value;
+  const newPassword = document.getElementById('cab-new-password')?.value;
+  if (!oldPassword || !newPassword) { toast('✗ Заполните оба поля', 'err'); return; }
+  try {
+    await api('/auth/change-password', { method: 'POST', body: JSON.stringify({ oldPassword, newPassword }) });
+    toast('✓ Пароль изменён', 'ok');
+    document.getElementById('cab-old-password').value = '';
+    document.getElementById('cab-new-password').value = '';
+  } catch (e) {
+    toast('✗ Не удалось сменить пароль (проверьте текущий пароль)', 'err');
+  }
+}
+
 // ═══════ AI STATUS ═══════
 async function checkAiStatus() {
   try {
@@ -972,6 +1174,144 @@ async function checkAiStatus() {
   } catch (e) { /* ignore */ }
 }
 
+// ═══════ ADMIN PANEL ═══════
+async function showAdminModal() {
+  let modal = document.getElementById('admin-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'admin-modal';
+    modal.className = 'modal-overlay';
+    document.body.appendChild(modal);
+  }
+  try {
+    const users = await api('/admin/users');
+    renderAdminModal(users);
+  } catch (e) {
+    toast('✗ Ошибка загрузки пользователей: ' + e.message, 'err');
+  }
+}
+
+function closeAdminModal() {
+  const modal = document.getElementById('admin-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+function renderAdminModal(users) {
+  const modal = document.getElementById('admin-modal');
+  const rows = users.map(u => `
+    <tr>
+      <td>${escHtml(u.username)}</td>
+      <td>${escHtml(u.displayName)}</td>
+      <td>${u.role === 'admin' ? '🛡 admin' : 'user'}</td>
+      <td>${escHtml(u.city || '—')}</td>
+      <td><span class="status-pill ${u.active ? 'active' : 'inactive'}">${u.active ? 'активен' : 'выключен'}</span></td>
+      <td class="admin-actions">
+        <button class="provider-btn" onclick="adminResetPassword(${u.id})" title="Сбросить пароль">🔑</button>
+        <button class="provider-btn" onclick="adminToggleActive(${u.id}, ${!u.active})" title="${u.active ? 'Деактивировать' : 'Активировать'}">${u.active ? '⏸' : '▶'}</button>
+        <button class="provider-btn provider-del" onclick="adminDeleteUser(${u.id})" title="Удалить">✕</button>
+      </td>
+    </tr>`).join('');
+
+  modal.innerHTML = `
+    <div class="modal-box modal-box-wide">
+      <div class="modal-head"><h3>🛡 Админка — пользователи</h3><button class="modal-x" onclick="closeAdminModal()">✕</button></div>
+      <div class="modal-body settings-body">
+        <div style="overflow-x:auto">
+          <table class="admin-table">
+            <thead><tr><th>Логин</th><th>Имя</th><th>Роль</th><th>Город</th><th>Статус</th><th>Действия</th></tr></thead>
+            <tbody>${rows || '<tr><td colspan="6" style="text-align:center;color:var(--muted)">Пока нет пользователей</td></tr>'}</tbody>
+          </table>
+        </div>
+
+        <div class="settings-separator"><span>+ Новый пользователь</span></div>
+        <div class="provider-body" style="grid-template-columns:1fr 1fr">
+          <div class="provider-field">
+            <label>Логин</label>
+            <input class="provider-inp" id="admin-new-username" placeholder="sestra">
+          </div>
+          <div class="provider-field">
+            <label>Имя</label>
+            <input class="provider-inp" id="admin-new-displayname" placeholder="Сестра">
+          </div>
+          <div class="provider-field">
+            <label>Город</label>
+            <input class="provider-inp" id="admin-new-city" placeholder="Уфа">
+          </div>
+          <div class="provider-field">
+            <label>Роль</label>
+            <select class="provider-inp" id="admin-new-role">
+              <option value="user" selected>user</option>
+              <option value="admin">admin</option>
+            </select>
+          </div>
+          <div class="provider-field provider-field-full">
+            <label>Пароль (не заполняйте, чтобы сгенерировать случайный)</label>
+            <input class="provider-inp" id="admin-new-password" type="password">
+          </div>
+        </div>
+        <button class="btn btn-second" onclick="adminCreateUser()" style="width:100%;margin-top:8px">+ Создать пользователя</button>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-ghost" onclick="closeAdminModal()">Закрыть</button>
+      </div>
+    </div>`;
+  modal.style.display = 'flex';
+}
+
+async function adminCreateUser() {
+  const username = document.getElementById('admin-new-username')?.value?.trim();
+  const displayName = document.getElementById('admin-new-displayname')?.value?.trim();
+  const city = document.getElementById('admin-new-city')?.value?.trim();
+  const role = document.getElementById('admin-new-role')?.value;
+  const password = document.getElementById('admin-new-password')?.value;
+  if (!username) { toast('✗ Укажите логин', 'err'); return; }
+  try {
+    const result = await api('/admin/users', {
+      method: 'POST',
+      body: JSON.stringify({ username, displayName, city, role, password })
+    });
+    if (result.generatedPassword) {
+      alert(`Пользователь "${username}" создан.\nПароль: ${result.generatedPassword}\n\nСообщите его пользователю — он больше нигде не отображается.`);
+    } else {
+      toast('✓ Пользователь создан', 'ok');
+    }
+    showAdminModal();
+  } catch (e) {
+    toast('✗ ' + e.message, 'err');
+  }
+}
+
+async function adminResetPassword(id) {
+  if (!confirm('Сбросить пароль этого пользователя?')) return;
+  try {
+    const result = await api(`/admin/users/${id}/reset-password`, { method: 'POST' });
+    alert(`Новый пароль: ${result.generatedPassword}\n\nСообщите его пользователю — он больше нигде не отображается.`);
+  } catch (e) {
+    toast('✗ ' + e.message, 'err');
+  }
+}
+
+async function adminToggleActive(id, active) {
+  try {
+    await api(`/admin/users/${id}`, { method: 'PUT', body: JSON.stringify({ active }) });
+    toast(active ? '✓ Пользователь активирован' : '✓ Пользователь деактивирован', 'ok');
+    showAdminModal();
+  } catch (e) {
+    toast('✗ ' + e.message, 'err');
+  }
+}
+
+async function adminDeleteUser(id) {
+  if (!confirm('Удалить пользователя и все его поиски? Это необратимо.')) return;
+  try {
+    await api(`/admin/users/${id}`, { method: 'DELETE' });
+    toast('✓ Пользователь удалён', 'ok');
+    showAdminModal();
+  } catch (e) {
+    toast('✗ ' + e.message, 'err');
+  }
+}
+
 // ═══════ DISTRICT FILTER ═══════
 async function loadDistricts() {
   try {
@@ -989,7 +1329,10 @@ async function loadDistricts() {
 }
 
 // ═══════ INIT ═══════
-document.addEventListener('DOMContentLoaded', () => {
+function startApp() {
+  document.getElementById('login-view').style.display = 'none';
+  document.getElementById('app-root').style.display = '';
+
   initTheme();
   loadStats(); // also populates district filter from topDistricts
   loadJobs(); // populates person/search filters from configured (person, search) jobs
@@ -1015,4 +1358,61 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Periodic AI status check every 5 min
   setInterval(checkAiStatus, 300000);
+}
+
+let currentUser = null;
+
+function showLoginView() {
+  currentUser = null;
+  document.getElementById('app-root').style.display = 'none';
+  document.getElementById('login-view').style.display = 'flex';
+  document.querySelectorAll('.modal-overlay').forEach(m => m.style.display = 'none');
+  setTimeout(() => document.getElementById('login-username')?.focus(), 50);
+}
+
+function applyCurrentUser(user) {
+  currentUser = user;
+  const badge = document.getElementById('user-badge');
+  if (badge) {
+    badge.innerHTML = `<b>${escHtml(user.displayName)}</b>${user.role === 'admin' ? '<span class="role-tag">admin</span>' : ''}`;
+  }
+  document.getElementById('btn-admin')?.classList.toggle('hidden', user.role !== 'admin');
+  document.getElementById('btn-settings')?.classList.toggle('hidden', user.role !== 'admin');
+}
+
+async function doLogin() {
+  const username = document.getElementById('login-username')?.value?.trim();
+  const password = document.getElementById('login-password')?.value;
+  const errorEl = document.getElementById('login-error');
+  if (errorEl) errorEl.textContent = '';
+  if (!username || !password) {
+    if (errorEl) errorEl.textContent = 'Введите логин и пароль';
+    return;
+  }
+  try {
+    const user = await api('/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) });
+    applyCurrentUser(user);
+    startApp();
+  } catch (e) {
+    if (errorEl) errorEl.textContent = 'Неверный логин или пароль';
+  }
+}
+
+async function doLogout() {
+  try { await api('/auth/logout', { method: 'POST' }); } catch (e) { /* ignore */ }
+  showLoginView();
+}
+
+async function checkAuthAndInit() {
+  try {
+    const user = await api('/auth/me');
+    applyCurrentUser(user);
+    startApp();
+  } catch (e) {
+    showLoginView();
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  checkAuthAndInit();
 });

@@ -319,7 +319,7 @@ class VacancyServiceTest {
         createServiceVacancy("list-001");
         createServiceVacancy("list-002");
 
-        var result = vacancyService.list("new", null, null, null, null, null, null, null, null, "score_desc", 1, 30);
+        var result = vacancyService.list("new", null, null, null, null, null, null, null, null, null, "score_desc", 1, 30);
         assertTrue(result.getTotal() >= 2);
     }
 
@@ -333,7 +333,7 @@ class VacancyServiceTest {
         v.setAiScore(0);
         vacancyRepo.save(v);
 
-        var result = vacancyService.list("fraud", null, null, null, null, null, null, null, null, "score_desc", 1, 30);
+        var result = vacancyService.list("fraud", null, null, null, null, null, null, null, null, null, "score_desc", 1, 30);
         assertEquals(1, result.getTotal());
     }
 

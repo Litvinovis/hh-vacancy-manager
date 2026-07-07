@@ -14,11 +14,11 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 /**
- * Loads config/profiles/default.yaml: a list of people, each owning one or
- * more independently-configured searches (own queries, own salary/district
- * priorities, own AI scoring notes). Two searches for the same person (e.g.
- * "remote across Russia" vs "near home") can want completely different
- * scoring criteria, so criteria live on the search, not the person.
+ * Search config is now DB-driven (see SearchRepository/SearchProfileFactory) —
+ * users manage their own searches through the personal cabinet instead of
+ * hand-editing YAML. PersonConfig/SearchConfig below are kept only as the
+ * parsing target for FirstBootSeeder's one-time YAML→DB import on first boot;
+ * nothing reads config/profiles/default.yaml after that.
  */
 @Configuration
 public class AppConfig {
@@ -30,24 +30,21 @@ public class AppConfig {
         return new PropertySourcesPlaceholderConfigurer();
     }
 
-    @Bean
-    public List<PersonConfig> people(@Value("${app.search.profiles-dir}") String profilesDir) {
+    /** Parses config/profiles/default.yaml, if present. Used only by FirstBootSeeder. */
+    public static List<PersonConfig> parseYaml(String profilesDir) {
         String profileFile = profilesDir + "/default.yaml";
         try (InputStream is = new FileInputStream(profileFile)) {
             Yaml yaml = new Yaml();
             Map<String, Object> root = yaml.load(is);
             if (root == null || !(root.get("people") instanceof List)) {
-                log.warn("В {} не найден ключ 'people' — ни один поиск не настроен", profileFile);
+                log.warn("В {} не найден ключ 'people' — нечего импортировать", profileFile);
                 return List.of();
             }
             @SuppressWarnings("unchecked")
             List<Map<String, Object>> rawPeople = (List<Map<String, Object>>) root.get("people");
-            List<PersonConfig> people = rawPeople.stream().map(PersonConfig::new).collect(Collectors.toList());
-            int totalSearches = people.stream().mapToInt(p -> p.searches.size()).sum();
-            log.info("Загружено {} человек(а), {} поисков из {}", people.size(), totalSearches, profileFile);
-            return people;
+            return rawPeople.stream().map(PersonConfig::new).collect(Collectors.toList());
         } catch (Exception e) {
-            log.error("Не удалось загрузить {}: {}", profileFile, e.getMessage());
+            log.info("Нечего импортировать из {}: {}", profileFile, e.getMessage());
             return List.of();
         }
     }

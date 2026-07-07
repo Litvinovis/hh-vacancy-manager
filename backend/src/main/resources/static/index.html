@@ -11,7 +11,28 @@
 </head>
 <body>
 
-<div class="app">
+<!-- ═══════ LOGIN ═══════ -->
+<div class="login-view" id="login-view" style="display:none">
+  <div class="login-box">
+    <div class="logo" style="justify-content:center;margin-bottom:8px">
+      <div class="logo-icon">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3" stroke-linecap="round"/></svg>
+      </div>
+      <div class="logo-text">
+        <div class="logo-name">HH Monitor</div>
+      </div>
+    </div>
+    <p class="login-sub">Войдите, чтобы увидеть свою подборку вакансий</p>
+    <input type="text" id="login-username" class="search-inp login-inp" placeholder="Логин" autocomplete="username"
+           onkeydown="if(event.key==='Enter')document.getElementById('login-password').focus()">
+    <input type="password" id="login-password" class="search-inp login-inp" placeholder="Пароль" autocomplete="current-password"
+           onkeydown="if(event.key==='Enter')doLogin()">
+    <button class="btn btn-prim" onclick="doLogin()" style="width:100%">Войти</button>
+    <div class="login-error" id="login-error"></div>
+  </div>
+</div>
+
+<div class="app" id="app-root" style="display:none">
   <!-- ═══════ SIDEBAR ═══════ -->
   <div class="sidebar">
     <div class="sb">
@@ -28,6 +49,8 @@
           <button class="theme-b" data-theme="dark" title="Тёмная">🌙</button>
         </div>
       </div>
+
+      <div class="user-badge" id="user-badge"></div>
 
       <div class="nav-label">Фильтры</div>
       <div class="nav-item active" data-filter="all">
@@ -73,7 +96,12 @@
           <button class="btn btn-ghost" onclick="showReanalyzeModal()">🔄 Переоц.</button>
           <button class="btn btn-ghost" onclick="exportData()">⇩ Экспорт</button>
         </div>
-        <button class="btn btn-ghost" onclick="showSettingsModal()">⚙ Настройки</button>
+        <div class="btn-row">
+          <button class="btn btn-ghost" onclick="showCabinetModal()">👤 Кабинет</button>
+          <button class="btn btn-ghost hidden" id="btn-admin" onclick="showAdminModal()">🛡 Админка</button>
+        </div>
+        <button class="btn btn-ghost hidden" id="btn-settings" onclick="showSettingsModal()">⚙ Настройки</button>
+        <button class="btn btn-ghost" onclick="doLogout()">↪ Выход</button>
       </div>
     </div>
   </div>

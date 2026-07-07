@@ -3,6 +3,7 @@ package com.hh.gui.controller;
 import com.hh.gui.ai.AiProviderManager;
 import com.hh.gui.config.RuntimeConfig;
 import com.hh.gui.model.SearchJob;
+import com.hh.gui.model.User;
 import com.hh.gui.service.SearchProfileFactory;
 import com.hh.gui.service.VacancyPipelineService;
 import com.hh.gui.service.VacancyPipelineService.PipelineResult;
@@ -44,9 +45,15 @@ public class PipelineController {
         this.aiProvider = aiProvider;
     }
 
-    /** All configured jobs, optionally narrowed to one (person, search). */
-    private List<SearchJob> jobsFor(String person, String searchName) {
+    /**
+     * All jobs the current user is allowed to trigger — every job for an admin,
+     * only their own for a regular user — optionally narrowed to one (person, search).
+     */
+    private List<SearchJob> jobsFor(String person, String searchName, User currentUser) {
         List<SearchJob> jobs = profileFactory.build();
+        if (!currentUser.isAdmin()) {
+            jobs = jobs.stream().filter(j -> currentUser.getId().equals(j.userId)).toList();
+        }
         if (person == null && searchName == null) return jobs;
         return jobs.stream()
             .filter(j -> person == null || j.personName.equals(person))
@@ -62,8 +69,9 @@ public class PipelineController {
     @PostMapping("/pipeline/run")
     public ResponseEntity<Map<String, Object>> runPipeline(
             @RequestParam(name = "person", required = false) String person,
-            @RequestParam(name = "searchName", required = false) String searchName) {
-        List<SearchJob> jobs = jobsFor(person, searchName);
+            @RequestParam(name = "searchName", required = false) String searchName,
+            @RequestAttribute("currentUser") User currentUser) {
+        List<SearchJob> jobs = jobsFor(person, searchName, currentUser);
         log.info("Запуск пайплайна для {} поисков", jobs.size());
         try {
             PipelineResult total = new PipelineResult();
@@ -100,8 +108,9 @@ public class PipelineController {
      @PostMapping("/pipeline/reanalyze")
      public ResponseEntity<Map<String, Object>> reanalyze(
              @RequestParam(name = "person", required = false) String person,
-             @RequestParam(name = "searchName", required = false) String searchName) {
-         List<SearchJob> jobs = jobsFor(person, searchName);
+             @RequestParam(name = "searchName", required = false) String searchName,
+             @RequestAttribute("currentUser") User currentUser) {
+         List<SearchJob> jobs = jobsFor(person, searchName, currentUser);
          log.info("Запрошена повторная оценка для {} поисков", jobs.size());
          try {
              VacancyPipelineService.ReanalyzeResult total = new VacancyPipelineService.ReanalyzeResult();
@@ -134,8 +143,9 @@ public class PipelineController {
      @PostMapping("/pipeline/analyze-pending")
      public ResponseEntity<Map<String, Object>> analyzePending(
              @RequestParam(name = "person", required = false) String person,
-             @RequestParam(name = "searchName", required = false) String searchName) {
-         List<SearchJob> jobs = jobsFor(person, searchName);
+             @RequestParam(name = "searchName", required = false) String searchName,
+             @RequestAttribute("currentUser") User currentUser) {
+         List<SearchJob> jobs = jobsFor(person, searchName, currentUser);
          log.info("Запрошен анализ необработанных для {} поисков", jobs.size());
          try {
              int analyzed = 0;
@@ -169,14 +179,15 @@ public class PipelineController {
     }
 
     /**
-     * List all (person, search) jobs configured in config/profiles/default.yaml —
-     * lets the frontend build a person/search filter without waiting for a
-     * newly-added search to have collected at least one vacancy.
+     * List (person, search) jobs the current user can see — all of them for an
+     * admin, only their own for a regular user — so the frontend can build a
+     * person/search filter without waiting for a newly-added search to have
+     * collected at least one vacancy.
      * GET /api/pipeline/jobs
      */
     @GetMapping("/pipeline/jobs")
-    public ResponseEntity<List<Map<String, String>>> listJobs() {
-        List<Map<String, String>> jobs = profileFactory.build().stream()
+    public ResponseEntity<List<Map<String, String>>> listJobs(@RequestAttribute("currentUser") User currentUser) {
+        List<Map<String, String>> jobs = jobsFor(null, null, currentUser).stream()
             .map(j -> Map.of("person", j.personName, "searchName", j.searchName))
             .toList();
         return ResponseEntity.ok(jobs);
@@ -223,7 +234,8 @@ public class PipelineController {
      * POST /api/ai/reset-provider — manually reset to primary
      */
     @PostMapping("/ai/reset-provider")
-    public ResponseEntity<Map<String, Object>> resetProvider() {
+    public ResponseEntity<Map<String, Object>> resetProvider(@RequestAttribute("currentUser") User currentUser) {
+        if (!currentUser.isAdmin()) return ResponseEntity.status(403).body(Map.of("error", "Требуются права администратора"));
         aiProvider.reset();
         Map<String, Object> resp = new LinkedHashMap<>();
         resp.put("status", "ok");
@@ -235,7 +247,8 @@ public class PipelineController {
      * POST /ai/force-fallback — manually switch to fallback (Grok)
      */
     @PostMapping("/ai/force-fallback")
-    public ResponseEntity<Map<String, Object>> forceFallback() {
+    public ResponseEntity<Map<String, Object>> forceFallback(@RequestAttribute("currentUser") User currentUser) {
+        if (!currentUser.isAdmin()) return ResponseEntity.status(403).body(Map.of("error", "Требуются права администратора"));
         if (aiProvider.hasFallback()) {
             aiProvider.forceFallback();
             Map<String, Object> resp = new LinkedHashMap<>();
@@ -263,7 +276,9 @@ public class PipelineController {
      */
     @PostMapping("/settings/notifications")
     public ResponseEntity<Map<String, Object>> setNotificationSettings(
-            @RequestBody Map<String, Object> body) {
+            @RequestBody Map<String, Object> body,
+            @RequestAttribute("currentUser") User currentUser) {
+        if (!currentUser.isAdmin()) return ResponseEntity.status(403).body(Map.of("error", "Требуются права администратора"));
         Object enabled = body.get("enabled");
         if (enabled instanceof Boolean) {
             pipelineService.setNotificationsEnabled((Boolean) enabled);

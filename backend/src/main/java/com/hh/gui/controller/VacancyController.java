@@ -40,15 +40,17 @@ public class VacancyController {
             @RequestParam(name = "searchName", required = false) String searchName,
             @RequestParam(name = "sort", defaultValue = "score_desc") String sort,
             @RequestParam(name = "page", defaultValue = "1") int page,
-            @RequestParam(name = "perPage", defaultValue = "30") int perPage) {
+            @RequestParam(name = "perPage", defaultValue = "30") int perPage,
+            @RequestAttribute("currentUser") User currentUser) {
 
         // Clamp to valid values
         if (page < 1) page = 1;
         if (perPage < 1) perPage = 30;
         if (perPage > 200) perPage = 200;
 
+        Long scopedUserId = currentUser.isAdmin() ? null : currentUser.getId();
         PageResponse<VacancyWithTags> resp = vacancyService.list(
-            status, district, minSalary, minScore, search, tag, remote, person, searchName, sort, page, perPage);
+            status, district, minSalary, minScore, search, tag, remote, person, searchName, scopedUserId, sort, page, perPage);
 
         List<VacancyWithTags> items = resp.getItems();
 
@@ -92,9 +94,9 @@ public class VacancyController {
     }
 
     @GetMapping("/vacancies/{id}")
-    public ResponseEntity<?> getVacancy(@PathVariable Long id) {
+    public ResponseEntity<?> getVacancy(@PathVariable Long id, @RequestAttribute("currentUser") User currentUser) {
         Optional<VacancyDetail> detail = vacancyService.findById(id);
-        if (detail.isEmpty()) {
+        if (detail.isEmpty() || !canAccess(detail.get().getVacancy(), currentUser)) {
             return ResponseEntity.notFound().build();
         }
 
@@ -151,7 +153,9 @@ public class VacancyController {
 
     @PutMapping("/vacancies/{id}")
     public ResponseEntity<?> updateVacancy(@PathVariable Long id,
-                                            @RequestBody VacancyUpdateRequest req) {
+                                            @RequestBody VacancyUpdateRequest req,
+                                            @RequestAttribute("currentUser") User currentUser) {
+        if (!ownsVacancy(id, currentUser)) return ResponseEntity.notFound().build();
         Optional<VacancyWithTags> result = vacancyService.update(id, req);
         if (result.isEmpty()) {
             return ResponseEntity.notFound().build();
@@ -161,46 +165,65 @@ public class VacancyController {
     }
 
     @PostMapping("/vacancies/{id}/tags")
-    public ResponseEntity<?> addTag(@PathVariable Long id, @RequestBody Map<String, String> body) {
+    public ResponseEntity<?> addTag(@PathVariable Long id, @RequestBody Map<String, String> body,
+                                     @RequestAttribute("currentUser") User currentUser) {
         String tag = body.get("tag");
         if (tag == null || tag.trim().isEmpty()) {
             return ResponseEntity.badRequest().body(Map.of("error", "tag is required"));
         }
-        Optional<VacancyDetail> v = vacancyService.findById(id);
-        if (v.isEmpty()) return ResponseEntity.notFound().build();
+        if (!ownsVacancy(id, currentUser)) return ResponseEntity.notFound().build();
         vacancyService.addTag(id, tag.trim());
         return ResponseEntity.ok(Map.of("status", "ok"));
     }
 
     @PostMapping("/vacancies/{id}/reset-score")
-    public ResponseEntity<?> resetScore(@PathVariable Long id) {
+    public ResponseEntity<?> resetScore(@PathVariable Long id, @RequestAttribute("currentUser") User currentUser) {
+        if (!ownsVacancy(id, currentUser)) return ResponseEntity.notFound().build();
         boolean reset = vacancyService.resetScore(id);
         if (!reset) return ResponseEntity.notFound().build();
         return ResponseEntity.ok(Map.of("status", "reset", "id", id));
     }
 
     @PutMapping("/vacancies/{id}/status")
-    public ResponseEntity<?> updateStatus(@PathVariable Long id, @RequestBody Map<String, String> body) {
+    public ResponseEntity<?> updateStatus(@PathVariable Long id, @RequestBody Map<String, String> body,
+                                           @RequestAttribute("currentUser") User currentUser) {
         String status = body.get("status");
         if (status == null || status.isEmpty()) {
             return ResponseEntity.badRequest().body(Map.of("error", "status is required"));
         }
+        if (!ownsVacancy(id, currentUser)) return ResponseEntity.notFound().build();
         boolean updated = vacancyService.updateStatus(id, status);
         if (!updated) return ResponseEntity.notFound().build();
         return ResponseEntity.ok(Map.of("status", "updated", "id", id));
     }
 
     @PostMapping("/vacancies/bulk-status")
-    public ResponseEntity<?> bulkStatusUpdate(@RequestBody BulkStatusRequest req) {
-        int count = vacancyService.updateStatusBulk(req);
+    public ResponseEntity<?> bulkStatusUpdate(@RequestBody BulkStatusRequest req,
+                                               @RequestAttribute("currentUser") User currentUser) {
+        List<Long> ownedIds = req.getIds().stream().filter(id -> ownsVacancy(id, currentUser)).toList();
+        BulkStatusRequest scoped = new BulkStatusRequest();
+        scoped.setIds(ownedIds);
+        scoped.setStatus(req.getStatus());
+        int count = vacancyService.updateStatusBulk(scoped);
         return ResponseEntity.ok(Map.of("status", "ok", "count", count));
     }
 
     @DeleteMapping("/vacancies/{id}")
-    public ResponseEntity<?> deleteVacancy(@PathVariable Long id) {
+    public ResponseEntity<?> deleteVacancy(@PathVariable Long id, @RequestAttribute("currentUser") User currentUser) {
+        if (!ownsVacancy(id, currentUser)) return ResponseEntity.notFound().build();
         boolean deleted = vacancyService.delete(id);
         if (!deleted) return ResponseEntity.notFound().build();
         return ResponseEntity.ok(Map.of("status", "deleted"));
+    }
+
+    /** Non-admins may only touch vacancies tied to their own user_id; legacy rows with no owner are admin-only. */
+    private boolean canAccess(Vacancy v, User currentUser) {
+        if (currentUser.isAdmin()) return true;
+        return v.getUserId() != null && v.getUserId().equals(currentUser.getId());
+    }
+
+    private boolean ownsVacancy(Long id, User currentUser) {
+        return vacancyService.findById(id).map(d -> canAccess(d.getVacancy(), currentUser)).orElse(false);
     }
 
     @PostMapping("/import")

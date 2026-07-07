@@ -43,6 +43,11 @@ public class Vacancy {
     private String validThrough;
     private String scrapeStatus; // pending / ok / failed
 
+    // Multi-user auth fields
+    private Long userId;
+    private Long searchId;
+    private String criteriaHash;
+
     // Default constructor
     public Vacancy() {}
 
@@ -154,4 +159,13 @@ public class Vacancy {
 
     public String getScrapeStatus() { return scrapeStatus; }
     public void setScrapeStatus(String scrapeStatus) { this.scrapeStatus = scrapeStatus; }
+
+    public Long getUserId() { return userId; }
+    public void setUserId(Long userId) { this.userId = userId; }
+
+    public Long getSearchId() { return searchId; }
+    public void setSearchId(Long searchId) { this.searchId = searchId; }
+
+    public String getCriteriaHash() { return criteriaHash; }
+    public void setCriteriaHash(String criteriaHash) { this.criteriaHash = criteriaHash; }
 }

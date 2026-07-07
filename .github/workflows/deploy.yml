@@ -94,6 +94,9 @@ jobs:
             sqlite3 "$DB_PATH" "ALTER TABLE vacancies ADD COLUMN notified INTEGER DEFAULT 0;" 2>/dev/null || true
             sqlite3 "$DB_PATH" "ALTER TABLE vacancies ADD COLUMN published_at TEXT DEFAULT '';" 2>/dev/null || true
             sqlite3 "$DB_PATH" "ALTER TABLE vacancies ADD COLUMN found_by_scan INTEGER DEFAULT 0;" 2>/dev/null || true
+            sqlite3 "$DB_PATH" "ALTER TABLE vacancies ADD COLUMN user_id INTEGER DEFAULT NULL;" 2>/dev/null || true
+            sqlite3 "$DB_PATH" "ALTER TABLE vacancies ADD COLUMN search_id INTEGER DEFAULT NULL;" 2>/dev/null || true
+            sqlite3 "$DB_PATH" "ALTER TABLE vacancies ADD COLUMN criteria_hash TEXT DEFAULT '';" 2>/dev/null || true
 
             # One-time: archive the pre-browser-scraper data instead of mixing it with
             # real (full-description) analysis. Only runs once — no-op if already renamed,
@@ -136,7 +139,9 @@ jobs:
           echo "✅ Scraper sidecar is running"
 
           # HTTP checks
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/api/stats)
+          # /api/** now requires a logged-in session (see AuthInterceptor), so the
+          # smoke test hits Actuator's health endpoint instead, which bypasses it.
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/actuator/health)
           if [ "$HTTP_CODE" != "200" ]; then
             echo "❌ HTTP check failed (code: $HTTP_CODE)"
             exit 1
