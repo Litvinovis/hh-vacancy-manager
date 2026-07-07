@@ -10,6 +10,7 @@ import org.springframework.stereotype.Repository;
 
 import java.sql.PreparedStatement;
 import java.sql.Statement;
+import java.sql.Types;
 import java.time.Instant;
 import java.util.*;
 
@@ -60,13 +61,16 @@ public class VacancyRepository {
             v.setNotified(rs.getInt("notified") == 1);
             v.setPublishedAt(rs.getString("published_at"));
             v.setFoundByScan(rs.getInt("found_by_scan"));
+            v.setUserId(rs.getObject("user_id", Long.class));
+            v.setSearchId(rs.getObject("search_id", Long.class));
+            v.setCriteriaHash(rs.getString("criteria_hash"));
             return v;
         };
     }
 
     public List<Vacancy> findAll(String status, String district, Integer minSalary,
                                   Integer minScore, String search, String tag,
-                                  Boolean remote, String person, String searchName,
+                                  Boolean remote, String person, String searchName, Long userId,
                                   String sort, int offset, int limit) {
         StringBuilder sql = new StringBuilder("SELECT v.* FROM vacancies v");
         List<Object> params = new ArrayList<>();
@@ -120,6 +124,10 @@ public class VacancyRepository {
             conditions.add("v.search_name = ?");
             params.add(searchName);
         }
+        if (userId != null) {
+            conditions.add("v.user_id = ?");
+            params.add(userId);
+        }
 
         if (!conditions.isEmpty()) {
             sql.append(" WHERE ").append(String.join(" AND ", conditions));
@@ -146,7 +154,7 @@ public class VacancyRepository {
 
     public int countAll(String status, String district, Integer minSalary,
                          Integer minScore, String search, String tag, Boolean remote,
-                         String person, String searchName) {
+                         String person, String searchName, Long userId) {
         StringBuilder sql = new StringBuilder("SELECT COUNT(*) FROM vacancies v");
         List<Object> params = new ArrayList<>();
 
@@ -199,6 +207,10 @@ public class VacancyRepository {
             conditions.add("v.search_name = ?");
             params.add(searchName);
         }
+        if (userId != null) {
+            conditions.add("v.user_id = ?");
+            params.add(userId);
+        }
 
         if (!conditions.isEmpty()) {
             sql.append(" WHERE ").append(String.join(" AND ", conditions));
@@ -222,13 +234,14 @@ public class VacancyRepository {
         v.setUpdatedAt(now);
 
         String sql = """
-            INSERT INTO vacancies (hh_id, person, search_name, title, company, employer_name,
+            INSERT INTO vacancies (hh_id, person, search_name, user_id, search_id, criteria_hash,
+                title, company, employer_name,
                 salary_from, salary_to, currency, salary_gross, address, district, url,
                 experience, employment, key_skills, trusted_employer, valid_through, scrape_status,
                 ai_score, ai_verdict, ai_reason, description, status,
                 rejection_reason, notes, applied_at, created_at, updated_at,
                 source, source_query, is_remote, notified, published_at, found_by_scan)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """;
 
         KeyHolder keyHolder = new GeneratedKeyHolder();
@@ -238,6 +251,9 @@ public class VacancyRepository {
             ps.setString(i++, v.getHhId());
             ps.setString(i++, v.getPerson());
             ps.setString(i++, v.getSearchName());
+            ps.setObject(i++, v.getUserId(), Types.BIGINT);
+            ps.setObject(i++, v.getSearchId(), Types.BIGINT);
+            ps.setString(i++, v.getCriteriaHash());
             ps.setString(i++, v.getTitle());
             ps.setString(i++, v.getCompany());
             ps.setString(i++, v.getEmployerName());
@@ -282,7 +298,8 @@ public class VacancyRepository {
         v.setUpdatedAt(now);
 
         String sql = """
-            UPDATE vacancies SET hh_id=?, person=?, search_name=?, title=?, company=?, employer_name=?,
+            UPDATE vacancies SET hh_id=?, person=?, search_name=?, user_id=?, search_id=?, criteria_hash=?,
+                title=?, company=?, employer_name=?,
                 salary_from=?, salary_to=?, currency=?, salary_gross=?, address=?, district=?, url=?,
                 experience=?, employment=?, key_skills=?, trusted_employer=?, valid_through=?, scrape_status=?,
                 ai_score=?, ai_verdict=?, ai_reason=?, description=?, status=?, rejection_reason=?, notes=?,
@@ -291,22 +308,49 @@ public class VacancyRepository {
             WHERE id=?
             """;
 
-        jdbc.update(sql,
-            v.getHhId(), v.getPerson(), v.getSearchName(), v.getTitle(), v.getCompany(), v.getEmployerName(),
-            v.getSalaryFrom() != null ? v.getSalaryFrom() : 0,
-            v.getSalaryTo() != null ? v.getSalaryTo() : 0,
-            v.getCurrency(), v.isSalaryGross() ? 1 : 0, v.getAddress(), v.getDistrict(), v.getUrl(),
-            v.getExperience(), v.getEmployment(), v.getKeySkills(), v.isTrustedEmployer() ? 1 : 0,
-            v.getValidThrough(), v.getScrapeStatus(),
-            v.getAiScore() != null ? v.getAiScore() : 0,
-            v.getAiVerdict(), v.getAiReason(), v.getDescription(),
-            v.getStatus(), v.getRejectionReason(), v.getNotes(),
-            v.getAppliedAt(), v.getUpdatedAt(),
-            v.getSource(), v.getSourceQuery(),
-            v.isRemote() ? 1 : 0,
-            v.isNotified() ? 1 : 0,
-            v.getPublishedAt(), v.getFoundByScan(),
-            v.getId());
+        jdbc.update(con -> {
+            PreparedStatement ps = con.prepareStatement(sql);
+            int i = 1;
+            ps.setString(i++, v.getHhId());
+            ps.setString(i++, v.getPerson());
+            ps.setString(i++, v.getSearchName());
+            ps.setObject(i++, v.getUserId(), Types.BIGINT);
+            ps.setObject(i++, v.getSearchId(), Types.BIGINT);
+            ps.setString(i++, v.getCriteriaHash());
+            ps.setString(i++, v.getTitle());
+            ps.setString(i++, v.getCompany());
+            ps.setString(i++, v.getEmployerName());
+            ps.setInt(i++, v.getSalaryFrom() != null ? v.getSalaryFrom() : 0);
+            ps.setInt(i++, v.getSalaryTo() != null ? v.getSalaryTo() : 0);
+            ps.setString(i++, v.getCurrency());
+            ps.setInt(i++, v.isSalaryGross() ? 1 : 0);
+            ps.setString(i++, v.getAddress());
+            ps.setString(i++, v.getDistrict());
+            ps.setString(i++, v.getUrl());
+            ps.setString(i++, v.getExperience());
+            ps.setString(i++, v.getEmployment());
+            ps.setString(i++, v.getKeySkills());
+            ps.setInt(i++, v.isTrustedEmployer() ? 1 : 0);
+            ps.setString(i++, v.getValidThrough());
+            ps.setString(i++, v.getScrapeStatus());
+            ps.setInt(i++, v.getAiScore() != null ? v.getAiScore() : 0);
+            ps.setString(i++, v.getAiVerdict());
+            ps.setString(i++, v.getAiReason());
+            ps.setString(i++, v.getDescription());
+            ps.setString(i++, v.getStatus());
+            ps.setString(i++, v.getRejectionReason());
+            ps.setString(i++, v.getNotes());
+            ps.setString(i++, v.getAppliedAt());
+            ps.setString(i++, v.getUpdatedAt());
+            ps.setString(i++, v.getSource());
+            ps.setString(i++, v.getSourceQuery());
+            ps.setInt(i++, v.isRemote() ? 1 : 0);
+            ps.setInt(i++, v.isNotified() ? 1 : 0);
+            ps.setString(i++, v.getPublishedAt());
+            ps.setInt(i++, v.getFoundByScan());
+            ps.setLong(i, v.getId());
+            return ps;
+        });
     }
 
     /**
@@ -459,6 +503,24 @@ public class VacancyRepository {
             "SELECT * FROM vacancies WHERE hh_id = ? AND scrape_status = 'ok' LIMIT 1",
             rowMapper, hhId);
         return results.isEmpty() ? Optional.empty() : Optional.of(results.get(0));
+    }
+
+    /**
+     * Mirrors findFirstScrapedByHhId one layer up: an already-AI-analyzed vacancy
+     * for the same real hh_id whose scoring inputs (criteria_hash) exactly match —
+     * lets the pipeline copy a verdict instead of spending another AI call when two
+     * different users' searches are genuinely scoring-equivalent for this posting.
+     */
+    public Optional<Vacancy> findAnalyzedByHhIdAndCriteriaHash(String hhId, String criteriaHash) {
+        if (criteriaHash == null || criteriaHash.isEmpty()) return Optional.empty();
+        List<Vacancy> results = jdbc.query(
+            "SELECT * FROM vacancies WHERE hh_id = ? AND criteria_hash = ? AND ai_verdict != 'pending' LIMIT 1",
+            rowMapper, hhId, criteriaHash);
+        return results.isEmpty() ? Optional.empty() : Optional.of(results.get(0));
+    }
+
+    public void updateCriteriaHash(Long id, String criteriaHash) {
+        jdbc.update("UPDATE vacancies SET criteria_hash=? WHERE id=?", criteriaHash, id);
     }
 
     // Stats

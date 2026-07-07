@@ -14,6 +14,7 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.List;
 import java.util.Map;
 import java.util.ArrayList;
@@ -198,7 +199,11 @@ public class VacancyAiAnalyzer {
         if (job.notSuitable != null && !job.notSuitable.isEmpty()) {
             sb.append("НЕ подходит: ").append(String.join(", ", job.notSuitable)).append("\n");
         }
-        sb.append("Мин. зарплата: ").append(job.salaryMin).append("₽\n\n");
+        sb.append("Мин. зарплата: ").append(job.salaryMin).append("₽\n");
+        if (job.experienceSummary != null && !job.experienceSummary.isBlank()) {
+            sb.append("Опыт и бэкграунд кандидата: ").append(job.experienceSummary.trim()).append("\n");
+        }
+        sb.append("\n");
 
         sb.append("КАК ОЦЕНИВАТЬ \"ИНТЕРЕСНОСТЬ\" РАБОТЫ (общий ориентир — вес зависит от заметки ниже):\n");
         sb.append("- Интересно: аналитическое мышление, коммуникация, разнообразие задач, непредсказуемый процесс\n");
@@ -242,6 +247,44 @@ public class VacancyAiAnalyzer {
         }
 
         return sb.toString();
+    }
+
+    /**
+     * Hashes the scoring-relevant inputs of a search job (everything buildPrompt's
+     * "ПРОФИЛЬ"/notes/candidate-background sections draw from). Two different
+     * users' searches that hash the same for a given vacancy are genuinely
+     * scoring-equivalent — see VacancyPipelineService's dedup-before-AI-call step,
+     * which mirrors the existing scrape-reuse pattern one layer up.
+     */
+    public String computeCriteriaHash(SearchJob job) {
+        String normalized = String.join("|",
+            nullToEmpty(job.city).trim().toLowerCase(),
+            sortedJoined(job.priorityDistricts),
+            sortedJoined(job.skills),
+            sortedJoined(job.notSuitable),
+            String.valueOf(job.salaryMin),
+            nullToEmpty(job.aiNotes).trim().toLowerCase(),
+            nullToEmpty(job.experienceSummary).trim().toLowerCase());
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] bytes = digest.digest(normalized.getBytes(StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder();
+            for (byte b : bytes) hex.append(String.format("%02x", b));
+            return hex.toString();
+        } catch (Exception e) {
+            // SHA-256 is always available on any JVM; this is unreachable in practice.
+            return normalized;
+        }
+    }
+
+    private static String nullToEmpty(String s) {
+        return s != null ? s : "";
+    }
+
+    private static String sortedJoined(List<String> list) {
+        if (list == null || list.isEmpty()) return "";
+        return list.stream().map(s -> s.trim().toLowerCase()).sorted()
+            .reduce((a, b) -> a + "," + b).orElse("");
     }
 
     private String formatSalary(Vacancy v) {

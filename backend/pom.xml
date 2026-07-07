@@ -46,6 +46,14 @@
             <version>${sqlite-jdbc.version}</version>
         </dependency>
 
+        <!-- Password hashing (BCrypt) — deliberately not the full spring-boot-starter-security,
+             which would pull in default-login-page/CSRF autoconfiguration that fights this
+             app's session-cookie SPA + JSON API shape for no benefit at this scale. -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-crypto</artifactId>
+        </dependency>
+
         <!-- YAML config -->
         <dependency>
             <groupId>org.yaml</groupId>

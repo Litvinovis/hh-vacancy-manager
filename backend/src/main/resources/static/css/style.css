@@ -429,3 +429,28 @@ a { color: inherit; }
 .provider-inp { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 7px 9px; color: var(--ink); font-size: 12px; font-family: 'JetBrains Mono', monospace; }
 .provider-inp:focus { border-color: var(--accent); outline: none; }
 .provider-key { letter-spacing: 1px; }
+
+/* ═══════ LOGIN ═══════ */
+.hidden { display: none !important; }
+.login-view { position: fixed; inset: 0; background: var(--bg); display: flex; align-items: center; justify-content: center; z-index: 2000; }
+.login-box { background: var(--surface); border: 1px solid var(--rule); border-radius: 18px; box-shadow: var(--shadow); padding: 32px 28px; width: 100%; max-width: 340px; }
+.login-sub { color: var(--muted); font-size: 13px; text-align: center; margin: 0 0 20px; }
+.login-inp { width: 100%; margin-bottom: 10px; }
+.login-error { color: var(--crit); font-size: 12.5px; margin-top: 10px; text-align: center; min-height: 16px; }
+
+/* ═══════ USER BADGE / CABINET / ADMIN ═══════ */
+.user-badge { padding: 10px 0 4px; font-size: 12px; color: var(--muted); }
+.user-badge b { color: var(--ink); font-weight: 700; }
+.user-badge .role-tag { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; }
+.cabinet-section-title { font-size: 12.5px; font-weight: 800; color: var(--accent); text-transform: uppercase; letter-spacing: .03em; margin: 4px 0 10px; }
+.provider-field-full { grid-column: 1 / -1; }
+.provider-textarea { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 7px 9px; color: var(--ink); font-size: 12.5px; font-family: 'Nunito Sans', sans-serif; resize: vertical; min-height: 52px; }
+.provider-textarea:focus { border-color: var(--accent); outline: none; }
+.admin-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.admin-table th { text-align: left; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .03em; padding: 8px 10px; border-bottom: 1px solid var(--rule); }
+.admin-table td { padding: 9px 10px; border-bottom: 1px solid var(--rule-soft); vertical-align: middle; }
+.admin-table tr:last-child td { border-bottom: none; }
+.admin-actions { display: flex; gap: 6px; }
+.status-pill { display: inline-block; padding: 2px 9px; border-radius: 10px; font-size: 11px; font-weight: 700; }
+.status-pill.active { background: var(--good-soft); color: var(--good); }
+.status-pill.inactive { background: var(--crit-soft); color: var(--crit); }

@@ -10,9 +10,12 @@ import java.util.List;
  * interestingness matters little" for the same person.
  */
 public class SearchJob {
+    public Long userId;
+    public Long searchId;
     public String personName;
     public String searchName;
     public String city;
+    public String experienceSummary;
     public List<String> queries;
     public int area;
     public String schedule;

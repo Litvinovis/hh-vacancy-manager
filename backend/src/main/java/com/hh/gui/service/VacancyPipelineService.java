@@ -130,6 +130,8 @@ public class VacancyPipelineService {
             if (vacancyRepo.existsByHhIdPersonSearch(v.getHhId(), job.personName, job.searchName)) continue;
             v.setPerson(job.personName);
             v.setSearchName(job.searchName);
+            v.setUserId(job.userId);
+            v.setSearchId(job.searchId);
             v.setRemote(job.isRemote());
             v.setSourceQuery(job.searchName);
             v.setScrapeStatus("pending");
@@ -261,10 +263,7 @@ public class VacancyPipelineService {
             List<Vacancy> batch = vacancyRepo.findPending(job.personName, job.searchName, batchSize);
             if (batch.isEmpty()) break;
 
-            for (var r : aiAnalyzer.analyzeBatch(batch, job)) {
-                vacancyRepo.updateAiResult(r.hhId(), job.personName, job.searchName, r.score(), r.verdict(), r.reason());
-                totalAnalyzed++;
-            }
+            totalAnalyzed += analyzeBatchWithDedup(batch, job);
             processed += batch.size();
         }
         return totalAnalyzed;
@@ -283,13 +282,48 @@ public class VacancyPipelineService {
             List<Vacancy> batch = vacancyRepo.findPending(job.personName, job.searchName, getBatchSize());
             if (batch.isEmpty()) break;
 
-            for (var r : aiAnalyzer.analyzeBatch(batch, job)) {
-                vacancyRepo.updateAiResult(r.hhId(), job.personName, job.searchName, r.score(), r.verdict(), r.reason());
-                totalAnalyzed++;
-            }
+            totalAnalyzed += analyzeBatchWithDedup(batch, job);
             batchNum++;
         }
         return totalAnalyzed;
+    }
+
+    /**
+     * Stamps this job's criteria hash on every vacancy in the batch, copies a
+     * verdict from any other (user, search) that already scored the exact same
+     * real vacancy under scoring-equivalent criteria (mirrors the scrape-reuse
+     * pattern in scrapePending, one layer up — see findAnalyzedByHhIdAndCriteriaHash),
+     * and only sends the genuine misses to the real AI call.
+     */
+    private int analyzeBatchWithDedup(List<Vacancy> batch, SearchJob job) {
+        String criteriaHash = aiAnalyzer.computeCriteriaHash(job);
+        List<Vacancy> needsAi = new ArrayList<>();
+        int deduped = 0;
+
+        for (Vacancy v : batch) {
+            vacancyRepo.updateCriteriaHash(v.getId(), criteriaHash);
+            Optional<Vacancy> match = vacancyRepo.findAnalyzedByHhIdAndCriteriaHash(v.getHhId(), criteriaHash);
+            if (match.isPresent()) {
+                Vacancy m = match.get();
+                vacancyRepo.updateAiResult(v.getHhId(), job.personName, job.searchName,
+                    m.getAiScore() != null ? m.getAiScore() : 0, m.getAiVerdict(), m.getAiReason());
+                deduped++;
+            } else {
+                needsAi.add(v);
+            }
+        }
+        if (deduped > 0) {
+            log.info("AI-дедуп ({} · {}): {} вакансий переиспользовано без вызова AI", job.personName, job.searchName, deduped);
+        }
+
+        int aiAnalyzed = 0;
+        if (!needsAi.isEmpty()) {
+            for (var r : aiAnalyzer.analyzeBatch(needsAi, job)) {
+                vacancyRepo.updateAiResult(r.hhId(), job.personName, job.searchName, r.score(), r.verdict(), r.reason());
+                aiAnalyzed++;
+            }
+        }
+        return deduped + aiAnalyzed;
     }
 
     /**
