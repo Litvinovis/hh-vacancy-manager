@@ -155,7 +155,7 @@ public class PipelineController {
              Map<String, Object> response = new LinkedHashMap<>();
              response.put("status", "ok");
              response.put("analyzed", analyzed);
-             response.put("remaining", vacancyRepo.countUnassessed());
+             response.put("remaining", vacancyRepo.countUnassessed(currentUser.isAdmin() ? null : currentUser.getId()));
              return ResponseEntity.ok(response);
          } catch (Exception e) {
              log.error("Ошибка анализа необработанных: {}", e.getMessage(), e);
@@ -171,10 +171,11 @@ public class PipelineController {
      * GET /api/pipeline/reanalyze/count
      */
     @GetMapping("/pipeline/reanalyze/count")
-    public ResponseEntity<Map<String, Object>> reanalyzeCount() {
+    public ResponseEntity<Map<String, Object>> reanalyzeCount(@RequestAttribute("currentUser") User currentUser) {
+        Long scopedUserId = currentUser.isAdmin() ? null : currentUser.getId();
         Map<String, Object> response = new LinkedHashMap<>();
-        response.put("rescanable", vacancyRepo.countRescanable());
-        response.put("total", vacancyRepo.countTotal());
+        response.put("rescanable", vacancyRepo.countRescanable(scopedUserId));
+        response.put("total", vacancyRepo.countTotal(scopedUserId));
         return ResponseEntity.ok(response);
     }
 
@@ -198,11 +199,12 @@ public class PipelineController {
      * GET /api/pipeline/status
      */
     @GetMapping("/pipeline/status")
-    public ResponseEntity<Map<String, Object>> getStatus() {
+    public ResponseEntity<Map<String, Object>> getStatus(@RequestAttribute("currentUser") User currentUser) {
+        Long scopedUserId = currentUser.isAdmin() ? null : currentUser.getId();
         Map<String, Object> status = new LinkedHashMap<>();
-        status.put("total", vacancyRepo.countTotal());
-        status.put("pending", vacancyRepo.countPending());
-        status.put("byStatus", vacancyRepo.countByStatus());
+        status.put("total", vacancyRepo.countTotal(scopedUserId));
+        status.put("pending", vacancyRepo.countPending(scopedUserId));
+        status.put("byStatus", vacancyRepo.countByStatus(scopedUserId));
         return ResponseEntity.ok(status);
     }
 
