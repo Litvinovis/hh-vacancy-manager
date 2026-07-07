@@ -149,8 +149,12 @@ public class HhApiClient {
             v.setUrl(link);
             v.setPublishedAt(pubDate);
 
-            // Parse company from description
-            String descClean = description != null ? description.replaceAll("<[^>]+>", "").trim() : "";
+            // Parse company from description.
+            // HH RSS uses NBSP ( ) as a thousands separator and around "от"/"до" —
+            // normalize to regular spaces so \s-based regexes below actually match.
+            String descClean = description != null
+                    ? description.replaceAll("<[^>]+>", "").replace('\u00A0', ' ').trim()
+                    : "";
             v.setDescription(descClean.length() > 600 ? descClean.substring(0, 600) : descClean);
 
             // Extract company
@@ -160,23 +164,40 @@ public class HhApiClient {
                 v.setCompany(m.group(1).trim());
             }
 
-            // Extract salary
-            Pattern salaryPattern = Pattern.compile("от\\s*([\\d\\s]+)(?:\\s*до\\s*([\\d\\s]+))?\\s*([₽$€]|[A-Z]{3})");
-            m = salaryPattern.matcher(descClean);
-            if (m.find()) {
-                String from = m.group(1).replaceAll("\\s", "");
-                String to = m.group(2) != null ? m.group(2).replaceAll("\\s", "") : null;
-                String currency = m.group(3);
-                try { v.setSalaryFrom(Integer.parseInt(from)); } catch (NumberFormatException ignored) {}
-                if (to != null) try { v.setSalaryTo(Integer.parseInt(to)); } catch (NumberFormatException ignored) {}
-                v.setCurrency(currency);
+            // Extract salary — anchored on the RSS's fixed label to avoid matching
+            // unrelated prices elsewhere in the description. Both "от" and "до" are
+            // optional since HH lists salary as a range, a floor only, or a cap only.
+            int salaryIdx = descClean.indexOf("Предполагаемый уровень месячного дохода");
+            if (salaryIdx >= 0) {
+                Pattern salaryPattern = Pattern.compile(
+                        "(?:от\\s*([\\d\\s]+?))?(?:\\s*до\\s*([\\d\\s]+?))?\\s*([₽$€]|[A-Z]{3})");
+                Matcher salaryMatcher = salaryPattern.matcher(descClean.substring(salaryIdx));
+                if (salaryMatcher.find() && (salaryMatcher.group(1) != null || salaryMatcher.group(2) != null)) {
+                    String from = salaryMatcher.group(1) != null ? salaryMatcher.group(1).replaceAll("\\s", "") : null;
+                    String to = salaryMatcher.group(2) != null ? salaryMatcher.group(2).replaceAll("\\s", "") : null;
+                    String currency = salaryMatcher.group(3);
+                    if (from != null) try { v.setSalaryFrom(Integer.parseInt(from)); } catch (NumberFormatException ignored) {}
+                    if (to != null) try { v.setSalaryTo(Integer.parseInt(to)); } catch (NumberFormatException ignored) {}
+                    v.setCurrency(currency);
+                }
             }
 
-            // Extract address/region
-            Pattern regionPattern = Pattern.compile("Регион:\\s*(.+?)(?:\\n|$)");
+            // Extract address/region — city name only (a single word), not the rest of
+            // the line: the previous ".+?(?:\\n|$)" pattern had no real "\n" to stop at
+            // (HH RSS puts region and the next field on the same line), so it captured
+            // everything up to the end of the description, salary text included.
+            Pattern regionPattern = Pattern.compile("Регион:\\s*([А-Яа-яЁё\\-]+)");
             m = regionPattern.matcher(descClean);
             if (m.find()) {
                 v.setAddress(m.group(1).trim());
+            }
+
+            // District: HH RSS doesn't expose a structured district field, only the city.
+            // Best-effort: look for a known Ufa district/microdistrict name anywhere in
+            // the description text (this is how the AI prompt already treats "Шакша").
+            String district = extractDistrict(descClean);
+            if (district != null) {
+                v.setDistrict(district);
             }
 
             v.setStatus("new");
@@ -189,6 +210,20 @@ public class HhApiClient {
             log.warn("Не удалось разобрать RSS-элемент: {}", e.getMessage());
             return null;
         }
+    }
+
+    // Ufa's administrative districts + well-known microdistricts. HH RSS has no
+    // structured district field, so this is a best-effort text match.
+    private static final List<String> DISTRICTS = List.of(
+            "Шакша", "Калининский", "Орджоникидзевский", "Кировский", "Ленинский",
+            "Октябрьский", "Советский", "Демский");
+
+    private String extractDistrict(String text) {
+        if (text == null) return null;
+        for (String district : DISTRICTS) {
+            if (text.contains(district)) return district;
+        }
+        return null;
     }
 
     private String getText(Element parent, String tagName) {

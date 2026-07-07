@@ -1,26 +1,22 @@
 package com.hh.gui.controller;
 
 import com.hh.gui.ai.AiProviderManager;
-import com.hh.gui.config.AppConfig;
-import com.hh.gui.config.AppConfig.SearchProfile;
-import com.hh.gui.config.AppConfig.SearchEntry;
 import com.hh.gui.config.RuntimeConfig;
+import com.hh.gui.service.SearchProfileFactory;
 import com.hh.gui.service.VacancyPipelineService;
 import com.hh.gui.service.VacancyPipelineService.PipelineResult;
 import com.hh.gui.repository.VacancyRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.*;
 
 /**
  * REST API for pipeline control and status.
- * Also runs scheduled pipeline via cron.
+ * Scheduled execution lives in PipelineScheduler.
  */
 @RestController
 @RequestMapping("/api")
@@ -30,22 +26,19 @@ public class PipelineController {
 
     private final VacancyPipelineService pipelineService;
     private final VacancyRepository vacancyRepo;
-    private final SearchProfile profile;
+    private final SearchProfileFactory profileFactory;
     private final RuntimeConfig runtimeConfig;
     private final AiProviderManager aiProvider;
-
-    @Value("${app.pipeline.profile:mom}")
-    private String pipelineProfile;
 
     @Autowired
     public PipelineController(VacancyPipelineService pipelineService,
                                VacancyRepository vacancyRepo,
-                               SearchProfile profile,
+                               SearchProfileFactory profileFactory,
                                RuntimeConfig runtimeConfig,
                                AiProviderManager aiProvider) {
         this.pipelineService = pipelineService;
         this.vacancyRepo = vacancyRepo;
-        this.profile = profile;
+        this.profileFactory = profileFactory;
         this.runtimeConfig = runtimeConfig;
         this.aiProvider = aiProvider;
     }
@@ -60,7 +53,7 @@ public class PipelineController {
         log.info("Запуск пайплайна для профиля: {}", profileName);
 
         try {
-            VacancyPipelineService.SearchProfile sp = buildSearchProfile();
+            VacancyPipelineService.SearchProfile sp = profileFactory.build();
             PipelineResult result = pipelineService.runFullPipeline(sp);
 
             Map<String, Object> response = new LinkedHashMap<>();
@@ -90,7 +83,7 @@ public class PipelineController {
      public ResponseEntity<Map<String, Object>> reanalyze() {
          log.info("Запрошена повторная оценка");
          try {
-             VacancyPipelineService.SearchProfile sp = buildSearchProfile();
+             VacancyPipelineService.SearchProfile sp = profileFactory.build();
              VacancyPipelineService.ReanalyzeResult result = pipelineService.reanalyzeAll(sp);
              Map<String, Object> response = new LinkedHashMap<>();
              response.put("status", "ok");
@@ -115,7 +108,7 @@ public class PipelineController {
      public ResponseEntity<Map<String, Object>> analyzePending() {
          log.info("Запрошен анализ необработанных");
          try {
-             VacancyPipelineService.SearchProfile sp = buildSearchProfile();
+             VacancyPipelineService.SearchProfile sp = profileFactory.build();
              int analyzed = pipelineService.analyzeAllPending(sp);
              Map<String, Object> response = new LinkedHashMap<>();
              response.put("status", "ok");
@@ -141,26 +134,6 @@ public class PipelineController {
         response.put("rescanable", vacancyRepo.countRescanable());
         response.put("total", vacancyRepo.countTotal());
         return ResponseEntity.ok(response);
-    }
-
-    /**
-     * Scheduled pipeline run — every 2 hours.
-     */
-    @Scheduled(cron = "${app.pipeline.cron:0 0 */2 * * *}")
-    public void scheduledPipelineRun() {
-        if (!runtimeConfig.isPipelineEnabled()) {
-            log.debug("Планировщик пайплайна отключён");
-            return;
-        }
-        log.info("=== Запланированный запуск пайплайна ===");
-        try {
-            VacancyPipelineService.SearchProfile sp = buildSearchProfile();
-            PipelineResult result = pipelineService.runFullPipeline(sp);
-            log.info("Пайплайн завершён: собрано={}, новых={}, проанализировано={}, одобрено={}",
-                result.collected, result.newVacancies, result.analyzed, result.approved);
-        } catch (Exception e) {
-            log.error("Ошибка запланированного пайплайна: {}", e.getMessage(), e);
-        }
     }
 
     /**
@@ -251,47 +224,5 @@ public class PipelineController {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("enabled", pipelineService.isNotificationsEnabled());
         return ResponseEntity.ok(result);
-    }
-
-    /**
-     * Build SearchProfile from YAML config (via AppConfig).
-     * Supports new 'searches' list format with backward compatibility.
-     */
-    private VacancyPipelineService.SearchProfile buildSearchProfile() {
-        VacancyPipelineService.SearchProfile sp = new VacancyPipelineService.SearchProfile();
-
-        sp.city = profile.getCity();
-
-        // Collect all searches into a flat list
-        List<VacancyPipelineService.SearchQuery> allQueries = new ArrayList<>();
-        for (SearchEntry entry : profile.getSearches()) {
-            boolean remote = entry.isRemote();
-            for (String query : entry.queries) {
-                VacancyPipelineService.SearchQuery sq = new VacancyPipelineService.SearchQuery();
-                sq.query = query;
-                sq.area = entry.area;
-                sq.schedule = entry.schedule;
-                sq.salaryMin = entry.salaryMin;
-                sq.isRemote = remote;
-                sq.excludeWords = entry.excludeWords;
-                allQueries.add(sq);
-            }
-        }
-        sp.queries = allQueries;
-
-        Map<String, Object> data = profile.getData();
-        @SuppressWarnings("unchecked")
-        List<String> priorityDistricts = (List<String>) data.getOrDefault("priority_districts", List.of("Шакша", "Калининский"));
-        sp.priorityDistricts = priorityDistricts;
-
-        @SuppressWarnings("unchecked")
-        List<String> skills = (List<String>) data.getOrDefault("skills", List.of("Работа с клиентами", "Касса", "Консультирование"));
-        sp.skills = skills;
-
-        @SuppressWarnings("unchecked")
-        List<String> notSuitable = (List<String>) data.getOrDefault("not_suitable", List.of("Физический труд", "Кол-центр", "Вахта", "Склад", "Производство", "Супермаркет"));
-        sp.notSuitable = notSuitable;
-
-        return sp;
     }
 }

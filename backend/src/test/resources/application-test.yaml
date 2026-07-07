@@ -15,8 +15,6 @@ app:
     api-key: "test-key"
     model: test/model
     batch-size: 5
-  scoring:
-    rules-file: config/rules.yaml
   data-dir: /tmp/test-data
   profiles-dir: /tmp/test-config/profiles
   telegram:

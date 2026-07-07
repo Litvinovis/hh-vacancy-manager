@@ -25,6 +25,7 @@ class RuntimeConfigTest {
         assertEquals("0 0 12 * * *", config.getDailyCron());
         assertEquals(3, config.getMaxRetries());
         assertEquals(1500, config.getRequestDelayMs());
+        assertEquals(12000, config.getAiRequestDelayMs());
         assertEquals(30000, config.getHttpConnectTimeoutMs());
         assertEquals(120000, config.getHttpReadTimeoutMs());
         assertEquals(50, config.getMinScore());
@@ -47,6 +48,7 @@ class RuntimeConfigTest {
         assertTrue(m.containsKey("dailyCron"));
         assertTrue(m.containsKey("maxRetries"));
         assertTrue(m.containsKey("requestDelayMs"));
+        assertTrue(m.containsKey("aiRequestDelayMs"));
         assertTrue(m.containsKey("httpConnectTimeoutMs"));
         assertTrue(m.containsKey("httpReadTimeoutMs"));
         assertTrue(m.containsKey("minScore"));
@@ -57,7 +59,7 @@ class RuntimeConfigTest {
         assertTrue(m.containsKey("notificationsEnabled"));
         assertTrue(m.containsKey("aiBatchSize"));
         assertTrue(m.containsKey("pipelineEnabled"));
-        assertEquals(15, m.size());
+        assertEquals(16, m.size());
     }
 
     // ═══════ Descriptors ═══════
@@ -65,7 +67,7 @@ class RuntimeConfigTest {
     @Test
     void descriptorsCoversAllKeys() {
         List<RuntimeConfig.SettingDescriptor> descs = config.getDescriptors();
-        assertEquals(15, descs.size());
+        assertEquals(16, descs.size());
         Set<String> keys = new HashSet<>();
         for (var d : descs) {
             assertNotNull(d.key);

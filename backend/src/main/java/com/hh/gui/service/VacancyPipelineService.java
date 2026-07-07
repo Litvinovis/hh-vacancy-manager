@@ -9,7 +9,6 @@ import com.hh.gui.repository.VacancyRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -71,34 +70,6 @@ public class VacancyPipelineService {
     }
 
     /**
-     * Scheduled pipeline: runs every 10 minutes.
-     * Analyzes up to 30 pending vacancies per invocation to avoid SQLite locks.
-     */
-    @Scheduled(fixedDelay = 600000) // 10 minutes
-    public void scheduledPipeline() {
-        // Check rate limit cooldown before doing anything
-        if (aiAnalyzer.isRateLimited()) {
-            log.info("Запланированный пайплайн пропущен — активен период охлаждения");
-            return;
-        }
-        try {
-            com.hh.gui.ai.VacancyAiAnalyzer.SearchProfile aiProfile = com.hh.gui.ai.VacancyAiAnalyzer.SearchProfile.defaultProfile();
-            SearchProfile profile = new SearchProfile();
-            profile.city = aiProfile.city;
-            profile.priorityDistricts = aiProfile.priorityDistricts;
-            profile.skills = aiProfile.skills;
-            profile.notSuitable = aiProfile.notSuitable;
-            profile.salaryMin = aiProfile.salaryMin;
-            profile.queries = SearchQuery.defaultQueries(runtimeConfig.getSalaryMinRemote());
-            log.info("=== Начало запланированного пайплайна ===");
-            runFullPipeline(profile);
-            log.info("=== Конец запланированного пайплайна ===");
-        } catch (Exception e) {
-            log.error("Запланированный пайплайн завершился ошибкой: {}", e.getMessage(), e);
-        }
-    }
-
-    /**
      * Full pipeline: collect all vacancies → AI analyze → send report.
      * Each step runs in its own short transaction to avoid long-held locks.
      */
@@ -157,7 +128,12 @@ public class VacancyPipelineService {
                 v.setSourceQuery(sq.query);
                 v.setRemote(sq.isRemote);
             }
-            all.addAll(batch);
+            List<Vacancy> filtered = filterExcluded(batch, sq.excludeWords);
+            if (filtered.size() < batch.size()) {
+                log.debug("Отфильтровано {} вакансий по exclude_words для запроса '{}'",
+                        batch.size() - filtered.size(), sq.query);
+            }
+            all.addAll(filtered);
         }
 
         // Deduplicate by HH ID
@@ -166,6 +142,26 @@ public class VacancyPipelineService {
             seen.putIfAbsent(v.getHhId(), v);
         }
         return new ArrayList<>(seen.values());
+    }
+
+    /**
+     * Drop vacancies whose title or description contains any of the exclude words.
+     * Filtering here (before saving/AI-analysis) avoids spending AI quota on
+     * categories the search profile explicitly excludes.
+     */
+    private List<Vacancy> filterExcluded(List<Vacancy> vacancies, List<String> excludeWords) {
+        if (excludeWords == null || excludeWords.isEmpty()) return vacancies;
+        List<String> lowerExcludeWords = excludeWords.stream().map(String::toLowerCase).toList();
+        List<Vacancy> result = new ArrayList<>();
+        for (Vacancy v : vacancies) {
+            String haystack = ((v.getTitle() != null ? v.getTitle() : "") + " " +
+                    (v.getDescription() != null ? v.getDescription() : "")).toLowerCase();
+            boolean excluded = lowerExcludeWords.stream().anyMatch(haystack::contains);
+            if (!excluded) {
+                result.add(v);
+            }
+        }
+        return result;
     }
 
     /**
@@ -261,33 +257,6 @@ public class VacancyPipelineService {
         }
 
         return totalAnalyzed;
-    }
-
-    /**
-     * Daily scheduled job: runs at 12:00 every day.
-     * Analyzes ALL pending vacancies (no cap, runs until queue empty).
-     */
-    @Scheduled(cron = "0 0 12 * * *") // every day at 12:00
-    public void dailyPendingAnalysis() {
-        if (aiAnalyzer.isRateLimited()) {
-            log.info("Ежедневный анализ необработанных пропущен — активен период охлаждения");
-            return;
-        }
-        log.info("=== Начало ежедневного анализа необработанных ===");
-        try {
-            com.hh.gui.ai.VacancyAiAnalyzer.SearchProfile aiProfile = com.hh.gui.ai.VacancyAiAnalyzer.SearchProfile.defaultProfile();
-            SearchProfile profile = new SearchProfile();
-            profile.city = aiProfile.city;
-            profile.priorityDistricts = aiProfile.priorityDistricts;
-            profile.skills = aiProfile.skills;
-            profile.notSuitable = aiProfile.notSuitable;
-            profile.salaryMin = aiProfile.salaryMin;
-
-            int analyzed = analyzeAllPending(profile);
-            log.info("=== Конец ежедневного анализа необработанных: {} вакансий проанализировано ===", analyzed);
-        } catch (Exception e) {
-            log.error("Ежедневный анализ необработанных завершился ошибкой: {}", e.getMessage(), e);
-        }
     }
 
     /**
