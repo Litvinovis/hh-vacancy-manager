@@ -158,7 +158,9 @@ async function loadStats() {
   try {
     const s = await api('/stats');
     document.getElementById('cnt-all').textContent = s.total || 0;
-    document.getElementById('cnt-new').textContent = s.byStatus?.newPending || 0;
+    // Счётчик обязан совпадать с тем, что покажет список по клику: фильтр «Новые»
+    // запрашивает status=new (все нетронутые), а не только неоценённые новые.
+    document.getElementById('cnt-new').textContent = s.byStatus?.new || 0;
     document.getElementById('cnt-pending').textContent = s.byStatus?.pending || 0;
     document.getElementById('cnt-favorite').textContent = s.byStatus?.favorite || 0;
     document.getElementById('cnt-applied').textContent = s.byStatus?.applied || 0;
@@ -201,17 +203,22 @@ async function loadStats() {
 }
 
 // ═══════ VACANCY LIST ═══════
+// Ответы fetch могут приходить не в порядке отправки (быстрый набор в поиске,
+// клики по фильтрам) — рендерим только результат самого свежего запроса.
+let loadSeq = 0;
+
 async function loadVacancies(page = 1) {
+  const seq = ++loadSeq;
   currentPage = page;
   renderChips();
   const params = new URLSearchParams();
   params.set('page', page);
   params.set('perPage', 30);
 
-  if (currentFilter !== 'all') {
-    if (currentFilter === 'pending') params.set('status', 'new');
-    else params.set('status', currentFilter);
-  }
+  // 'pending' и 'fraud' бэкенд понимает как фильтры по ai_verdict, остальное — по status;
+  // раньше 'pending' подменялся на 'new' и «Не оценено» показывало то же, что «Новые»,
+  // расходясь с собственным счётчиком в сайдбаре.
+  if (currentFilter !== 'all') params.set('status', currentFilter);
 
   const person = document.getElementById('person-filter')?.value;
   if (person) params.set('person', person);
@@ -233,8 +240,10 @@ async function loadVacancies(page = 1) {
   const minScore = document.getElementById('score-filter')?.value;
   if (minScore) params.set('minScore', minScore);
 
+  // Имя параметра на бэкенде — 'remote' (см. VacancyController.listVacancies);
+  // с 'isRemote' фильтр «Удалёнка/Офис» молча игнорировался.
   const remote = document.getElementById('remote-filter')?.value;
-  if (remote) params.set('isRemote', remote === 'true');
+  if (remote) params.set('remote', remote);
 
   const sort = document.getElementById('sort-filter')?.value;
   if (sort) params.set('sort', sort);
@@ -244,6 +253,7 @@ async function loadVacancies(page = 1) {
 
   try {
     const data = await api('/vacancies?' + params);
+    if (seq !== loadSeq) return; // уже ушёл более свежий запрос
     renderList(data.vacancies || []);
     renderPagination(data);
   } catch (e) {
@@ -338,8 +348,9 @@ function renderList(vacancies) {
     const tags = (v.tags || []).slice(0, 3).map(t => `<span class="chp">${escHtml(t)}</span>`).join('');
     const hasSalary = v.salaryFrom || v.salaryTo;
     const salClass = hasSalary ? '' : 'no-sal';
+    // fmtN сам добавляет «К» к тысячам — дописывание ещё одной давало «90КК ₽».
     const salText = hasSalary
-      ? ((v.salaryFrom && v.salaryTo) ? `${fmtN(v.salaryFrom)}–${fmtN(v.salaryTo)}К ₽` : (v.salaryFrom ? `от ${fmtN(v.salaryFrom)}К` : `до ${fmtN(v.salaryTo)}К`))
+      ? ((v.salaryFrom && v.salaryTo) ? `${fmtN(v.salaryFrom)}–${fmtN(v.salaryTo)} ₽` : (v.salaryFrom ? `от ${fmtN(v.salaryFrom)} ₽` : `до ${fmtN(v.salaryTo)} ₽`))
       : 'не указана';
 
     return `
@@ -476,7 +487,11 @@ function renderDetail(v) {
     <div class="d-sec">
       <h3>Детали</h3>
       <div class="it">
-        <div class="ir"><div class="it-t">Работодатель</div><div class="it-v">${escHtml(v.company || '—')}</div></div>
+        <div class="ir"><div class="it-t">Работодатель</div><div class="it-v">${escHtml(v.company || '—')}${v.trustedEmployer ? ' ✔️' : ''}</div></div>
+        <div class="ir"><div class="it-t">Зарплата</div><div class="it-v">${salaryText(v)}</div></div>
+        ${v.experience ? `<div class="ir"><div class="it-t">Опыт</div><div class="it-v">${escHtml(v.experience)}</div></div>` : ''}
+        ${v.employment ? `<div class="ir"><div class="it-t">Занятость</div><div class="it-v">${escHtml(v.employment)}</div></div>` : ''}
+        ${v.keySkills ? `<div class="ir"><div class="it-t">Навыки</div><div class="it-v">${escHtml(v.keySkills)}</div></div>` : ''}
         <div class="ir"><div class="it-t">Адрес</div><div class="it-v">${escHtml(v.address || '—')}</div></div>
         <div class="ir"><div class="it-t">Формат</div><div class="it-v">${v.isRemote ? '🌐 Удалёнка' : '🏢 Офис'}</div></div>
         <div class="ir"><div class="it-t">Опубликовано</div><div class="it-v">${formatDate(v.publishedAt)}</div></div>
@@ -612,8 +627,46 @@ async function analyzePending() {
   }
 }
 
-function exportData() {
-  window.open('/api/vacancies?status=all&perPage=99999');
+/**
+ * Раньше открывалось /api/vacancies?perPage=99999 — бэкенд молча ограничивает
+ * perPage до 200 (см. VacancyController), так что «экспорт» отдавал только
+ * первые 200 строк и в виде сырого JSON. Теперь выкачиваем все страницы и
+ * отдаём CSV-файл, который открывается в Excel/Numbers.
+ */
+async function exportData() {
+  toast('⇩ Экспорт: собираю данные...');
+  const cols = ['id', 'hhId', 'title', 'company', 'person', 'searchName', 'salaryFrom', 'salaryTo',
+    'district', 'address', 'isRemote', 'aiScore', 'aiVerdict', 'aiReason', 'status', 'url', 'publishedAt', 'createdAt'];
+  const csvCell = (val) => {
+    const s = val == null ? '' : String(val);
+    return /[",;\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  try {
+    const rows = [];
+    let page = 1;
+    let total = Infinity;
+    while (rows.length < total && page <= 100) {
+      const data = await api(`/vacancies?status=all&perPage=200&page=${page}`);
+      total = data.total || 0;
+      const batch = data.vacancies || [];
+      if (!batch.length) break;
+      rows.push(...batch);
+      page++;
+    }
+    const lines = [cols.join(';')].concat(
+      rows.map(v => cols.map(c => csvCell(v[c])).join(';'))
+    );
+    // BOM — чтобы Excel открыл UTF-8 кириллицу без кракозябр.
+    const blob = new Blob(['\uFEFF' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `vacancies-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    toast(`✓ Экспортировано ${rows.length} вакансий`, 'ok');
+  } catch (e) {
+    toast('✗ Экспорт не удался: ' + e.message, 'err');
+  }
 }
 
 async function toggleNotifications() {
@@ -621,10 +674,27 @@ async function toggleNotifications() {
     const s = await api('/settings/notifications');
     const newState = !s.enabled;
     await api('/settings/notifications', { method: 'POST', body: JSON.stringify({ enabled: newState }) });
+    applyNotifyButtonState(newState);
     toast(`${newState ? '🔔' : '🔕'} Уведомления ${newState ? 'включены' : 'отключены'}`);
   } catch (e) {
     toast('✗ ' + e.message, 'err');
   }
+}
+
+// Иконка колокольчика раньше никогда не отражала реальное состояние — всегда 🔔,
+// включены уведомления или нет; узнать текущее состояние можно было только методом тыка.
+function applyNotifyButtonState(enabled) {
+  const btn = document.getElementById('btn-notify-toggle');
+  if (!btn) return;
+  btn.textContent = enabled ? '🔔' : '🔕';
+  btn.title = enabled ? 'Уведомления включены' : 'Уведомления отключены';
+}
+
+async function syncNotifyButton() {
+  try {
+    const s = await api('/settings/notifications');
+    applyNotifyButtonState(!!s.enabled);
+  } catch (e) { /* ignore */ }
 }
 
 // ═══════ SETTINGS (admin-only, session-authenticated — see AuthController) ═══════
@@ -756,10 +826,12 @@ async function saveSettings() {
       updates[key] = el.checked;
     } else if (el.tagName === 'SELECT') {
       if (el.value === '') {
-        // Custom value
+        // Custom value; пустое/нечисловое поле не отправляем — parseInt('') это NaN,
+        // JSON.stringify превращал его в null и бэкенд отвечал «Неверный тип».
         const custom = modal.querySelector(`[data-key="${key}_custom"]`);
         if (custom) {
-          updates[key] = custom.type === 'number' ? parseInt(custom.value) : custom.value;
+          const cv = custom.type === 'number' ? parseInt(custom.value) : custom.value.trim();
+          if (custom.type === 'number' ? !isNaN(cv) : cv) updates[key] = cv;
         }
       } else if (key === 'pipelineIntervalMs') {
         updates[key] = parseInt(el.value);
@@ -1013,7 +1085,9 @@ function cabinetSearchCardHtml(s) {
 function searchCardHtml(s, opts) {
   const id = s.id != null ? s.id : '';
   const global = !!opts.global;
-  const listVal = (arr) => (arr || []).join('\n');
+  // escHtml обязателен: значения пользовательские, и «</textarea>» или тег в
+  // слове-исключении без экранирования ломал разметку всей карточки (инъекция HTML).
+  const listVal = (arr) => escHtml((arr || []).join('\n'));
   const delFn = global ? 'deleteGlobalSearch' : 'deleteCabinetSearch';
   const saveFn = global ? 'saveGlobalSearch' : 'saveCabinetSearch';
   return `
@@ -1129,7 +1203,11 @@ async function runUrlDiscovery(btn) {
 function addCabinetSearchCard() {
   const list = document.getElementById('cabinet-searches-list');
   if (!list) return;
-  const addBtn = list.querySelector('.btn-second, .providers-empty');
+  // Только прямые дети списка: внутри сохранённой карточки поиска есть собственная
+  // .btn-second («Найти и оценить сейчас»), и querySelector без :scope находил её
+  // первой — insertBefore с не-ребёнком списка бросал DOMException, и кнопка
+  // «+ Добавить поиск» ломалась, как только появлялся первый сохранённый поиск.
+  const addBtn = list.querySelector(':scope > .btn-second, :scope > .providers-empty');
   const wrap = document.createElement('div');
   wrap.innerHTML = cabinetSearchCardHtml({});
   const card = wrap.firstElementChild;
@@ -1204,7 +1282,11 @@ function addGlobalSearchCard() {
   if (!list) return;
   const wrap = document.createElement('div');
   wrap.innerHTML = globalSearchCardHtml({});
-  list.appendChild(wrap.firstElementChild);
+  // Новая карточка — перед кнопкой «+ Добавить», а не после неё (appendChild
+  // визуально ронял карточку под кнопку). :scope — см. addCabinetSearchCard.
+  const addBtn = list.querySelector(':scope > .btn-second');
+  if (addBtn) list.insertBefore(wrap.firstElementChild, addBtn);
+  else list.appendChild(wrap.firstElementChild);
 }
 
 async function saveGlobalSearch(btn) {
@@ -1459,6 +1541,11 @@ async function loadDistricts() {
 }
 
 // ═══════ INIT ═══════
+// startApp вызывается на каждый вход (включая logout → login в той же вкладке);
+// обработчики и интервал должны вешаться ровно один раз, иначе каждый повторный
+// логин добавлял дубли: по два-три запроса на смену фильтра и лишние таймеры.
+let listenersBound = false;
+
 function startApp() {
   document.getElementById('login-view').style.display = 'none';
   document.getElementById('app-root').style.display = '';
@@ -1468,6 +1555,10 @@ function startApp() {
   loadJobs(); // populates person/search filters from configured (person, search) jobs
   loadVacancies(1);
   checkAiStatus(); // check rate limit status
+  syncNotifyButton(); // 🔔/🔕 по реальному состоянию
+
+  if (listenersBound) return;
+  listenersBound = true;
 
   // Theme buttons
   document.querySelectorAll('.theme-b').forEach(btn => {
@@ -1479,11 +1570,15 @@ function startApp() {
     el.addEventListener('click', () => setFilter(el.dataset.filter));
   });
 
-  // Filters
+  // Filters. Смена человека сначала пересобирает список его поисков и только потом
+  // грузит вакансии — раньше запрос уходил со старым searchName другого человека
+  // (отдельный listener срабатывал после этого) и список показывал пустоту.
   document.querySelectorAll('.filter-sel').forEach(el => {
-    el.addEventListener('change', () => loadVacancies(1));
+    el.addEventListener('change', () => {
+      if (el.id === 'person-filter') updateSearchNameOptions();
+      loadVacancies(1);
+    });
   });
-  document.getElementById('person-filter')?.addEventListener('change', updateSearchNameOptions);
   document.getElementById('search-input')?.addEventListener('input', debounceSearch);
 
   // Periodic AI status check every 5 min
@@ -1508,6 +1603,9 @@ function applyCurrentUser(user) {
   }
   document.getElementById('btn-admin')?.classList.toggle('hidden', user.role !== 'admin');
   document.getElementById('btn-settings')?.classList.toggle('hidden', user.role !== 'admin');
+  // Переключение уведомлений — admin-only на бэкенде (POST /settings/notifications
+  // отвечает 403); обычному пользователю кнопка давала только ошибку.
+  document.getElementById('btn-notify-toggle')?.classList.toggle('hidden', user.role !== 'admin');
 }
 
 async function doLogin() {
