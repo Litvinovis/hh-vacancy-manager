@@ -1,5 +1,7 @@
 package com.hh.gui.model;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 import java.util.List;
 
 /**
@@ -23,6 +25,10 @@ public class SearchConfig {
     private boolean enabled;
     private String createdAt;
     private String updatedAt;
+    private boolean isGlobal;
+    private String sourceUrl;
+    private Integer runIntervalHours;
+    private String lastRunAt;
 
     public SearchConfig() {}
 
@@ -70,6 +76,25 @@ public class SearchConfig {
 
     public String getUpdatedAt() { return updatedAt; }
     public void setUpdatedAt(String updatedAt) { this.updatedAt = updatedAt; }
+
+    // Explicit name on both accessors: the "is"-prefixed getter would otherwise make
+    // Jackson infer the JSON property name as "global" (not "isGlobal") for
+    // serialization, while still binding deserialization to "global" via setGlobal —
+    // two different property names for the same field, silently breaking every caller
+    // (frontend, curl, admin panel) that sends {"isGlobal": true}.
+    @JsonProperty("isGlobal")
+    public boolean isGlobal() { return isGlobal; }
+    @JsonProperty("isGlobal")
+    public void setGlobal(boolean global) { isGlobal = global; }
+
+    public String getSourceUrl() { return sourceUrl; }
+    public void setSourceUrl(String sourceUrl) { this.sourceUrl = sourceUrl; }
+
+    public Integer getRunIntervalHours() { return runIntervalHours; }
+    public void setRunIntervalHours(Integer runIntervalHours) { this.runIntervalHours = runIntervalHours; }
+
+    public String getLastRunAt() { return lastRunAt; }
+    public void setLastRunAt(String lastRunAt) { this.lastRunAt = lastRunAt; }
 
     public boolean isRemote() {
         return "remote".equalsIgnoreCase(schedule) || area == 113;

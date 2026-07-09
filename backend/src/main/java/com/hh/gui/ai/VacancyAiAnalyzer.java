@@ -1,5 +1,6 @@
 package com.hh.gui.ai;
 
+import com.hh.gui.client.ScraperClient;
 import com.hh.gui.config.RuntimeConfig;
 import com.hh.gui.model.SearchJob;
 import com.hh.gui.model.Vacancy;
@@ -132,6 +133,75 @@ public class VacancyAiAnalyzer {
         }
 
         return results;
+    }
+
+    /**
+     * Cheap pre-scrape filter for URL-search cards (title/employer/salary/address only —
+     * no description, since nothing has been scraped yet). Decides which candidates are
+     * worth a full scrape + real AI analysis at all, so a 1000-vacancy URL search doesn't
+     * pay a full browser scrape for every hit. Fails OPEN on any error (missing provider,
+     * cooldown, malformed response, exception) — every hit passes through unfiltered
+     * rather than risk silently dropping good candidates because of a transient AI issue;
+     * the real analyzeBatch() after scraping remains the authoritative filter.
+     */
+    public List<AiResult> prescreenHits(List<ScraperClient.SearchHit> hits, SearchJob job) {
+        if (hits.isEmpty()) return List.of();
+        if (!providerManager.hasPrimary() || providerManager.isInCooldown()) {
+            return passAllOpen(hits, "AI недоступен — прескрининг пропущен");
+        }
+
+        List<AiResult> results = new ArrayList<>();
+        int batchSize = runtimeConfig.getCardPrescreenBatchSize() > 0 ? runtimeConfig.getCardPrescreenBatchSize() : 30;
+        for (int i = 0; i < hits.size(); i += batchSize) {
+            List<ScraperClient.SearchHit> batch = hits.subList(i, Math.min(i + batchSize, hits.size()));
+            if (providerManager.isInCooldown()) {
+                results.addAll(passAllOpen(batch, "Cooldown — прескрининг пропущен"));
+                continue;
+            }
+            try {
+                waitForRateLimit();
+                String response = callLlm(buildPrescreenPrompt(batch, job));
+                results.addAll(parseResponse(response, List.of()));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                results.addAll(passAllOpen(batch, "Прервано — прескрининг пропущен"));
+            } catch (Exception e) {
+                log.warn("Прескрининг карточек не удался ({} · {}): {} — пропускаем фильтр для этой пачки", job.personName, job.searchName, e.getMessage());
+                results.addAll(passAllOpen(batch, "Ошибка прескрининга — пропущен"));
+            }
+        }
+        return results;
+    }
+
+    private List<AiResult> passAllOpen(List<ScraperClient.SearchHit> hits, String reason) {
+        return hits.stream().map(h -> new AiResult(h.hhId(), 50, "yes", reason)).toList();
+    }
+
+    private String buildPrescreenPrompt(List<ScraperClient.SearchHit> hits, SearchJob job) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Ты быстро отбираешь вакансии по краткой карточке из выдачи hh.ru — до открытия полного описания.\n\n");
+        sb.append("ЧТО ИЩЕМ (\"").append(job.searchName).append("\"):\n");
+        sb.append(job.aiNotes != null && !job.aiNotes.isBlank() ? job.aiNotes.trim() : "Интересная работа, без явного указания.").append("\n");
+        if (job.notSuitable != null && !job.notSuitable.isEmpty()) {
+            sb.append("НЕ подходит: ").append(String.join(", ", job.notSuitable)).append("\n");
+        }
+        if (job.salaryMin > 0) sb.append("Мин. зарплата: ").append(job.salaryMin).append("₽\n");
+        sb.append("\n");
+        sb.append("Для каждой карточки поставь verdict=\"yes\", если по названию/работодателю/зарплате она МОЖЕТ подойти " +
+            "и стоит открыть полностью для детальной оценки. verdict=\"no\" — только если явно не подходит " +
+            "(видно из одного названия/работодателя). Сомневаешься — ставь \"yes\": лучше открыть лишнюю карточку, " +
+            "чем пропустить подходящую по скудным данным. score всегда 50, reason — до 8 слов.\n");
+        sb.append("Верни JSON-массив: [{\"id\":\"...\",\"score\":50,\"verdict\":\"yes\"|\"no\",\"reason\":\"...\"}]. Никакого текста вне массива.\n\n");
+        sb.append("КАРТОЧКИ:\n");
+        for (ScraperClient.SearchHit h : hits) {
+            sb.append("---\n");
+            sb.append("ID: ").append(h.hhId()).append("\n");
+            sb.append("Название: ").append(h.title()).append("\n");
+            sb.append("Работодатель: ").append(h.employerName() != null ? h.employerName() : "").append("\n");
+            sb.append("Зарплата: ").append(h.salaryRawText() != null ? h.salaryRawText() : "не указана").append("\n");
+            sb.append("Адрес: ").append(h.address() != null ? h.address() : "").append("\n");
+        }
+        return sb.toString();
     }
 
     /** Wait to respect rate limits. */

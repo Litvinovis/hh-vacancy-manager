@@ -29,6 +29,14 @@ CREATE TABLE IF NOT EXISTS searches (
     enabled INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
+    -- is_global: search created by an admin, visible to every user (not just user_id,
+    -- who is just the admin that manages it) and exempt from the per-user search cap.
+    is_global INTEGER NOT NULL DEFAULT 0,
+    -- source_url/run_interval_hours: persisted hh.ru search-results URL + how often
+    -- (in hours) to run it automatically; NULL interval = manual-trigger only, as before.
+    source_url TEXT DEFAULT '',
+    run_interval_hours INTEGER DEFAULT NULL,
+    last_run_at TEXT DEFAULT NULL,
     UNIQUE(user_id, name)
 );
 
@@ -72,7 +80,27 @@ CREATE TABLE IF NOT EXISTS vacancies (
     notified INTEGER DEFAULT 0,
     published_at TEXT DEFAULT '',
     found_by_scan INTEGER DEFAULT 0,
+    -- dedup_key: normalized title+employer (city-independent) — lets the pipeline
+    -- recognize "same real posting, different city" (e.g. the same remote support
+    -- role listed separately for Moscow and Ufa) even though hh_id differs.
+    dedup_key TEXT DEFAULT '',
     UNIQUE(hh_id, person, search_name)
+);
+
+-- Per-user overlay for shared (is_global) search results: each user tracks their own
+-- status/notes/response for a vacancy that everyone sees, without duplicating the
+-- vacancy row itself. Vacancies from personal searches never get a row here — their
+-- status lives directly on vacancies, unchanged.
+CREATE TABLE IF NOT EXISTS user_vacancy_status (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    vacancy_id INTEGER NOT NULL REFERENCES vacancies(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'new',
+    rejection_reason TEXT DEFAULT '',
+    notes TEXT DEFAULT '',
+    applied_at TEXT DEFAULT '',
+    updated_at TEXT NOT NULL,
+    UNIQUE(user_id, vacancy_id)
 );
 
 CREATE TABLE IF NOT EXISTS tags (
@@ -109,3 +137,10 @@ CREATE INDEX IF NOT EXISTS idx_vac_person_search ON vacancies(person, search_nam
 CREATE INDEX IF NOT EXISTS idx_tags_vid ON tags(vacancy_id);
 CREATE INDEX IF NOT EXISTS idx_hist_vid ON history(vacancy_id);
 CREATE INDEX IF NOT EXISTS idx_searches_user_id ON searches(user_id);
+-- Indexes on columns added after the initial release (dedup_key, is_global, and the
+-- user_vacancy_status table) are NOT here: this script runs unconditionally on every
+-- boot (mode: always), including against an existing pre-upgrade DB where those
+-- columns don't exist yet on the *first* boot after upgrading — an index statement
+-- referencing a missing column fails immediately and prevents the app from starting
+-- at all, before SchemaMigrator ever gets a chance to add the column. SchemaMigrator
+-- creates these same indexes itself, right after it adds the column.

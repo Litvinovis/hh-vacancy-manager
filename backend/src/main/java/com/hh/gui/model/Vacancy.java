@@ -47,6 +47,7 @@ public class Vacancy {
     private Long userId;
     private Long searchId;
     private String criteriaHash;
+    private String dedupKey;
 
     // Default constructor
     public Vacancy() {}
@@ -168,4 +169,7 @@ public class Vacancy {
 
     public String getCriteriaHash() { return criteriaHash; }
     public void setCriteriaHash(String criteriaHash) { this.criteriaHash = criteriaHash; }
+
+    public String getDedupKey() { return dedupKey; }
+    public void setDedupKey(String dedupKey) { this.dedupKey = dedupKey; }
 }

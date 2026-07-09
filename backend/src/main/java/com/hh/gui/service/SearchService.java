@@ -25,15 +25,27 @@ public class SearchService {
         return searchRepo.findByUserId(userId);
     }
 
-    public SearchConfig create(Long userId, SearchConfig search) {
-        if (searchRepo.countByUserId(userId) >= MAX_SEARCHES_PER_USER) {
+    /**
+     * @param isAdmin gates search.isGlobal(): a non-admin's request is always forced
+     *                to a personal (non-global) search regardless of what it asked for.
+     *                Global searches are exempt from MAX_SEARCHES_PER_USER — they're
+     *                shared, admin-managed resources, not part of anyone's personal quota.
+     */
+    public SearchConfig create(Long userId, SearchConfig search, boolean isAdmin) {
+        boolean global = isAdmin && search.isGlobal();
+        if (!global && searchRepo.countByUserId(userId) >= MAX_SEARCHES_PER_USER) {
             throw new IllegalStateException("Максимум " + MAX_SEARCHES_PER_USER + " поисков на пользователя");
         }
         search.setUserId(userId);
+        search.setGlobal(global);
         search.setEnabled(true);
         SearchConfig saved = searchRepo.save(search);
-        log.info("Создан поиск '{}' для user_id={}", saved.getName(), userId);
+        log.info("Создан {}поиск '{}' для user_id={}", global ? "общий " : "", saved.getName(), userId);
         return saved;
+    }
+
+    public List<SearchConfig> listGlobal() {
+        return searchRepo.findAllGlobal();
     }
 
     /** @return empty if the search doesn't exist or isn't owned by userId (unless isAdmin). */
@@ -53,6 +65,8 @@ public class SearchService {
         existing.setNotSuitable(updates.getNotSuitable());
         existing.setExcludeWords(updates.getExcludeWords());
         existing.setAiNotes(updates.getAiNotes());
+        existing.setSourceUrl(updates.getSourceUrl());
+        existing.setRunIntervalHours(updates.getRunIntervalHours());
         if (updates.isEnabled() != existing.isEnabled()) {
             existing.setEnabled(updates.isEnabled());
         }

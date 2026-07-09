@@ -50,7 +50,8 @@ public class VacancyController {
 
         Long scopedUserId = currentUser.isAdmin() ? null : currentUser.getId();
         PageResponse<VacancyWithTags> resp = vacancyService.list(
-            status, district, minSalary, minScore, search, tag, remote, person, searchName, scopedUserId, sort, page, perPage);
+            status, district, minSalary, minScore, search, tag, remote, person, searchName, scopedUserId,
+            sort, page, perPage, currentUser.getId());
 
         List<VacancyWithTags> items = resp.getItems();
 
@@ -102,6 +103,7 @@ public class VacancyController {
 
         VacancyDetail d = detail.get();
         Vacancy v = d.getVacancy();
+        vacancyService.applyViewerOverlay(v, currentUser.getId());
 
         Map<String, Object> response = new java.util.LinkedHashMap<>();
         response.put("id", v.getId());
@@ -156,6 +158,10 @@ public class VacancyController {
                                             @RequestBody VacancyUpdateRequest req,
                                             @RequestAttribute("currentUser") User currentUser) {
         if (!ownsVacancy(id, currentUser)) return ResponseEntity.notFound().build();
+        // Full-detail editing (title/company/notes/status) on a shared vacancy is a data
+        // correction, not a per-user action — restrict to admin; regular users mark their
+        // own applied/rejected through PUT /vacancies/{id}/status instead.
+        if (!currentUser.isAdmin() && vacancyService.isGlobalVacancy(id)) return forbidden();
         Optional<VacancyWithTags> result = vacancyService.update(id, req);
         if (result.isEmpty()) {
             return ResponseEntity.notFound().build();
@@ -179,6 +185,8 @@ public class VacancyController {
     @PostMapping("/vacancies/{id}/reset-score")
     public ResponseEntity<?> resetScore(@PathVariable Long id, @RequestAttribute("currentUser") User currentUser) {
         if (!ownsVacancy(id, currentUser)) return ResponseEntity.notFound().build();
+        // Global vacancies are shared — only an admin re-triggers analysis for everyone at once.
+        if (!currentUser.isAdmin() && vacancyService.isGlobalVacancy(id)) return forbidden();
         boolean reset = vacancyService.resetScore(id);
         if (!reset) return ResponseEntity.notFound().build();
         return ResponseEntity.ok(Map.of("status", "reset", "id", id));
@@ -192,7 +200,11 @@ public class VacancyController {
             return ResponseEntity.badRequest().body(Map.of("error", "status is required"));
         }
         if (!ownsVacancy(id, currentUser)) return ResponseEntity.notFound().build();
-        boolean updated = vacancyService.updateStatus(id, status);
+        // Shared (global-search) vacancy: each user's applied/rejected is their own, not
+        // written onto the row everyone else sees — see UserVacancyStatus.
+        boolean updated = vacancyService.isGlobalVacancy(id)
+            ? vacancyService.updatePersonalStatus(id, currentUser.getId(), status)
+            : vacancyService.updateStatus(id, status);
         if (!updated) return ResponseEntity.notFound().build();
         return ResponseEntity.ok(Map.of("status", "updated", "id", id));
     }
@@ -201,25 +213,47 @@ public class VacancyController {
     public ResponseEntity<?> bulkStatusUpdate(@RequestBody BulkStatusRequest req,
                                                @RequestAttribute("currentUser") User currentUser) {
         List<Long> ownedIds = req.getIds().stream().filter(id -> ownsVacancy(id, currentUser)).toList();
-        BulkStatusRequest scoped = new BulkStatusRequest();
-        scoped.setIds(ownedIds);
-        scoped.setStatus(req.getStatus());
-        int count = vacancyService.updateStatusBulk(scoped);
+        int count = 0;
+        List<Long> personalIds = new java.util.ArrayList<>();
+        for (Long id : ownedIds) {
+            if (vacancyService.isGlobalVacancy(id)) {
+                if (vacancyService.updatePersonalStatus(id, currentUser.getId(), req.getStatus())) count++;
+            } else {
+                personalIds.add(id);
+            }
+        }
+        if (!personalIds.isEmpty()) {
+            BulkStatusRequest scoped = new BulkStatusRequest();
+            scoped.setIds(personalIds);
+            scoped.setStatus(req.getStatus());
+            count += vacancyService.updateStatusBulk(scoped);
+        }
         return ResponseEntity.ok(Map.of("status", "ok", "count", count));
     }
 
     @DeleteMapping("/vacancies/{id}")
     public ResponseEntity<?> deleteVacancy(@PathVariable Long id, @RequestAttribute("currentUser") User currentUser) {
         if (!ownsVacancy(id, currentUser)) return ResponseEntity.notFound().build();
+        // Global vacancies are shared — only an admin removes one for everyone.
+        if (!currentUser.isAdmin() && vacancyService.isGlobalVacancy(id)) return forbidden();
         boolean deleted = vacancyService.delete(id);
         if (!deleted) return ResponseEntity.notFound().build();
         return ResponseEntity.ok(Map.of("status", "deleted"));
     }
 
-    /** Non-admins may only touch vacancies tied to their own user_id; legacy rows with no owner are admin-only. */
+    private ResponseEntity<?> forbidden() {
+        return ResponseEntity.status(403).body(Map.of("error", "Действие доступно только администратору для общей вакансии"));
+    }
+
+    /**
+     * Non-admins may access vacancies tied to their own user_id, plus every vacancy from
+     * a shared (is_global) search — those are visible to everyone. Legacy rows with no
+     * owner and no global search behind them are admin-only.
+     */
     private boolean canAccess(Vacancy v, User currentUser) {
         if (currentUser.isAdmin()) return true;
-        return v.getUserId() != null && v.getUserId().equals(currentUser.getId());
+        if (v.getUserId() != null && v.getUserId().equals(currentUser.getId())) return true;
+        return vacancyService.isGlobalVacancy(v.getId());
     }
 
     private boolean ownsVacancy(Long id, User currentUser) {

@@ -145,6 +145,8 @@ public class RuntimeConfig {
     private volatile boolean notificationsEnabled = false;
     private volatile int aiBatchSize = 5;
     private volatile boolean pipelineEnabled = true;
+    private volatile int urlSearchEarlyStopThreshold = 3;
+    private volatile int cardPrescreenBatchSize = 30;
 
     // ═══════ Persistence ═══════
 
@@ -289,7 +291,17 @@ public class RuntimeConfig {
             SettingDescriptor.of("pipelineEnabled", "Автозапуск пайплайна",
                 "Включить/выключить автоматический запуск пайплайна по расписанию. " +
                 "При выключении можно запускать только вручную через кнопку.",
-                "boolean", null, null, pipelineEnabled)
+                "boolean", null, null, pipelineEnabled),
+
+            SettingDescriptor.of("urlSearchEarlyStopThreshold", "Порог остановки по ссылке",
+                "При обходе страниц поиска по ссылке — сколько подряд уже известных вакансий " +
+                "должно встретиться, чтобы считать, что дальше только старые результаты, и прекратить обход.",
+                "number", 1, 20, urlSearchEarlyStopThreshold),
+
+            SettingDescriptor.of("cardPrescreenBatchSize", "Размер пачки прескрининга карточек",
+                "Сколько карточек из выдачи (без полного скрейпинга) отправляется за один AI-запрос " +
+                "на предварительную фильтрацию \"похоже/не похоже на интересную вакансию\".",
+                "number", 1, 100, cardPrescreenBatchSize)
         );
     }
 
@@ -330,6 +342,8 @@ public class RuntimeConfig {
                     case "notificationsEnabled" -> setNotificationsEnabled(toBool(value, errors, key));
                     case "aiBatchSize" -> setAiBatchSize(toInt(value, errors, key, 1, 50));
                     case "pipelineEnabled" -> setPipelineEnabled(toBool(value, errors, key));
+                    case "urlSearchEarlyStopThreshold" -> setUrlSearchEarlyStopThreshold(toInt(value, errors, key, 1, 20));
+                    case "cardPrescreenBatchSize" -> setCardPrescreenBatchSize(toInt(value, errors, key, 1, 100));
                     default -> errors.put(key, "Неизвестный параметр: " + key);
                 }
             } catch (IllegalArgumentException e) {
@@ -373,6 +387,8 @@ public class RuntimeConfig {
         m.put("notificationsEnabled", notificationsEnabled);
         m.put("aiBatchSize", aiBatchSize);
         m.put("pipelineEnabled", pipelineEnabled);
+        m.put("urlSearchEarlyStopThreshold", urlSearchEarlyStopThreshold);
+        m.put("cardPrescreenBatchSize", cardPrescreenBatchSize);
         return m;
     }
 
@@ -477,6 +493,12 @@ public class RuntimeConfig {
 
     public boolean isPipelineEnabled() { return pipelineEnabled; }
     public void setPipelineEnabled(boolean v) { this.pipelineEnabled = v; }
+
+    public int getUrlSearchEarlyStopThreshold() { return urlSearchEarlyStopThreshold; }
+    public void setUrlSearchEarlyStopThreshold(int v) { this.urlSearchEarlyStopThreshold = v; }
+
+    public int getCardPrescreenBatchSize() { return cardPrescreenBatchSize; }
+    public void setCardPrescreenBatchSize(int v) { this.cardPrescreenBatchSize = v; }
 
     // ═══════ Дескриптор для UI ═══════
 

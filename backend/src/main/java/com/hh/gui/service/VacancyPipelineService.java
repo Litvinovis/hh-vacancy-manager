@@ -152,14 +152,28 @@ public class VacancyPipelineService {
 
     /**
      * Walks search-result pages of a caller-supplied hh.ru URL (via the scraper
-     * sidecar's browser session, see ScraperClient.searchByUrl), filters out
-     * excluded titles the same way discoverNew does, and saves genuinely new hits
-     * as scrape-pending stubs. Stops early on an empty/failed page.
+     * sidecar's browser session, see ScraperClient.searchByUrl), filters out excluded
+     * titles the same way discoverNew does, then for genuinely new hits:
+     *   1. cheap AI prescreen on the card alone (title/employer/salary/address — see
+     *      VacancyAiAnalyzer.prescreenHits) to decide whether it's worth a full scrape;
+     *   2. hits that pass are saved as scrape-pending stubs (reusing scraped content/AI
+     *      verdict from another city's posting of the same real vacancy, if dedup_key
+     *      matches — see computeDedupKey);
+     *   3. hits that don't pass are still saved, just marked scrape_status='skipped' so
+     *      they count as "already seen" on future runs instead of being re-prescreened
+     *      forever.
+     * Stops walking pages early once EARLY_STOP threshold consecutive already-known hits
+     * are seen — hh.ru lists newest-first, so a run of already-known hits means the rest
+     * of the listing was already covered by a previous run.
      */
     @Transactional
     protected int discoverFromUrl(SearchJob job, String url, int maxPages) {
         int pages = Math.min(Math.max(maxPages, 1), MAX_URL_SEARCH_PAGES);
+        int earlyStopThreshold = Math.max(1, runtimeConfig.getUrlSearchEarlyStopThreshold());
         int saved = 0;
+        int consecutiveSeen = 0;
+
+        pageLoop:
         for (int page = 0; page < pages; page++) {
             ScraperClient.SearchPageResult result = scraperClient.searchByUrl(url, page);
             if (!result.ok()) {
@@ -169,25 +183,56 @@ public class VacancyPipelineService {
             }
             if (result.items().isEmpty()) break;
 
+            List<ScraperClient.SearchHit> newHits = new ArrayList<>();
             for (ScraperClient.SearchHit hit : filterExcludedHits(result.items(), job.excludeWords)) {
-                if (vacancyRepo.existsByHhIdPersonSearch(hit.hhId(), job.personName, job.searchName)) continue;
+                if (vacancyRepo.existsByHhIdPersonSearch(hit.hhId(), job.personName, job.searchName)) {
+                    consecutiveSeen++;
+                    if (consecutiveSeen >= earlyStopThreshold) {
+                        log.info("Поиск по ссылке ({} · {}) остановлен: {} подряд уже известных вакансий — дальше только старые",
+                            job.personName, job.searchName, consecutiveSeen);
+                        break pageLoop;
+                    }
+                    continue;
+                }
+                consecutiveSeen = 0;
+                newHits.add(hit);
+            }
+            if (newHits.isEmpty()) continue;
+
+            Map<String, VacancyAiAnalyzer.AiResult> prescreen = aiAnalyzer.prescreenHits(newHits, job).stream()
+                .collect(Collectors.toMap(VacancyAiAnalyzer.AiResult::hhId, r -> r, (a, b) -> a));
+
+            for (ScraperClient.SearchHit hit : newHits) {
+                VacancyAiAnalyzer.AiResult verdict = prescreen.get(hit.hhId());
+                boolean passed = verdict == null || !"no".equals(verdict.verdict());
+
                 Vacancy v = new Vacancy();
                 v.setHhId(hit.hhId());
                 v.setTitle(hit.title());
                 v.setCompany(hit.employerName());
                 v.setUrl(hit.url());
                 v.setStatus("new");
-                v.setAiVerdict("pending");
-                v.setAiScore(0);
                 v.setCreatedAt(Instant.now().toString());
                 v.setSource("hh");
                 v.setSourceQuery(job.searchName);
                 v.setPerson(job.personName);
                 v.setSearchName(job.searchName);
-                v.setUserId(job.userId);
+                v.setUserId(job.isGlobal ? null : job.userId);
                 v.setSearchId(job.searchId);
                 v.setRemote(job.isRemote());
-                v.setScrapeStatus("pending");
+                v.setDedupKey(computeDedupKey(hit.title(), hit.employerName()));
+
+                if (passed) {
+                    v.setAiVerdict("pending");
+                    v.setAiScore(0);
+                    v.setScrapeStatus("pending");
+                } else {
+                    v.setAiVerdict("no");
+                    v.setAiScore(0);
+                    v.setAiReason("Прескрининг: " + verdict.reason());
+                    v.setScrapeStatus("skipped");
+                }
+
                 try {
                     vacancyRepo.save(v);
                     saved++;
@@ -197,6 +242,28 @@ public class VacancyPipelineService {
             }
         }
         return saved;
+    }
+
+    /**
+     * Normalizes title+employer (lowercased, punctuation stripped, whitespace collapsed)
+     * so the same real vacancy posted separately per city — different hh_id each time —
+     * can still be recognized as "the same posting" for scrape/AI-verdict reuse. City
+     * names deliberately aren't stripped out here: they rarely appear in the title itself,
+     * and this is a best-effort MVP heuristic, not a guaranteed match.
+     */
+    static String computeDedupKey(String title, String employerName) {
+        String t = normalizeForDedup(title);
+        String e = normalizeForDedup(employerName);
+        if (t.isEmpty()) return "";
+        return t + "|" + e;
+    }
+
+    private static String normalizeForDedup(String s) {
+        if (s == null) return "";
+        return s.toLowerCase()
+            .replaceAll("[^a-zа-яё0-9\\s]", " ")
+            .replaceAll("\\s+", " ")
+            .trim();
     }
 
     private List<ScraperClient.SearchHit> filterExcludedHits(List<ScraperClient.SearchHit> hits, List<String> excludeWords) {
@@ -235,7 +302,7 @@ public class VacancyPipelineService {
             if (vacancyRepo.existsByHhIdPersonSearch(v.getHhId(), job.personName, job.searchName)) continue;
             v.setPerson(job.personName);
             v.setSearchName(job.searchName);
-            v.setUserId(job.userId);
+            v.setUserId(job.isGlobal ? null : job.userId);
             v.setSearchId(job.searchId);
             v.setRemote(job.isRemote());
             v.setSourceQuery(job.searchName);
@@ -287,6 +354,10 @@ public class VacancyPipelineService {
         List<Vacancy> pending = vacancyRepo.findScrapePending(job.personName, job.searchName, runtimeConfig.getMaxPerRun());
         for (Vacancy v : pending) {
             Optional<Vacancy> existing = vacancyRepo.findFirstScrapedByHhId(v.getHhId());
+            if (existing.isEmpty()) {
+                // Cross-city fallback — same real posting, different hh_id per city listing.
+                existing = vacancyRepo.findFirstScrapedByDedupKey(v.getDedupKey());
+            }
             if (existing.isPresent() && !existing.get().getId().equals(v.getId())) {
                 copyScraped(existing.get(), v);
                 vacancyRepo.updateScraped(v);
@@ -443,6 +514,10 @@ public class VacancyPipelineService {
 
         for (Vacancy v : batch) {
             Optional<Vacancy> match = vacancyRepo.findAnalyzedByHhIdAndCriteriaHash(v.getHhId(), criteriaHash);
+            if (match.isEmpty()) {
+                // Cross-city fallback — same real posting, different hh_id per city listing.
+                match = vacancyRepo.findAnalyzedByDedupKeyAndCriteriaHash(v.getDedupKey(), criteriaHash);
+            }
             if (match.isPresent()) {
                 Vacancy m = match.get();
                 vacancyRepo.updateAiResult(v.getHhId(), job.personName, job.searchName,
