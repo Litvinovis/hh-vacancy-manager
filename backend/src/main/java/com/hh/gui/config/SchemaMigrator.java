@@ -42,6 +42,8 @@ public class SchemaMigrator implements ApplicationRunner {
         addColumnIfMissing("searches", "run_interval_hours", "INTEGER DEFAULT NULL");
         addColumnIfMissing("searches", "last_run_at", "TEXT DEFAULT NULL");
         addColumnIfMissing("vacancies", "dedup_key", "TEXT DEFAULT ''");
+        addColumnIfMissing("vacancies", "scrape_attempts", "INTEGER DEFAULT 0");
+        addColumnIfMissing("vacancies", "ai_attempts", "INTEGER DEFAULT 0");
 
         // Not in schema.sql: an index on a just-added column would fail schema.sql's own
         // unconditional run on the next boot after a fresh install (see schema.sql's

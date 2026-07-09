@@ -395,6 +395,62 @@ class VacancyRepositoryTest {
             vacancyRepo.findAll("new", null, null, null, null, null, null, null, null, null, "score_desc", -1, 10));
     }
 
+    // ── Retry budgets: scrape_attempts / ai_attempts ──
+
+    @Test
+    void findScrapePending_excludesRowsPastAttemptCap() {
+        Vacancy fresh = createTestVacancy("scr-1", "Fresh", "new");
+        fresh.setScrapeStatus("pending");
+        vacancyRepo.save(fresh);
+
+        Vacancy broken = createTestVacancy("scr-2", "Broken", "new");
+        broken.setScrapeStatus("failed");
+        Long brokenId = vacancyRepo.save(broken).getId();
+        for (int i = 0; i < 5; i++) vacancyRepo.incrementScrapeAttempts(brokenId);
+
+        List<Vacancy> pending = vacancyRepo.findScrapePending("test-person", "test-search", 100, 5);
+        assertEquals(1, pending.size());
+        assertEquals("scr-1", pending.get(0).getHhId());
+    }
+
+    @Test
+    void markAiExhausted_marksOnlyRowsPastCap_andRescanResetsThem() {
+        Vacancy stuck = createTestVacancy("ai-1", "Stuck", "new");
+        stuck.setScrapeStatus("ok");
+        Long stuckId = vacancyRepo.save(stuck).getId();
+        vacancyRepo.incrementAiAttemptsBatch(List.of(stuckId, stuckId, stuckId));
+
+        Vacancy young = createTestVacancy("ai-2", "Young", "new");
+        young.setScrapeStatus("ok");
+        vacancyRepo.save(young);
+
+        int exhausted = vacancyRepo.markAiExhausted("test-person", "test-search", 3);
+        assertEquals(1, exhausted);
+
+        List<Vacancy> stillPending = vacancyRepo.findPending("test-person", "test-search", 100);
+        assertEquals(1, stillPending.size());
+        assertEquals("ai-2", stillPending.get(0).getHhId());
+
+        // Manual rescan gives exhausted rows a fresh budget.
+        int reset = vacancyRepo.resetAiForRescan("test-person", "test-search");
+        assertEquals(2, reset);
+        assertEquals(2, vacancyRepo.findPending("test-person", "test-search", 100).size());
+        Integer attempts = jdbc.queryForObject("SELECT ai_attempts FROM vacancies WHERE id=?", Integer.class, stuckId);
+        assertEquals(0, attempts);
+    }
+
+    @Test
+    void findExistingHhIds_returnsOnlyMatchesForPersonAndSearch() {
+        vacancyRepo.save(createTestVacancy("ex-1", "Mine", "new"));
+        Vacancy other = createTestVacancy("ex-2", "Other person's", "new");
+        other.setPerson("someone-else");
+        vacancyRepo.save(other);
+
+        var existing = vacancyRepo.findExistingHhIds(List.of("ex-1", "ex-2", "ex-3"), "test-person", "test-search");
+        assertEquals(java.util.Set.of("ex-1"), existing);
+        assertTrue(vacancyRepo.findExistingHhIds(List.of(), "test-person", "test-search").isEmpty());
+    }
+
     // ── Helper factory methods ──
 
     private Vacancy createTestVacancy(String hhId, String title, String status) {

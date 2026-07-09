@@ -20,31 +20,92 @@
  */
 
 const http = require('http');
+const path = require('path');
 const { URL } = require('url');
 const { chromium } = require('playwright');
 
 const PORT = parseInt(process.env.SCRAPER_PORT || '8095', 10);
 const HOST = process.env.SCRAPER_HOST || '127.0.0.1';
 const MIN_DELAY_MS = parseInt(process.env.SCRAPE_DELAY_MS || '4000', 10);
+// Random extra delay on top of MIN_DELAY_MS — a perfectly constant interval
+// between page loads is itself a bot signature.
+const JITTER_MS = parseInt(process.env.SCRAPE_JITTER_MS || '4000', 10);
 const NAV_TIMEOUT_MS = parseInt(process.env.SCRAPE_TIMEOUT_MS || '20000', 10);
+// Persistent browser profile: DDoS-Guard clearance cookies and hh.ru session
+// cookies accumulate here across requests AND restarts, so every page load
+// looks like the same returning visitor instead of a cold client hitting a
+// deep /vacancy/{id} URL with no cookies at all.
+const PROFILE_DIR = process.env.SCRAPER_PROFILE_DIR || path.join(__dirname, 'profile-data');
 
-let browser = null;
+let contextPromise = null;
 let queue = Promise.resolve();
 let lastScrapeAt = 0;
 
-async function getBrowser() {
-  if (!browser) {
-    browser = await chromium.launch({ headless: true });
+/**
+ * Playwright's bundled Chromium version drifts with every playwright upgrade;
+ * a hardcoded "Chrome/120" UA string diverging from the real engine version
+ * (Client Hints, JS feature set) is a classic detection signal. Derive the UA
+ * major version from the actual browser once at startup instead.
+ */
+async function buildUserAgent() {
+  const probe = await chromium.launch({ headless: true });
+  const major = probe.version().split('.')[0];
+  await probe.close();
+  return `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36`;
+}
+
+async function getContext() {
+  if (!contextPromise) {
+    contextPromise = (async () => {
+      const userAgent = await buildUserAgent();
+      const context = await chromium.launchPersistentContext(PROFILE_DIR, {
+        headless: true,
+        userAgent,
+        locale: 'ru-RU',
+        viewport: { width: 1366, height: 768 },
+      });
+      // Playwright exposes navigator.webdriver=true by default — the cheapest
+      // headless check an anti-bot script can run.
+      await context.addInitScript(() => {
+        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+      });
+      // Skip heavy assets: pages load 2-3x faster and use far less bandwidth.
+      // JS and CSS are deliberately NOT blocked — their absence changes page
+      // behavior and is itself fingerprintable.
+      await context.route('**/*', (route) => {
+        const type = route.request().resourceType();
+        if (type === 'image' || type === 'media' || type === 'font') return route.abort();
+        return route.continue();
+      });
+      return context;
+    })();
+    contextPromise.catch(() => { contextPromise = null; }); // failed launch → retry on next call
   }
-  return browser;
+  return contextPromise;
+}
+
+/** If the shared browser died (crash/OOM), drop it so the next request relaunches. */
+function resetContextIfCrashed(e) {
+  if (/closed|crashed|disconnected/i.test(String(e && e.message))) {
+    contextPromise = null;
+  }
+}
+
+function nextDelayMs() {
+  let delay = MIN_DELAY_MS + Math.random() * JITTER_MS;
+  // Occasionally take a much longer "reading" pause — humans don't click
+  // through listings at a steady cadence for minutes on end.
+  if (Math.random() < 0.07) delay += 15000 + Math.random() * 30000;
+  return delay;
 }
 
 /** Serialize all scrape calls through this so concurrent HTTP requests don't fire off parallel page loads. */
 function enqueue(task) {
   const result = queue.then(async () => {
     const elapsed = Date.now() - lastScrapeAt;
-    if (elapsed < MIN_DELAY_MS) {
-      await new Promise((r) => setTimeout(r, MIN_DELAY_MS - elapsed));
+    const delay = nextDelayMs();
+    if (elapsed < delay) {
+      await new Promise((r) => setTimeout(r, delay - elapsed));
     }
     try {
       return await task();
@@ -107,6 +168,27 @@ function parseSalary(rawText) {
   return { salaryFrom, salaryTo, currency, gross };
 }
 
+/**
+ * Salary from the JobPosting JSON-LD "baseSalary" object (MonetaryAmount with a
+ * QuantitativeValue). Returns null when absent/empty so the caller can fall back
+ * to parsing the rendered DOM text. gross is always null here — JSON-LD carries
+ * no "до вычета"/"на руки" distinction.
+ */
+function salaryFromLd(ld) {
+  const value = ld && ld.baseSalary && ld.baseSalary.value;
+  if (!value) return null;
+  const toInt = (x) => {
+    const n = parseInt(x, 10);
+    return Number.isNaN(n) ? null : n;
+  };
+  const salaryFrom = toInt(value.minValue != null ? value.minValue : value.value);
+  const salaryTo = toInt(value.maxValue);
+  if (salaryFrom == null && salaryTo == null) return null;
+  let currency = ld.baseSalary.currency || null;
+  if (currency === 'RUB') currency = 'RUR'; // the rest of the app uses hh.ru's own code
+  return { salaryFrom, salaryTo, currency, gross: null };
+}
+
 // Search results are only ever fetched from hh.ru itself — a caller-supplied
 // `url` still has to pass this check before the browser will navigate to it,
 // so this endpoint can't be turned into an open fetch proxy for arbitrary hosts.
@@ -122,12 +204,7 @@ const ALLOWED_SEARCH_HOST = /(^|\.)hh\.ru$/i;
  * pagination (dozens of pages for a broad query).
  */
 async function searchVacancies({ url: rawUrl, text, area, page: pageNum, schedule, salary }) {
-  const b = await getBrowser();
-  const context = await b.newContext({
-    userAgent:
-      'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    locale: 'ru-RU',
-  });
+  const context = await getContext();
   const page = await context.newPage();
   try {
     let url;
@@ -168,8 +245,13 @@ async function searchVacancies({ url: rawUrl, text, area, page: pageNum, schedul
         const salaryEl = c.querySelector('[data-qa="vacancy-serp__vacancy-compensation"]');
         const employerEl = c.querySelector('[data-qa="vacancy-serp__vacancy-employer-text"]');
         const addrEl = c.querySelector('[data-qa="vacancy-serp__vacancy-address"]');
+        // Primary source of the id: the /vacancy/{id} href of the title link —
+        // "first element carrying any id attribute" broke silently on layout
+        // changes before; keep it only as a fallback.
+        const href = titleLink ? titleLink.getAttribute('href') : null;
+        const hrefMatch = href ? href.match(/\/vacancy\/(\d+)/) : null;
         return {
-          hhId: idEl ? idEl.id : null,
+          hhId: hrefMatch ? hrefMatch[1] : (idEl ? idEl.id : null),
           title: titleText ? titleText.textContent.trim() : null,
           employerName: employerEl ? employerEl.textContent.trim() : null,
           salaryRawText: salaryEl ? salaryEl.textContent.trim() : null,
@@ -188,31 +270,33 @@ async function searchVacancies({ url: rawUrl, text, area, page: pageNum, schedul
       lastPageLabel,
     };
   } catch (e) {
+    resetContextIfCrashed(e);
     return { ok: false, reason: `error: ${e.message}` };
   } finally {
     await page.close().catch(() => {});
-    await context.close().catch(() => {});
   }
 }
 
 async function scrapeVacancy(hhId) {
-  const b = await getBrowser();
-  const context = await b.newContext({
-    userAgent:
-      'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    locale: 'ru-RU',
-  });
+  const context = await getContext();
   const page = await context.newPage();
   try {
     const resp = await page.goto(`https://hh.ru/vacancy/${hhId}`, {
       waitUntil: 'domcontentloaded',
       timeout: NAV_TIMEOUT_MS,
+      // A person lands on a vacancy from the listing, not out of thin air.
+      referer: 'https://hh.ru/search/vacancy',
     });
     const status = resp ? resp.status() : 0;
     if (status === 404) return { ok: false, reason: 'not_found' };
     if (status >= 400) return { ok: false, reason: `http_${status}` };
 
-    await page.waitForTimeout(800); // let the client-side app finish rendering data-qa nodes
+    // Wait for the client-side app to render the data-qa nodes we read below,
+    // but exit as soon as they appear instead of always paying a fixed 800ms
+    // (pages missing them entirely — archived etc. — give up after the cap).
+    await page
+      .waitForSelector('[data-qa="vacancy-salary"], [data-qa="vacancy-experience"]', { timeout: 2000 })
+      .catch(() => {});
 
     const ldJsonRaw = await page
       .locator('script[type="application/ld+json"]')
@@ -247,7 +331,13 @@ async function scrapeVacancy(hhId) {
         .catch(() => null);
 
     const salaryRaw = await textOf('vacancy-salary');
-    const salaryParsed = parseSalary(salaryRaw);
+    // Structured JSON-LD baseSalary is authoritative when present; the regex
+    // parse of the DOM text stays as fallback and as the only source of the
+    // gross/net flag ("до вычета"/"на руки"), which JSON-LD doesn't carry.
+    const salaryParsed = salaryFromLd(ld) || parseSalary(salaryRaw);
+    if (salaryParsed.gross == null) {
+      salaryParsed.gross = parseSalary(salaryRaw).gross;
+    }
 
     const keySkills = await page.locator('[data-qa="skills-element"]').allTextContents().catch(() => []);
     const trustedEmployer = (await page.locator('[data-qa="trusted-employer-link"]').count()) > 0;
@@ -277,10 +367,10 @@ async function scrapeVacancy(hhId) {
       validThrough: ld.validThrough || null,
     };
   } catch (e) {
+    resetContextIfCrashed(e);
     return { ok: false, reason: `error: ${e.message}` };
   } finally {
     await page.close().catch(() => {});
-    await context.close().catch(() => {});
   }
 }
 
@@ -343,13 +433,16 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(`hh-vacancy-scraper listening on http://${HOST}:${PORT} (min delay ${MIN_DELAY_MS}ms)`);
+  console.log(`hh-vacancy-scraper listening on http://${HOST}:${PORT} (delay ${MIN_DELAY_MS}-${MIN_DELAY_MS + JITTER_MS}ms, profile ${PROFILE_DIR})`);
 });
 
 async function shutdown() {
   console.log('Shutting down...');
   server.close();
-  if (browser) await browser.close().catch(() => {});
+  if (contextPromise) {
+    const context = await contextPromise.catch(() => null);
+    if (context) await context.close().catch(() => {});
+  }
   process.exit(0);
 }
 process.on('SIGTERM', shutdown);

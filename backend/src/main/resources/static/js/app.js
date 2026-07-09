@@ -840,6 +840,10 @@ function renderProvidersList(providers) {
           <label>Модель</label>
           <input class="provider-inp" data-field="model" value="${escHtml(p.model)}" placeholder="gpt-4o-mini">
         </div>
+        <div class="provider-field">
+          <label>Пауза между запросами, мс (пусто = глобальная)</label>
+          <input class="provider-inp" data-field="requestDelayMs" value="${p.requestDelayMs != null ? p.requestDelayMs : ''}" placeholder="12000 для free-tier, 1000 для платных">
+        </div>
       </div>
     </div>
   `).join('') + `
@@ -878,6 +882,10 @@ function addProvider() {
       <div class="provider-field">
         <label>Модель</label>
         <input class="provider-inp" data-field="model" placeholder="gpt-4o-mini" value="">
+      </div>
+      <div class="provider-field">
+        <label>Пауза между запросами, мс (пусто = глобальная)</label>
+        <input class="provider-inp" data-field="requestDelayMs" placeholder="12000 для free-tier, 1000 для платных" value="">
       </div>
     </div>`;
   if (addBtn) list.insertBefore(card, addBtn);

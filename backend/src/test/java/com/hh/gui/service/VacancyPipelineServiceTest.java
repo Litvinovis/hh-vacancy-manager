@@ -139,4 +139,73 @@ class VacancyPipelineServiceTest {
         assertEquals(2, result.size());
         assertTrue(result.stream().noneMatch(h -> h.hhId().equals("2")));
     }
+
+    // ── isBelowSalaryFloor (deterministic zero-token reject before the AI call) ──
+
+    private boolean isBelowSalaryFloor(Vacancy v, com.hh.gui.model.SearchJob job) throws Exception {
+        Method m = VacancyPipelineService.class.getDeclaredMethod("isBelowSalaryFloor", Vacancy.class, com.hh.gui.model.SearchJob.class);
+        m.setAccessible(true);
+        return (boolean) m.invoke(null, v, job);
+    }
+
+    private com.hh.gui.model.SearchJob jobWithSalaryMin(int salaryMin) {
+        com.hh.gui.model.SearchJob job = new com.hh.gui.model.SearchJob();
+        job.salaryMin = salaryMin;
+        return job;
+    }
+
+    private Vacancy vacancyWithSalary(Integer from, Integer to, String currency) {
+        Vacancy v = new Vacancy();
+        v.setSalaryFrom(from);
+        v.setSalaryTo(to);
+        v.setCurrency(currency);
+        return v;
+    }
+
+    @Test
+    void isBelowSalaryFloor_explicitCeilingBelowFloor_rejects() throws Exception {
+        assertTrue(isBelowSalaryFloor(vacancyWithSalary(20000, 35000, "RUR"), jobWithSalaryMin(40000)));
+    }
+
+    @Test
+    void isBelowSalaryFloor_noExplicitCeiling_neverRejects() throws Exception {
+        // "от 30000" without an upper bound might still stretch above the floor — AI decides.
+        assertFalse(isBelowSalaryFloor(vacancyWithSalary(30000, null, "RUR"), jobWithSalaryMin(40000)));
+        assertFalse(isBelowSalaryFloor(vacancyWithSalary(null, null, null), jobWithSalaryMin(40000)));
+    }
+
+    @Test
+    void isBelowSalaryFloor_noConfiguredFloorOrForeignCurrency_neverRejects() throws Exception {
+        assertFalse(isBelowSalaryFloor(vacancyWithSalary(20000, 35000, "RUR"), jobWithSalaryMin(0)));
+        assertFalse(isBelowSalaryFloor(vacancyWithSalary(200, 300, "USD"), jobWithSalaryMin(40000)));
+    }
+
+    @Test
+    void isBelowSalaryFloor_ceilingAtOrAboveFloor_passes() throws Exception {
+        assertFalse(isBelowSalaryFloor(vacancyWithSalary(30000, 40000, "RUR"), jobWithSalaryMin(40000)));
+        assertFalse(isBelowSalaryFloor(vacancyWithSalary(30000, 60000, null), jobWithSalaryMin(40000)));
+    }
+
+    // ── htmlToText (full entity decoding) ──
+
+    private String htmlToText(String html) throws Exception {
+        Method m = VacancyPipelineService.class.getDeclaredMethod("htmlToText", String.class);
+        m.setAccessible(true);
+        return (String) m.invoke(null, html);
+    }
+
+    @Test
+    void htmlToText_decodesNamedAndNumericEntities() throws Exception {
+        String html = "<p>Зарплата &mdash; высокая, &laquo;белая&raquo;, &#8470;1 на рынке &amp; бонусы&nbsp;есть</p>";
+        String text = htmlToText(html);
+        assertEquals("Зарплата — высокая, «белая», №1 на рынке & бонусы есть", text);
+    }
+
+    @Test
+    void htmlToText_preservesBulletsAndBreaks() throws Exception {
+        String html = "<p>Обязанности:</p><ul><li>первое</li><li>второе</li></ul>";
+        String text = htmlToText(html);
+        assertTrue(text.contains("• первое"));
+        assertTrue(text.contains("• второе"));
+    }
 }

@@ -10,6 +10,10 @@ public class AiProviderConfig {
     private String url = "";
     private String apiKey = "";
     private String model = "";
+    // Минимальная пауза между запросами именно к этому провайдеру, мс.
+    // null → глобальный aiRequestDelayMs. Смысл: 12-секундная пауза нужна только
+    // free-tier моделям; платный fallback она замедляет в разы без всякой причины.
+    private Integer requestDelayMs = null;
 
     public AiProviderConfig() {}
 
@@ -31,4 +35,7 @@ public class AiProviderConfig {
 
     public String getModel() { return model; }
     public void setModel(String model) { this.model = model; }
+
+    public Integer getRequestDelayMs() { return requestDelayMs; }
+    public void setRequestDelayMs(Integer requestDelayMs) { this.requestDelayMs = requestDelayMs; }
 }

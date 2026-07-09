@@ -172,6 +172,10 @@ public class VacancyPipelineService {
      */
     @Transactional
     protected int discoverFromUrl(SearchJob job, String url, int maxPages) {
+        if (isScrapeCoolingDown()) {
+            log.warn("Поиск по ссылке ({} · {}) пропущен — скрейпинг заморожен после блокировки", job.personName, job.searchName);
+            return 0;
+        }
         int pages = Math.min(Math.max(maxPages, 1), MAX_URL_SEARCH_PAGES);
         int earlyStopThreshold = Math.max(1, runtimeConfig.getUrlSearchEarlyStopThreshold());
         int adSlotsPerPage = Math.max(0, runtimeConfig.getUrlSearchAdSlotsPerPage());
@@ -197,10 +201,14 @@ public class VacancyPipelineService {
                 .map(ScraperClient.SearchHit::hhId)
                 .collect(Collectors.toSet());
 
+            // One IN query per page instead of one exists-lookup per card.
+            Set<String> knownHhIds = vacancyRepo.findExistingHhIds(
+                rawHits.stream().map(ScraperClient.SearchHit::hhId).toList(), job.personName, job.searchName);
+
             List<ScraperClient.SearchHit> newHits = new ArrayList<>();
             for (ScraperClient.SearchHit hit : filterExcludedHits(rawHits, job.excludeWords)) {
                 boolean adSlot = adSlotHhIds.contains(hit.hhId());
-                if (vacancyRepo.existsByHhIdPersonSearch(hit.hhId(), job.personName, job.searchName)) {
+                if (knownHhIds.contains(hit.hhId())) {
                     if (!adSlot) {
                         consecutiveSeen++;
                         if (consecutiveSeen >= earlyStopThreshold) {
@@ -297,6 +305,12 @@ public class VacancyPipelineService {
     /**
      * RSS-discover new hh_ids for this job's queries, drop obviously-excluded
      * titles before ever scraping them, and save the rest as scrape-pending stubs.
+     *
+     * Genuinely new hits go through the same cheap AI prescreen the URL-discovery
+     * path uses (title-only here — RSS carries no employer/salary/address) so a
+     * title the exclude-words filter can't catch still skips the full browser
+     * scrape + real AI analysis. Fails OPEN like the URL path: any prescreen
+     * problem means everything passes through unfiltered.
      */
     @Transactional
     protected int discoverNew(SearchJob job) {
@@ -313,17 +327,37 @@ public class VacancyPipelineService {
         }
 
         List<Vacancy> filtered = filterExcluded(new ArrayList<>(seen.values()), job.excludeWords);
+        Set<String> knownHhIds = vacancyRepo.findExistingHhIds(
+            filtered.stream().map(Vacancy::getHhId).toList(), job.personName, job.searchName);
+        List<Vacancy> fresh = filtered.stream().filter(v -> !knownHhIds.contains(v.getHhId())).toList();
+        if (fresh.isEmpty()) return 0;
+
+        Map<String, VacancyAiAnalyzer.AiResult> prescreen = aiAnalyzer.prescreenHits(
+            fresh.stream()
+                .map(v -> new ScraperClient.SearchHit(v.getHhId(), v.getTitle(), null, null, null, v.getUrl()))
+                .toList(), job).stream()
+            .collect(Collectors.toMap(VacancyAiAnalyzer.AiResult::hhId, r -> r, (a, b) -> a));
 
         int saved = 0;
-        for (Vacancy v : filtered) {
-            if (vacancyRepo.existsByHhIdPersonSearch(v.getHhId(), job.personName, job.searchName)) continue;
+        for (Vacancy v : fresh) {
+            VacancyAiAnalyzer.AiResult verdict = prescreen.get(v.getHhId());
+            boolean passed = verdict == null || !"no".equals(verdict.verdict());
             v.setPerson(job.personName);
             v.setSearchName(job.searchName);
             v.setUserId(job.isGlobal ? null : job.userId);
             v.setSearchId(job.searchId);
             v.setRemote(job.isRemote());
             v.setSourceQuery(job.searchName);
-            v.setScrapeStatus("pending");
+            if (passed) {
+                v.setScrapeStatus("pending");
+            } else {
+                // Saved anyway so it counts as "already seen" on future runs — just
+                // never scraped or fully analyzed (mirrors discoverFromUrl).
+                v.setAiVerdict("no");
+                v.setAiScore(0);
+                v.setAiReason("Прескрининг: " + verdict.reason());
+                v.setScrapeStatus("skipped");
+            }
             try {
                 vacancyRepo.save(v);
                 saved++;
@@ -358,9 +392,41 @@ public class VacancyPipelineService {
     // batch at ~5s/attempt before giving up on its own.
     private static final Set<String> PER_VACANCY_FAILURE_REASONS = Set.of("not_found", "no_job_posting_data");
     private static final int MAX_CONSECUTIVE_SCRAPE_FAILURES = 3;
+    // Per-vacancy failed attempts (page loads with no JobPosting data) before a row
+    // stops being re-queued — without a cap, permanently broken rows sat at the front
+    // of the created_at-ordered scrape queue and ate scraper time on every run.
+    private static final int MAX_SCRAPE_ATTEMPTS = 5;
+
+    // After a site-wide bail-out (hh.ru blocking / sidecar down), freeze ALL scraping
+    // for a while instead of hammering again on the very next 10-minute run — from an
+    // anti-bot's perspective, retrying a blocked session on a fixed short interval is
+    // exactly what a bot does. Backoff doubles per consecutive bail-out, capped.
+    private static final long SCRAPE_COOLDOWN_BASE_MS = 30L * 60 * 1000;
+    private static final long SCRAPE_COOLDOWN_MAX_MS = 4L * 60 * 60 * 1000;
+    private volatile long scrapeCooldownUntil = 0;
+    private int scrapeCooldownStrikes = 0;
 
     private static boolean isSiteWideFailure(String reason) {
         return reason != null && !PER_VACANCY_FAILURE_REASONS.contains(reason);
+    }
+
+    public boolean isScrapeCoolingDown() {
+        return System.currentTimeMillis() < scrapeCooldownUntil;
+    }
+
+    public long getScrapeCooldownUntil() {
+        return scrapeCooldownUntil;
+    }
+
+    private synchronized void enterScrapeCooldown() {
+        scrapeCooldownStrikes++;
+        long cooldown = Math.min(SCRAPE_COOLDOWN_BASE_MS << (scrapeCooldownStrikes - 1), SCRAPE_COOLDOWN_MAX_MS);
+        scrapeCooldownUntil = System.currentTimeMillis() + cooldown;
+        log.warn("Скрейпинг заморожен на {} мин (подряд блокировок: {})", cooldown / 60000, scrapeCooldownStrikes);
+    }
+
+    private synchronized void onScrapeSuccess() {
+        scrapeCooldownStrikes = 0;
     }
 
     /**
@@ -376,9 +442,15 @@ public class VacancyPipelineService {
      * Unscraped rows are simply left 'pending' and picked up on the next run.
      */
     private int scrapePending(SearchJob job) {
+        if (isScrapeCoolingDown()) {
+            log.info("Скрейпинг ({} · {}) пропущен — заморожен после блокировки ещё {} мин",
+                job.personName, job.searchName, Math.max(0, (scrapeCooldownUntil - System.currentTimeMillis()) / 60000));
+            return 0;
+        }
         int count = 0;
         int consecutiveFailures = 0;
-        List<Vacancy> pending = vacancyRepo.findScrapePending(job.personName, job.searchName, runtimeConfig.getMaxPerRun());
+        List<Vacancy> pending = vacancyRepo.findScrapePending(job.personName, job.searchName,
+            runtimeConfig.getMaxPerRun(), MAX_SCRAPE_ATTEMPTS);
         for (Vacancy v : pending) {
             Optional<Vacancy> existing = vacancyRepo.findFirstScrapedByHhId(v.getHhId());
             if (existing.isEmpty()) {
@@ -398,6 +470,7 @@ public class VacancyPipelineService {
                 applyScrapeResult(v, r);
                 v.setScrapeStatus("ok");
                 consecutiveFailures = 0;
+                onScrapeSuccess();
             } else {
                 v.setScrapeStatus("not_found".equals(r.reason()) ? "not_found" : "failed");
                 log.warn("Скрейпинг {} ({} · {}) не удался: {}", v.getHhId(), job.personName, job.searchName, r.reason());
@@ -405,12 +478,19 @@ public class VacancyPipelineService {
                     consecutiveFailures++;
                 } else {
                     consecutiveFailures = 0;
+                    // Uses up this row's own retry budget only for failures that are
+                    // about THIS page (see findScrapePending) — a blocked session or
+                    // a downed sidecar shouldn't burn any vacancy's attempts.
+                    if (!"not_found".equals(r.reason())) {
+                        vacancyRepo.incrementScrapeAttempts(v.getId());
+                    }
                 }
             }
             vacancyRepo.updateScraped(v);
             count++;
 
             if (consecutiveFailures >= MAX_CONSECUTIVE_SCRAPE_FAILURES) {
+                enterScrapeCooldown();
                 log.warn("Скрейпинг ({} · {}) остановлен после {} подряд ошибок — сайдкар недоступен или hh.ru блокирует запросы, оставшиеся {} вакансий останутся в очереди",
                     job.personName, job.searchName, consecutiveFailures, pending.size() - count);
                 break;
@@ -435,6 +515,9 @@ public class VacancyPipelineService {
         to.setKeySkills(from.getKeySkills());
         to.setTrustedEmployer(from.isTrustedEmployer());
         to.setValidThrough(from.getValidThrough());
+        if (to.getPublishedAt() == null || to.getPublishedAt().isBlank()) {
+            to.setPublishedAt(from.getPublishedAt());
+        }
         to.setScrapeStatus("ok");
     }
 
@@ -455,6 +538,11 @@ public class VacancyPipelineService {
         v.setKeySkills(r.keySkills() != null ? String.join(", ", r.keySkills()) : "");
         v.setTrustedEmployer(r.trustedEmployer());
         v.setValidThrough(r.validThrough());
+        // JSON-LD datePosted (ISO) is authoritative — URL-discovered rows have no
+        // publish date at all otherwise, and findPending orders by published_at.
+        if (r.datePosted() != null && !r.datePosted().isBlank()) {
+            v.setPublishedAt(r.datePosted());
+        }
     }
 
     private static List<String> nonBlank(String... parts) {
@@ -479,11 +567,11 @@ public class VacancyPipelineService {
             .replaceAll("(?i)<li>", "• ")
             .replaceAll("(?i)<br\\s*/?>", "\n");
         String stripped = withBreaks.replaceAll("<[^>]+>", "");
-        return stripped
-            .replace("&nbsp;", " ")
-            .replace("&amp;", "&")
-            .replace("&laquo;", "«")
-            .replace("&raquo;", "»")
+        // Full entity decoding (named and numeric) — the previous hand-picked list of
+        // five entities left &mdash;/&quot;/&#8212;-style leftovers in AI prompts.
+        String unescaped = org.jsoup.parser.Parser.unescapeEntities(stripped, false);
+        return unescaped
+            .replace('\u00A0', ' ') // &nbsp; decodes to a non-breaking space
             .replaceAll("[ \\t]{2,}", " ")
             .replaceAll("\n{3,}", "\n\n")
             .trim();
@@ -517,7 +605,16 @@ public class VacancyPipelineService {
             List<Vacancy> batch = vacancyRepo.findPending(job.personName, job.searchName, getBatchSize());
             if (batch.isEmpty()) break;
 
-            totalAnalyzed += analyzeBatchWithDedup(batch, job);
+            int batchAnalyzed = analyzeBatchWithDedup(batch, job);
+            if (batchAnalyzed == 0) {
+                // Zero progress on a non-empty batch (provider down, or every response
+                // unusable) — findPending would return the exact same rows again, so
+                // looping on would just re-send the same batch until rate-limited.
+                log.warn("analyzeAllPending остановлен ({} · {}) — пакет из {} вакансий не дал прогресса",
+                    job.personName, job.searchName, batch.size());
+                break;
+            }
+            totalAnalyzed += batchAnalyzed;
             batchNum++;
         }
         return totalAnalyzed;
@@ -530,6 +627,11 @@ public class VacancyPipelineService {
      * pattern in scrapePending, one layer up — see findAnalyzedByHhIdAndCriteriaHash),
      * and only sends the genuine misses to the real AI call.
      */
+    // How many times a still-'pending' row may be sent to the LLM (and silently
+    // omitted from its answer) before it's marked 'error' instead of being re-sent
+    // in every future run — see VacancyRepository.markAiExhausted.
+    private static final int MAX_AI_ATTEMPTS = 3;
+
     private int analyzeBatchWithDedup(List<Vacancy> batch, SearchJob job) {
         String criteriaHash = aiAnalyzer.computeCriteriaHash(job);
         // Every vacancy in this batch gets the same hash (it's a property of the job, not
@@ -538,8 +640,17 @@ public class VacancyPipelineService {
 
         List<Vacancy> needsAi = new ArrayList<>();
         int deduped = 0;
+        int autoRejected = 0;
 
         for (Vacancy v : batch) {
+            // Deterministic zero-token reject: an explicit salary ceiling below the
+            // job's floor can't become a "yes" no matter what the description says.
+            if (isBelowSalaryFloor(v, job)) {
+                vacancyRepo.updateAiResult(v.getHhId(), job.personName, job.searchName, 0, "no",
+                    "Зарплата до " + v.getSalaryTo() + "₽ ниже минимума " + job.salaryMin + "₽");
+                autoRejected++;
+                continue;
+            }
             Optional<Vacancy> match = vacancyRepo.findAnalyzedByHhIdAndCriteriaHash(v.getHhId(), criteriaHash);
             if (match.isEmpty()) {
                 // Cross-city fallback — same real posting, different hh_id per city listing.
@@ -554,6 +665,9 @@ public class VacancyPipelineService {
                 needsAi.add(v);
             }
         }
+        if (autoRejected > 0) {
+            log.info("Зарплатный фильтр ({} · {}): {} вакансий отклонено без AI-вызова", job.personName, job.searchName, autoRejected);
+        }
         if (deduped > 0) {
             log.info("AI-дедуп ({} · {}): {} вакансий переиспользовано без вызова AI", job.personName, job.searchName, deduped);
             metrics.recordVacanciesDeduped(deduped);
@@ -561,13 +675,45 @@ public class VacancyPipelineService {
 
         int aiAnalyzed = 0;
         if (!needsAi.isEmpty()) {
-            for (var r : aiAnalyzer.analyzeBatch(needsAi, job)) {
+            List<VacancyAiAnalyzer.AiResult> results = aiAnalyzer.analyzeBatch(needsAi, job);
+            Set<String> returnedIds = new HashSet<>();
+            for (var r : results) {
                 vacancyRepo.updateAiResult(r.hhId(), job.personName, job.searchName, r.score(), r.verdict(), r.reason());
+                returnedIds.add(r.hhId());
                 aiAnalyzed++;
             }
             metrics.recordVacanciesAnalyzed(aiAnalyzed);
+
+            // The model DID answer but silently omitted some rows — count the wasted
+            // round-trip against them, and give up on rows that keep being omitted.
+            // An empty result (provider down/cooldown) deliberately doesn't count:
+            // it says nothing about these particular vacancies.
+            if (!results.isEmpty()) {
+                List<Long> omitted = needsAi.stream()
+                    .filter(v -> !returnedIds.contains(v.getHhId()))
+                    .map(Vacancy::getId)
+                    .toList();
+                if (!omitted.isEmpty()) {
+                    vacancyRepo.incrementAiAttemptsBatch(omitted);
+                    int exhausted = vacancyRepo.markAiExhausted(job.personName, job.searchName, MAX_AI_ATTEMPTS);
+                    if (exhausted > 0) {
+                        log.warn("AI-анализ ({} · {}): {} вакансий помечено 'error' — модель стабильно пропускает их в ответе",
+                            job.personName, job.searchName, exhausted);
+                    }
+                }
+            }
         }
-        return deduped + aiAnalyzed;
+        return autoRejected + deduped + aiAnalyzed;
+    }
+
+    private static boolean isBelowSalaryFloor(Vacancy v, SearchJob job) {
+        if (job.salaryMin <= 0) return false;
+        if (v.getSalaryTo() == null || v.getSalaryTo() <= 0) return false;
+        String currency = v.getCurrency();
+        // Only rubles are comparable to the configured floor; anything else goes to AI.
+        if (currency != null && !currency.isBlank()
+            && !"RUR".equalsIgnoreCase(currency) && !"RUB".equalsIgnoreCase(currency)) return false;
+        return v.getSalaryTo() < job.salaryMin;
     }
 
     /**

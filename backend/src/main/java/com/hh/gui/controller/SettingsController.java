@@ -75,6 +75,7 @@ public class SettingsController {
                 }
                 m.put("apiKeyFull", p.getApiKey()); // полный ключ для редактирования (уйдёт в форму)
                 m.put("model", p.getModel());
+                m.put("requestDelayMs", p.getRequestDelayMs());
                 return m;
             })
             .collect(Collectors.toList());
@@ -100,6 +101,16 @@ public class SettingsController {
             p.setApiKey(key != null ? key.toString() : "");
             Object model = m.get("model");
             p.setModel(model != null ? model.toString() : "");
+            Object delay = m.get("requestDelayMs");
+            if (delay instanceof Number n) {
+                p.setRequestDelayMs(n.intValue());
+            } else if (delay instanceof String s && !s.isBlank()) {
+                try {
+                    p.setRequestDelayMs(Integer.parseInt(s.trim()));
+                } catch (NumberFormatException ignored) {
+                    // пустое/нечисловое значение из формы → без переопределения
+                }
+            }
             providers.add(p);
         }
 

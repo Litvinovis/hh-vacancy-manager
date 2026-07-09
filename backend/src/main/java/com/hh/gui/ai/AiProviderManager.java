@@ -99,6 +99,16 @@ public class AiProviderManager {
         return p != null ? p.getModel() : "";
     }
 
+    /**
+     * Per-provider minimum delay between requests, or null when the provider
+     * doesn't override the global aiRequestDelayMs (the free-tier-sized default).
+     */
+    public synchronized Integer getCurrentRequestDelayMs() {
+        resolveState();
+        AiProviderConfig p = getCurrentProvider();
+        return p != null ? p.getRequestDelayMs() : null;
+    }
+
     /** Get the name of the currently active provider. */
     public synchronized String getCurrentProviderName() {
         resolveState();
