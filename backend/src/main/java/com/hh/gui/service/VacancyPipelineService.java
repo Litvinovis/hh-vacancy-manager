@@ -164,12 +164,17 @@ public class VacancyPipelineService {
      *      forever.
      * Stops walking pages early once EARLY_STOP threshold consecutive already-known hits
      * are seen — hh.ru lists newest-first, so a run of already-known hits means the rest
-     * of the listing was already covered by a previous run.
+     * of the listing was already covered by a previous run. The first adSlotsPerPage
+     * cards on EVERY page (not just the first) are hh.ru's paid/premium placements —
+     * pinned at the top regardless of publish date, so an already-known one there says
+     * nothing about whether the rest of the listing is old; they're skipped for the
+     * early-stop count but still discovered/saved normally like any other hit.
      */
     @Transactional
     protected int discoverFromUrl(SearchJob job, String url, int maxPages) {
         int pages = Math.min(Math.max(maxPages, 1), MAX_URL_SEARCH_PAGES);
         int earlyStopThreshold = Math.max(1, runtimeConfig.getUrlSearchEarlyStopThreshold());
+        int adSlotsPerPage = Math.max(0, runtimeConfig.getUrlSearchAdSlotsPerPage());
         int saved = 0;
         int consecutiveSeen = 0;
 
@@ -183,18 +188,30 @@ public class VacancyPipelineService {
             }
             if (result.items().isEmpty()) break;
 
+            // hh_ids in the paid/premium slots at the top of THIS page, computed before
+            // exclusion filtering so position is measured on the real page layout, not
+            // on an already-filtered list.
+            List<ScraperClient.SearchHit> rawHits = result.items();
+            Set<String> adSlotHhIds = rawHits.stream()
+                .limit(adSlotsPerPage)
+                .map(ScraperClient.SearchHit::hhId)
+                .collect(Collectors.toSet());
+
             List<ScraperClient.SearchHit> newHits = new ArrayList<>();
-            for (ScraperClient.SearchHit hit : filterExcludedHits(result.items(), job.excludeWords)) {
+            for (ScraperClient.SearchHit hit : filterExcludedHits(rawHits, job.excludeWords)) {
+                boolean adSlot = adSlotHhIds.contains(hit.hhId());
                 if (vacancyRepo.existsByHhIdPersonSearch(hit.hhId(), job.personName, job.searchName)) {
-                    consecutiveSeen++;
-                    if (consecutiveSeen >= earlyStopThreshold) {
-                        log.info("Поиск по ссылке ({} · {}) остановлен: {} подряд уже известных вакансий — дальше только старые",
-                            job.personName, job.searchName, consecutiveSeen);
-                        break pageLoop;
+                    if (!adSlot) {
+                        consecutiveSeen++;
+                        if (consecutiveSeen >= earlyStopThreshold) {
+                            log.info("Поиск по ссылке ({} · {}) остановлен: {} подряд уже известных вакансий — дальше только старые",
+                                job.personName, job.searchName, consecutiveSeen);
+                            break pageLoop;
+                        }
                     }
                     continue;
                 }
-                consecutiveSeen = 0;
+                if (!adSlot) consecutiveSeen = 0;
                 newHits.add(hit);
             }
             if (newHits.isEmpty()) continue;
