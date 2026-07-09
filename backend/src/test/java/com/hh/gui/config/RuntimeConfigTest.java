@@ -62,7 +62,8 @@ class RuntimeConfigTest {
         assertTrue(m.containsKey("pipelineEnabled"));
         assertTrue(m.containsKey("urlSearchEarlyStopThreshold"));
         assertTrue(m.containsKey("cardPrescreenBatchSize"));
-        assertEquals(19, m.size());
+        assertTrue(m.containsKey("urlSearchAdSlotsPerPage"));
+        assertEquals(20, m.size());
     }
 
     // ═══════ Descriptors ═══════
@@ -70,7 +71,7 @@ class RuntimeConfigTest {
     @Test
     void descriptorsCoversAllKeys() {
         List<RuntimeConfig.SettingDescriptor> descs = config.getDescriptors();
-        assertEquals(18, descs.size());
+        assertEquals(19, descs.size());
         Set<String> keys = new HashSet<>();
         for (var d : descs) {
             assertNotNull(d.key);

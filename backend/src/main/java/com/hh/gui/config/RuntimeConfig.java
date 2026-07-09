@@ -147,6 +147,7 @@ public class RuntimeConfig {
     private volatile boolean pipelineEnabled = true;
     private volatile int urlSearchEarlyStopThreshold = 3;
     private volatile int cardPrescreenBatchSize = 30;
+    private volatile int urlSearchAdSlotsPerPage = 20;
 
     // ═══════ Persistence ═══════
 
@@ -301,7 +302,13 @@ public class RuntimeConfig {
             SettingDescriptor.of("cardPrescreenBatchSize", "Размер пачки прескрининга карточек",
                 "Сколько карточек из выдачи (без полного скрейпинга) отправляется за один AI-запрос " +
                 "на предварительную фильтрацию \"похоже/не похоже на интересную вакансию\".",
-                "number", 1, 100, cardPrescreenBatchSize)
+                "number", 1, 100, cardPrescreenBatchSize),
+
+            SettingDescriptor.of("urlSearchAdSlotsPerPage", "Рекламных карточек сверху страницы",
+                "Сколько первых карточек на каждой странице выдачи hh.ru считаются рекламными/премиум " +
+                "местами (закреплены сверху независимо от даты публикации) и поэтому не учитываются " +
+                "при подсчёте подряд идущих уже известных вакансий для остановки поиска по ссылке.",
+                "number", 0, 50, urlSearchAdSlotsPerPage)
         );
     }
 
@@ -344,6 +351,7 @@ public class RuntimeConfig {
                     case "pipelineEnabled" -> setPipelineEnabled(toBool(value, errors, key));
                     case "urlSearchEarlyStopThreshold" -> setUrlSearchEarlyStopThreshold(toInt(value, errors, key, 1, 20));
                     case "cardPrescreenBatchSize" -> setCardPrescreenBatchSize(toInt(value, errors, key, 1, 100));
+                    case "urlSearchAdSlotsPerPage" -> setUrlSearchAdSlotsPerPage(toInt(value, errors, key, 0, 50));
                     default -> errors.put(key, "Неизвестный параметр: " + key);
                 }
             } catch (IllegalArgumentException e) {
@@ -389,6 +397,7 @@ public class RuntimeConfig {
         m.put("pipelineEnabled", pipelineEnabled);
         m.put("urlSearchEarlyStopThreshold", urlSearchEarlyStopThreshold);
         m.put("cardPrescreenBatchSize", cardPrescreenBatchSize);
+        m.put("urlSearchAdSlotsPerPage", urlSearchAdSlotsPerPage);
         return m;
     }
 
@@ -499,6 +508,9 @@ public class RuntimeConfig {
 
     public int getCardPrescreenBatchSize() { return cardPrescreenBatchSize; }
     public void setCardPrescreenBatchSize(int v) { this.cardPrescreenBatchSize = v; }
+
+    public int getUrlSearchAdSlotsPerPage() { return urlSearchAdSlotsPerPage; }
+    public void setUrlSearchAdSlotsPerPage(int v) { this.urlSearchAdSlotsPerPage = v; }
 
     // ═══════ Дескриптор для UI ═══════
 
