@@ -346,23 +346,33 @@ public class VacancyPipelineService {
         return result;
     }
 
-    // ScraperClient.scrape() tags connectivity/transport failures (sidecar down, refused,
-    // timed out, unparseable response) with this prefix, distinct from per-vacancy content
-    // failures like "not_found"/"no_job_posting_data" where the sidecar is clearly up and
-    // working, just this one URL is bad. Only the former means retrying more URLs in this
-    // same run is pointless — the whole sidecar is unreachable, not just this vacancy.
-    private static final String SCRAPER_CLIENT_ERROR_PREFIX = "client_error";
+    // Failure reasons that say nothing about the OTHER pending vacancies in this batch —
+    // "not_found" is that one posting genuinely archived/removed, "no_job_posting_data" is
+    // that one page not rendering the expected structure. Everything else — ScraperClient's
+    // own "client_error: ..." (sidecar down/refused/timed out), or any http_4xx/5xx status
+    // hh.ru itself returned (403/429/5xx) — is a site-wide signal: hh.ru/DDoS-Guard blocking
+    // or rate-limiting the whole scraping session, where every next attempt in this run is
+    // just as likely to fail too. A real production run saw exactly this: a burst of
+    // consecutive http_403s across many *different* hh_ids right after a heavy discovery
+    // run, which the old client_error-only check didn't catch — it ground through the whole
+    // batch at ~5s/attempt before giving up on its own.
+    private static final Set<String> PER_VACANCY_FAILURE_REASONS = Set.of("not_found", "no_job_posting_data");
     private static final int MAX_CONSECUTIVE_SCRAPE_FAILURES = 3;
+
+    private static boolean isSiteWideFailure(String reason) {
+        return reason != null && !PER_VACANCY_FAILURE_REASONS.contains(reason);
+    }
 
     /**
      * Scrape full content for rows still pending (or previously failed) for this job.
      * Reuses already-scraped content for the same hh_id if a different (person,
      * search) already fetched it, instead of hitting the scraper sidecar again.
      *
-     * Bails out early after several consecutive connectivity failures instead of
-     * grinding through the rest of the batch — each scrape can block for up to the
-     * configured HTTP read timeout, so a genuinely down/hung sidecar could otherwise
-     * stall this step for maxPerRun × timeout (worst case, well over an hour).
+     * Bails out early after several consecutive site-wide failures (see isSiteWideFailure)
+     * instead of grinding through the rest of the batch — each scrape can block for up to
+     * the configured HTTP read timeout, so a genuinely down/hung sidecar, or hh.ru itself
+     * blocking/rate-limiting the scraping session, could otherwise stall this step for
+     * maxPerRun × timeout (worst case, well over an hour), failing every single attempt.
      * Unscraped rows are simply left 'pending' and picked up on the next run.
      */
     private int scrapePending(SearchJob job) {
@@ -391,7 +401,7 @@ public class VacancyPipelineService {
             } else {
                 v.setScrapeStatus("not_found".equals(r.reason()) ? "not_found" : "failed");
                 log.warn("Скрейпинг {} ({} · {}) не удался: {}", v.getHhId(), job.personName, job.searchName, r.reason());
-                if (r.reason() != null && r.reason().startsWith(SCRAPER_CLIENT_ERROR_PREFIX)) {
+                if (isSiteWideFailure(r.reason())) {
                     consecutiveFailures++;
                 } else {
                     consecutiveFailures = 0;
@@ -401,7 +411,7 @@ public class VacancyPipelineService {
             count++;
 
             if (consecutiveFailures >= MAX_CONSECUTIVE_SCRAPE_FAILURES) {
-                log.warn("Скрейпинг ({} · {}) остановлен после {} подряд ошибок соединения — сайдкар недоступен, оставшиеся {} вакансий останутся в очереди",
+                log.warn("Скрейпинг ({} · {}) остановлен после {} подряд ошибок — сайдкар недоступен или hh.ru блокирует запросы, оставшиеся {} вакансий останутся в очереди",
                     job.personName, job.searchName, consecutiveFailures, pending.size() - count);
                 break;
             }
