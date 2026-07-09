@@ -207,13 +207,9 @@ async function loadStats() {
 // клики по фильтрам) — рендерим только результат самого свежего запроса.
 let loadSeq = 0;
 
-async function loadVacancies(page = 1) {
-  const seq = ++loadSeq;
-  currentPage = page;
-  renderChips();
+/** Query-параметры /api/vacancies из текущего состояния фильтров (общие для списка и экспорта). */
+function buildListParams() {
   const params = new URLSearchParams();
-  params.set('page', page);
-  params.set('perPage', 30);
 
   // 'pending' и 'fraud' бэкенд понимает как фильтры по ai_verdict, остальное — по status;
   // раньше 'pending' подменялся на 'new' и «Не оценено» показывало то же, что «Новые»,
@@ -251,6 +247,18 @@ async function loadVacancies(page = 1) {
   const search = document.getElementById('search-input')?.value;
   if (search) params.set('search', search);
 
+  return params;
+}
+
+async function loadVacancies(page = 1) {
+  const seq = ++loadSeq;
+  currentPage = page;
+  renderChips();
+  const params = buildListParams();
+  params.set('page', page);
+  params.set('perPage', 30);
+  syncFiltersToUrl(params);
+
   try {
     const data = await api('/vacancies?' + params);
     if (seq !== loadSeq) return; // уже ушёл более свежий запрос
@@ -259,6 +267,61 @@ async function loadVacancies(page = 1) {
   } catch (e) {
     console.error('Load error:', e);
   }
+}
+
+// ═══════ ФИЛЬТРЫ В URL ═══════
+// Состояние фильтров зеркалится в адресную строку: работают закладки, «поделиться
+// ссылкой на подборку» и восстановление после перезагрузки/повторного входа.
+const URL_FILTER_INPUTS = {
+  person: 'person-filter', searchName: 'search-name-filter', district: 'district-filter',
+  tag: 'tag-filter', minSalary: 'salary-filter', minScore: 'score-filter',
+  remote: 'remote-filter', sort: 'sort-filter', search: 'search-input',
+};
+
+function syncFiltersToUrl(listParams) {
+  const params = new URLSearchParams(listParams);
+  params.delete('perPage');
+  if (params.get('page') === '1') params.delete('page');
+  if (params.get('sort') === 'score_desc') params.delete('sort'); // дефолт не тащим в URL
+  const qs = params.toString();
+  history.replaceState(null, '', qs ? '?' + qs : location.pathname);
+}
+
+function restoreFiltersFromUrl() {
+  const params = new URLSearchParams(location.search);
+  for (const [param, id] of Object.entries(URL_FILTER_INPUTS)) {
+    const val = params.get(param);
+    if (!val) continue;
+    const el = document.getElementById(id);
+    if (!el) continue;
+    // Опции селектов (люди/поиски/районы/теги) грузятся асинхронно позже —
+    // подставляем временную, чтобы значение не потерялось; loadJobs/loadStats
+    // при перерисовке сохраняют текущее значение.
+    if (el.tagName === 'SELECT' && ![...el.options].some(o => o.value === val)) {
+      const opt = document.createElement('option');
+      opt.value = val;
+      opt.textContent = val;
+      el.appendChild(opt);
+    }
+    el.value = val;
+  }
+  if (params.get('minSalary') === '1') {
+    const hasSalaryEl = document.getElementById('has-salary-filter');
+    const salaryEl = document.getElementById('salary-filter');
+    if (hasSalaryEl && salaryEl && salaryEl.value === '1') {
+      salaryEl.value = '';
+      hasSalaryEl.checked = true;
+    }
+  }
+  const status = params.get('status');
+  if (status) {
+    currentFilter = status;
+    document.querySelectorAll('.nav-item[data-filter]').forEach(el => {
+      el.classList.toggle('active', el.dataset.filter === status);
+    });
+  }
+  const page = parseInt(params.get('page'), 10);
+  return isNaN(page) || page < 1 ? 1 : page;
 }
 
 // ═══════ ACTIVE FILTER CHIPS ═══════
@@ -356,6 +419,8 @@ function renderList(vacancies) {
     return `
       <div class="vacancy ${isSelected}" data-id="${v.id}" onclick="openDetail(${v.id})">
         <div class="v-top">
+          <input type="checkbox" class="v-check" ${bulkSelection.has(v.id) ? 'checked' : ''}
+                 onclick="event.stopPropagation()" onchange="toggleCheck(${v.id}, this.checked)" title="Выбрать для массовых действий">
           <div class="v-main">
             <div class="v-title">${escHtml(v.title)}</div>
             <div class="v-co">${escHtml(v.company || '')}</div>
@@ -466,6 +531,7 @@ function renderDetail(v) {
   }
 
   container.innerHTML = `
+    <button class="d-close" onclick="closeDetail()" title="Закрыть">✕</button>
     <div class="db">${escHtml(v.person || 'Все вакансии')}${v.searchName ? ' · ' + escHtml(v.searchName) : ''} › <span>${escHtml(statusLabel(v.status))}</span></div>
     ${typeTag}
     <div class="dtitle">${escHtml(v.title)}</div>
@@ -566,8 +632,47 @@ async function addTag(id) {
   }
 }
 
-function toggleCheck(id) {
-  // placeholder for bulk selection
+// ═══════ МАССОВЫЕ ДЕЙСТВИЯ ═══════
+// Бэкенд-эндпоинт /vacancies/bulk-status существовал всегда, но UI к нему не было —
+// разбор выдачи шёл только по одной вакансии. Выделение живёт поверх страниц:
+// можно отметить карточки на нескольких страницах и применить действие разом.
+const bulkSelection = new Set();
+
+function toggleCheck(id, checked) {
+  if (checked) bulkSelection.add(id);
+  else bulkSelection.delete(id);
+  updateBulkBar();
+}
+
+function clearBulkSelection() {
+  bulkSelection.clear();
+  document.querySelectorAll('.v-check').forEach(cb => { cb.checked = false; });
+  updateBulkBar();
+}
+
+function updateBulkBar() {
+  const bar = document.getElementById('bulk-bar');
+  if (!bar) return;
+  bar.classList.toggle('hidden', bulkSelection.size === 0);
+  const count = document.getElementById('bulk-count');
+  if (count) count.textContent = `Выбрано: ${bulkSelection.size}`;
+}
+
+async function bulkSetStatus(status) {
+  if (!bulkSelection.size) return;
+  try {
+    const r = await api('/vacancies/bulk-status', {
+      method: 'POST',
+      body: JSON.stringify({ ids: [...bulkSelection], status }),
+    });
+    toast(`✓ ${statusLabel(status)}: ${r.count} вакансий`, 'ok');
+    bulkSelection.clear();
+    updateBulkBar();
+    loadStats();
+    loadVacancies(currentPage);
+  } catch (e) {
+    toast('✗ ' + e.message, 'err');
+  }
 }
 
 // ═══════ FILTERS ═══════
@@ -576,6 +681,7 @@ function setFilter(filter) {
   document.querySelectorAll('.nav-item[data-filter]').forEach(el => {
     el.classList.toggle('active', el.dataset.filter === filter);
   });
+  toggleSidebar(false); // на телефоне выбор фильтра закрывает выехавшее меню
   loadVacancies(1);
 }
 
@@ -585,46 +691,101 @@ function debounceSearch() {
 }
 
 // ═══════ PIPELINE ═══════
-async function runPipeline() {
-  toast('▶️ Запуск пайплайна...');
+// Запуски теперь асинхронные: POST мгновенно возвращает 202, реальная работа идёт
+// на бэкенде в фоне (см. PipelineJobRunner), а фронт опрашивает прогресс. Раньше
+// HTTP-запрос висел все минуты работы пайплайна и умирал по таймауту браузера —
+// результат терялся, а пользователь не знал, идёт ли что-то вообще.
+let pipelinePollTimer = null;
+
+const PIPELINE_TYPE_LABELS = { run: '▶ Пайплайн', analyze_pending: '⏳ Оценка необработанных', reanalyze: '🔄 Переоценка' };
+const PIPELINE_COUNTER_LABELS = { collected: 'собрано', newVacancies: 'новых', analyzed: 'оценено', approved: 'одобрено', reset: 'сброшено' };
+
+async function startPipelineJob(path, startMsg) {
   try {
-    const r = await api('/pipeline/run', { method: 'POST' });
-    toast(`✓ Собрано: ${r.collected}, новых: ${r.newVacancies}, проанализировано: ${r.analyzed}`, 'ok');
-    loadStats();
-    loadVacancies(1);
+    await api(path, { method: 'POST' });
+    toast(startMsg);
+    startPipelinePolling();
   } catch (e) {
-    toast('✗ ' + e.message, 'err');
+    if (String(e.message).startsWith('409')) toast('⏳ Другая операция ещё выполняется', 'err');
+    else toast('✗ ' + e.message, 'err');
   }
 }
 
-async function showReanalyzeModal() {
+function runPipeline() {
+  startPipelineJob('/pipeline/run', '▶️ Пайплайн запущен в фоне');
+}
+
+function showReanalyzeModal() {
   if (!confirm('Переоценить все вакансии? Это займёт время.')) return;
-  toast('🔄 Переоценка запущена...');
-  try {
-    const r = await api('/pipeline/reanalyze', { method: 'POST' });
-    toast(`✓ Сброшено: ${r.reset}, проанализировано: ${r.analyzed}`, 'ok');
-    loadStats();
-    loadVacancies(1);
-  } catch (e) {
-    toast('✗ ' + e.message, 'err');
-  }
+  startPipelineJob('/pipeline/reanalyze', '🔄 Переоценка запущена в фоне');
 }
 
-async function analyzePending() {
-  const btn = document.getElementById('btn-analyze-pending');
-  btn.disabled = true;
-  btn.textContent = '⏳ Обработка...';
+function analyzePending() {
+  startPipelineJob('/pipeline/analyze-pending', '⏳ Оценка необработанных запущена в фоне');
+}
+
+function startPipelinePolling() {
+  setPipelineButtonsDisabled(true);
+  if (pipelinePollTimer) clearInterval(pipelinePollTimer);
+  pipelinePollTimer = setInterval(pollPipelineStatus, 2500);
+  pollPipelineStatus();
+}
+
+async function pollPipelineStatus() {
   try {
-    const r = await api('/pipeline/analyze-pending', { method: 'POST' });
-    toast(`✓ Проанализировано: ${r.analyzed}, осталось: ${r.remaining}`, 'ok');
-    loadStats();
-    loadVacancies(1);
-  } catch (e) {
-    toast('✗ ' + e.message, 'err');
-  } finally {
-    btn.disabled = false;
-    btn.textContent = '⏳ Оценить все';
+    const s = await api('/pipeline/run/status');
+    if (s.running) {
+      showPipelineBanner(s);
+      return;
+    }
+    hidePipelineBanner();
+    setPipelineButtonsDisabled(false);
+    if (pipelinePollTimer) {
+      clearInterval(pipelinePollTimer);
+      pipelinePollTimer = null;
+      const parts = Object.entries(s.counters || {})
+        .map(([k, v]) => `${PIPELINE_COUNTER_LABELS[k] || k}: ${v}`);
+      if (s.error) toast(`⚠️ Завершено с ошибкой (${escHtml(s.error)})`, 'err');
+      else toast(`✓ Готово${parts.length ? ' — ' + parts.join(', ') : ''}`, 'ok');
+      loadStats();
+      loadVacancies(currentPage);
+    }
+  } catch (e) { /* сеть мигнула — следующий тик опроса разберётся */ }
+}
+
+/** Подхватить уже идущий фоновый запуск (перезагрузка страницы, второй логин). */
+async function resumePipelinePollingIfRunning() {
+  try {
+    const s = await api('/pipeline/run/status');
+    if (s.running) startPipelinePolling();
+  } catch (e) { /* ignore */ }
+}
+
+function showPipelineBanner(s) {
+  let banner = document.getElementById('pipeline-banner');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'pipeline-banner';
+    banner.className = 'pipeline-banner';
+    const topbar = document.querySelector('.topbar');
+    if (topbar) topbar.prepend(banner);
   }
+  const label = PIPELINE_TYPE_LABELS[s.type] || 'Выполняется';
+  banner.innerHTML = `<span class="spinner"></span> ${label}: ${s.jobsDone}/${s.jobsTotal}` +
+    (s.currentJob ? ` · ${escHtml(s.currentJob)}` : '');
+  banner.style.display = 'flex';
+}
+
+function hidePipelineBanner() {
+  const banner = document.getElementById('pipeline-banner');
+  if (banner) banner.style.display = 'none';
+}
+
+function setPipelineButtonsDisabled(disabled) {
+  ['btn-run-pipeline', 'btn-analyze-pending', 'btn-reanalyze'].forEach(id => {
+    const b = document.getElementById(id);
+    if (b) b.disabled = disabled;
+  });
 }
 
 /**
@@ -645,8 +806,13 @@ async function exportData() {
     const rows = [];
     let page = 1;
     let total = Infinity;
+    // Экспортируется текущая подборка: все активные фильтры (человек, статус,
+    // зарплата, поиск…) применяются и к выгрузке, а не вся база без разбора.
     while (rows.length < total && page <= 100) {
-      const data = await api(`/vacancies?status=all&perPage=200&page=${page}`);
+      const params = buildListParams();
+      params.set('perPage', 200);
+      params.set('page', page);
+      const data = await api('/vacancies?' + params);
       total = data.total || 0;
       const batch = data.vacancies || [];
       if (!batch.length) break;
@@ -1524,20 +1690,12 @@ async function adminDeleteUser(id) {
   }
 }
 
-// ═══════ DISTRICT FILTER ═══════
-async function loadDistricts() {
-  try {
-    const s = await api('/stats');
-    const select = document.getElementById('district-filter');
-    if (!select) return;
-    const current = select.value;
-    const districts = (s.topDistricts || []).map(d => d.name).filter(n => n);
-    select.innerHTML = '<option value="">Все районы</option>' +
-      districts.map(d => `<option value="${escHtml(d)}">${escHtml(d)}</option>`).join('') +
-      '<option value="Шакша">Шакша</option>' +
-      '<option value="Центр">Центр</option>';
-    if (current) select.value = current;
-  } catch (e) { /* ignore */ }
+// ═══════ MOBILE SIDEBAR ═══════
+// На узких экранах сайдбар раньше просто скрывался (display:none) — на телефоне
+// не было ни статусных фильтров, ни кнопок запуска. Теперь он выезжает по ☰.
+function toggleSidebar(force) {
+  const open = typeof force === 'boolean' ? force : !document.body.classList.contains('sidebar-open');
+  document.body.classList.toggle('sidebar-open', open);
 }
 
 // ═══════ INIT ═══════
@@ -1551,11 +1709,13 @@ function startApp() {
   document.getElementById('app-root').style.display = '';
 
   initTheme();
+  const startPage = restoreFiltersFromUrl(); // фильтры/страница из адресной строки
   loadStats(); // also populates district filter from topDistricts
   loadJobs(); // populates person/search filters from configured (person, search) jobs
-  loadVacancies(1);
+  loadVacancies(startPage);
   checkAiStatus(); // check rate limit status
   syncNotifyButton(); // 🔔/🔕 по реальному состоянию
+  resumePipelinePollingIfRunning(); // фоновый запуск мог идти до перезагрузки страницы
 
   if (listenersBound) return;
   listenersBound = true;
