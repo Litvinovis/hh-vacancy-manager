@@ -289,6 +289,14 @@ async function scrapeVacancy(hhId) {
     });
     const status = resp ? resp.status() : 0;
     if (status === 404) return { ok: false, reason: 'not_found' };
+    if (status === 403) {
+      // hh.ru returns a per-vacancy 403 for hidden/removed postings while the rest of
+      // the session keeps working — the backend must NOT freeze all scraping over it.
+      // A DDoS-Guard session block also comes as 403, but with its challenge page as
+      // the body; report that separately so the backend can treat it as site-wide.
+      const body = await page.content().catch(() => '');
+      return { ok: false, reason: /ddos-?guard/i.test(body) ? 'blocked' : 'http_403' };
+    }
     if (status >= 400) return { ok: false, reason: `http_${status}` };
 
     // Wait for the client-side app to render the data-qa nodes we read below,

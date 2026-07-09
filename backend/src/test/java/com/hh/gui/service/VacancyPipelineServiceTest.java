@@ -208,4 +208,30 @@ class VacancyPipelineServiceTest {
         assertTrue(text.contains("• первое"));
         assertTrue(text.contains("• второе"));
     }
+
+    // ── isSiteWideFailure (scrape-cooldown trigger classification) ──
+
+    private boolean isSiteWideFailure(String reason) throws Exception {
+        Method m = VacancyPipelineService.class.getDeclaredMethod("isSiteWideFailure", String.class);
+        m.setAccessible(true);
+        return (Boolean) m.invoke(null, reason);
+    }
+
+    @Test
+    void isSiteWideFailure_perVacancyReasons_doNotFreezeScraping() throws Exception {
+        // Регрессия: три подряд hh-шных 403 на скрытых вакансиях замораживали
+        // ВЕСЬ скрейпинг на 30+ минут, хотя сессия работала (соседние вакансии
+        // в том же прогоне скрейпились успешно).
+        assertFalse(isSiteWideFailure("http_403"));
+        assertFalse(isSiteWideFailure("not_found"));
+        assertFalse(isSiteWideFailure("no_job_posting_data"));
+    }
+
+    @Test
+    void isSiteWideFailure_blockedSidecarDownOrOtherHttp_freezeScraping() throws Exception {
+        assertTrue(isSiteWideFailure("blocked")); // DDoS-Guard challenge, распознан сайдкаром
+        assertTrue(isSiteWideFailure("client_error: connect refused"));
+        assertTrue(isSiteWideFailure("http_429"));
+        assertTrue(isSiteWideFailure("http_500"));
+    }
 }

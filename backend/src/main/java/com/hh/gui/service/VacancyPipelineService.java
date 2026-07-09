@@ -84,8 +84,20 @@ public class VacancyPipelineService {
     public PipelineResult runFullPipeline(SearchJob job) {
         log.info("=== Пайплайн: {} · {} ===", job.personName, job.searchName);
 
-        int discovered = discoverNew(job);
-        log.info("Шаг 1 ({} · {}): {} новых вакансий", job.personName, job.searchName, discovered);
+        // URL-only search (sourceUrl set, no RSS queries): the only way to discover
+        // anything is the saved URL. Without this, a manual "run" of such a search
+        // logged "queries not configured" and silently collected nothing — discovery
+        // happened only on the runDueUrlSearches schedule.
+        int discovered;
+        boolean urlOnly = (job.queries == null || job.queries.isEmpty())
+            && job.sourceUrl != null && !job.sourceUrl.isBlank();
+        if (urlOnly) {
+            discovered = discoverFromUrl(job, job.sourceUrl, MAX_URL_SEARCH_PAGES);
+            log.info("Шаг 1 по ссылке ({} · {}): {} новых вакансий", job.personName, job.searchName, discovered);
+        } else {
+            discovered = discoverNew(job);
+            log.info("Шаг 1 ({} · {}): {} новых вакансий", job.personName, job.searchName, discovered);
+        }
 
         int scraped = scrapePending(job);
         log.info("Шаг 2 ({} · {}): скрейпинг обработал {} записей", job.personName, job.searchName, scraped);
@@ -382,15 +394,18 @@ public class VacancyPipelineService {
 
     // Failure reasons that say nothing about the OTHER pending vacancies in this batch —
     // "not_found" is that one posting genuinely archived/removed, "no_job_posting_data" is
-    // that one page not rendering the expected structure. Everything else — ScraperClient's
-    // own "client_error: ..." (sidecar down/refused/timed out), or any http_4xx/5xx status
-    // hh.ru itself returned (403/429/5xx) — is a site-wide signal: hh.ru/DDoS-Guard blocking
-    // or rate-limiting the whole scraping session, where every next attempt in this run is
-    // just as likely to fail too. A real production run saw exactly this: a burst of
-    // consecutive http_403s across many *different* hh_ids right after a heavy discovery
-    // run, which the old client_error-only check didn't catch — it ground through the whole
-    // batch at ~5s/attempt before giving up on its own.
-    private static final Set<String> PER_VACANCY_FAILURE_REASONS = Set.of("not_found", "no_job_posting_data");
+    // that one page not rendering the expected structure, "http_403" is hh.ru's own
+    // per-vacancy access restriction (hidden/removed posting): a production run showed
+    // specific hh_ids returning 403 consistently while 20 neighbours in the same session
+    // scraped fine minutes before and after. A DDoS-Guard session block is different — the
+    // sidecar now sniffs the 403 body for the challenge page and reports it as "blocked",
+    // which stays site-wide. Everything else — ScraperClient's own "client_error: ..."
+    // (sidecar down/refused/timed out), "blocked", or any other http_4xx/5xx status — is a
+    // site-wide signal where every next attempt in this run is just as likely to fail too.
+    // As a backstop against a 403 rate-limit that doesn't carry the DDoS-Guard signature,
+    // scrapePending still bails out when too many 403s pile up in one run.
+    private static final Set<String> PER_VACANCY_FAILURE_REASONS = Set.of("not_found", "no_job_posting_data", "http_403");
+    private static final int MAX_HTTP_403_PER_RUN = 8;
     private static final int MAX_CONSECUTIVE_SCRAPE_FAILURES = 3;
     // Per-vacancy failed attempts (page loads with no JobPosting data) before a row
     // stops being re-queued — without a cap, permanently broken rows sat at the front
@@ -449,9 +464,18 @@ public class VacancyPipelineService {
         }
         int count = 0;
         int consecutiveFailures = 0;
+        int http403InRun = 0;
         List<Vacancy> pending = vacancyRepo.findScrapePending(job.personName, job.searchName,
             runtimeConfig.getMaxPerRun(), MAX_SCRAPE_ATTEMPTS);
         for (Vacancy v : pending) {
+            // The cooldown may have been engaged by a PARALLEL run (scheduler vs manual
+            // trigger) after this loop already started — the entry check above won't
+            // catch that, and this thread would keep hammering a blocked session.
+            if (isScrapeCoolingDown()) {
+                log.info("Скрейпинг ({} · {}) прерван — другой запуск словил блокировку, осталось {} вакансий",
+                    job.personName, job.searchName, pending.size() - count);
+                break;
+            }
             Optional<Vacancy> existing = vacancyRepo.findFirstScrapedByHhId(v.getHhId());
             if (existing.isEmpty()) {
                 // Cross-city fallback — same real posting, different hh_id per city listing.
@@ -484,6 +508,17 @@ public class VacancyPipelineService {
                     if (!"not_found".equals(r.reason())) {
                         vacancyRepo.incrementScrapeAttempts(v.getId());
                     }
+                }
+                // Backstop (see PER_VACANCY_FAILURE_REASONS): individually a 403 is that
+                // one posting restricted, but a pile of them in one run smells like a
+                // rate-limit the sidecar couldn't attribute to DDoS-Guard.
+                if ("http_403".equals(r.reason()) && ++http403InRun >= MAX_HTTP_403_PER_RUN) {
+                    vacancyRepo.updateScraped(v);
+                    count++;
+                    enterScrapeCooldown();
+                    log.warn("Скрейпинг ({} · {}) остановлен: {} http_403 за один прогон — похоже на rate-limit, оставшиеся {} вакансий останутся в очереди",
+                        job.personName, job.searchName, http403InRun, pending.size() - count);
+                    break;
                 }
             }
             vacancyRepo.updateScraped(v);
