@@ -33,7 +33,16 @@ for i in $(seq 1 60); do
   sleep 1
 done
 
-ADMIN_PASSWORD="$(grep -o 'пароль: [A-Za-z0-9]*' "$WORK_DIR/app.log" | head -1 | awk '{print $2}')"
-if [ -z "$ADMIN_PASSWORD" ]; then echo "пароль админа не найден в логе"; exit 1; fi
+# Пароль появляется в логе ПОЗЖЕ готовности HTTP: сидер — CommandLineRunner,
+# он выполняется после старта Tomcat. На быстром CI-раннере первый grep попадал
+# в это окно, возвращал 1 и через set -e молча валил весь скрипт (голый grep в
+# $(...) — это и была причина «пустых» падений джоба за 12-20 секунд).
+ADMIN_PASSWORD=""
+for i in $(seq 1 30); do
+  ADMIN_PASSWORD="$(grep -o 'пароль: [A-Za-z0-9]*' "$WORK_DIR/app.log" 2>/dev/null | head -1 | awk '{print $2}' || true)"
+  if [ -n "$ADMIN_PASSWORD" ]; then break; fi
+  sleep 1
+done
+if [ -z "$ADMIN_PASSWORD" ]; then echo "пароль админа не найден в логе"; tail -30 "$WORK_DIR/app.log"; exit 1; fi
 
 BASE="http://127.0.0.1:$PORT" ADMIN_PASSWORD="$ADMIN_PASSWORD" node "$REPO_DIR/scripts/frontend-smoke.js"
