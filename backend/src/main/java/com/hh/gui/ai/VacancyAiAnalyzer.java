@@ -159,10 +159,7 @@ public class VacancyAiAnalyzer {
                 continue;
             }
             try {
-                waitForRateLimit();
-                String response = callLlm(buildPrescreenPrompt(batch, job),
-                    Math.min(3000, 200 + 60 * batch.size()));
-                results.addAll(parseResponse(response, List.of()));
+                results.addAll(prescreenBatchWithRetry(batch, job));
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 results.addAll(passAllOpen(batch, "Прервано — прескрининг пропущен"));
@@ -176,6 +173,29 @@ public class VacancyAiAnalyzer {
 
     private List<AiResult> passAllOpen(List<ScraperClient.SearchHit> hits, String reason) {
         return hits.stream().map(h -> new AiResult(h.hhId(), 50, "yes", reason)).toList();
+    }
+
+    /**
+     * One prescreen LLM round-trip with a single retry. A live run on the
+     * "openrouter/free" router showed why both halves matter: it routes each request
+     * to an arbitrary free model, and reasoning models spend most of the completion
+     * budget thinking out loud — with the old cap of min(3000, 200+60×N) (2000 tokens
+     * for a 30-card batch) the response got cut off mid-reasoning, before any JSON,
+     * on every batch. The generous cap is headroom, not extra spend (max_tokens only
+     * bounds generation), and the retry usually lands on a different model.
+     */
+    private List<AiResult> prescreenBatchWithRetry(List<ScraperClient.SearchHit> batch, SearchJob job) throws Exception {
+        String prompt = buildPrescreenPrompt(batch, job);
+        int maxTokens = Math.min(6000, 3000 + 60 * batch.size());
+        for (int attempt = 1; ; attempt++) {
+            waitForRateLimit();
+            try {
+                return parseResponse(callLlm(prompt, maxTokens), List.of());
+            } catch (Exception e) {
+                if (attempt >= 2) throw e;
+                log.warn("Прескрининг: попытка {} не удалась ({}), повторяем", attempt, e.getMessage());
+            }
+        }
     }
 
     private String buildPrescreenPrompt(List<ScraperClient.SearchHit> hits, SearchJob job) {
