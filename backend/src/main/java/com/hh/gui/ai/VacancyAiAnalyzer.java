@@ -160,7 +160,8 @@ public class VacancyAiAnalyzer {
             }
             try {
                 waitForRateLimit();
-                String response = callLlm(buildPrescreenPrompt(batch, job));
+                String response = callLlm(buildPrescreenPrompt(batch, job),
+                    Math.min(3000, 200 + 60 * batch.size()));
                 results.addAll(parseResponse(response, List.of()));
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -204,11 +205,16 @@ public class VacancyAiAnalyzer {
         return sb.toString();
     }
 
-    /** Wait to respect rate limits. */
+    /**
+     * Wait to respect rate limits. The pause is per-provider when configured
+     * (see AiProviderConfig.requestDelayMs) — the global default is sized for
+     * free-tier models and needlessly throttles paid fallbacks several-fold.
+     */
     private synchronized void waitForRateLimit() throws InterruptedException {
         long now = System.currentTimeMillis();
         long elapsed = now - lastRequestTime;
-        long minInterval = runtimeConfig.getAiRequestDelayMs();
+        Integer providerDelay = providerManager.getCurrentRequestDelayMs();
+        long minInterval = providerDelay != null ? providerDelay : runtimeConfig.getAiRequestDelayMs();
         if (elapsed < minInterval) {
             Thread.sleep(minInterval - elapsed);
         }
@@ -262,7 +268,9 @@ public class VacancyAiAnalyzer {
 
     private List<AiResult> analyzeChunk(List<Vacancy> vacancies, SearchJob job) throws Exception {
         String prompt = buildPrompt(vacancies, job);
-        String response = callLlm(prompt);
+        // ~30-60 completion tokens per vacancy in practice; cap generously per batch
+        // instead of a flat 6000 so a runaway model can't produce pages of prose.
+        String response = callLlm(prompt, Math.min(6000, 400 + 150 * vacancies.size()));
         return parseResponse(response, vacancies);
     }
 
@@ -429,7 +437,7 @@ public class VacancyAiAnalyzer {
         return sb.toString();
     }
 
-    private String callLlm(String prompt) throws Exception {
+    private String callLlm(String prompt, int maxTokens) throws Exception {
         String url = providerManager.getCurrentUrl();
         String key = providerManager.getCurrentKey();
         String model = providerManager.getCurrentModel();
@@ -452,7 +460,7 @@ public class VacancyAiAnalyzer {
             "model", model,
             "messages", List.of(Map.of("role", "user", "content", prompt)),
             "temperature", 0.3,
-            "max_tokens", 6000
+            "max_tokens", maxTokens
         );
         byte[] payload = mapper.writeValueAsBytes(requestBody);
 

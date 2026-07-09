@@ -363,14 +363,28 @@ public class VacancyRepository {
 
     /**
      * Rows discovered via RSS but not yet (successfully) scraped for full content.
-     * 'failed' rows are retried on the next pipeline run; 'not_found' is terminal
-     * (archived/removed vacancy) and excluded here.
+     * 'failed' rows are retried on the next pipeline run — but only up to
+     * maxAttempts per-vacancy failures (see incrementScrapeAttempts); without that
+     * cap a permanently broken page sat at the FRONT of this created_at-ordered
+     * queue and burned scraper time on every single run, forever. 'not_found' is
+     * terminal (archived/removed vacancy) and excluded here.
      */
-    public List<Vacancy> findScrapePending(String person, String searchName, int limit) {
+    public List<Vacancy> findScrapePending(String person, String searchName, int limit, int maxAttempts) {
         return jdbc.query(
             "SELECT * FROM vacancies WHERE person=? AND search_name=? " +
-            "AND scrape_status IN ('pending', 'failed') ORDER BY created_at ASC LIMIT ?",
-            rowMapper, person, searchName, limit);
+            "AND scrape_status IN ('pending', 'failed') AND scrape_attempts < ? " +
+            "ORDER BY created_at ASC LIMIT ?",
+            rowMapper, person, searchName, maxAttempts, limit);
+    }
+
+    /**
+     * Count one more failed scrape attempt for this row. Only called for
+     * per-vacancy failures (page loaded but had no JobPosting data) — site-wide
+     * failures (sidecar down, hh.ru blocking the session) say nothing about this
+     * particular vacancy and must not use up its retry budget.
+     */
+    public void incrementScrapeAttempts(Long id) {
+        jdbc.update("UPDATE vacancies SET scrape_attempts = scrape_attempts + 1 WHERE id=?", id);
     }
 
     /**
@@ -382,7 +396,8 @@ public class VacancyRepository {
             UPDATE vacancies SET title=?, company=?, employer_name=?, description=?,
                 salary_from=?, salary_to=?, currency=?, salary_gross=?,
                 address=?, district=?, experience=?, employment=?, key_skills=?,
-                trusted_employer=?, valid_through=?, scrape_status=?, is_remote=?, updated_at=?
+                trusted_employer=?, valid_through=?, scrape_status=?, is_remote=?,
+                published_at=?, updated_at=?
             WHERE id=?
             """,
             v.getTitle(), v.getCompany(), v.getEmployerName(), v.getDescription(),
@@ -391,7 +406,7 @@ public class VacancyRepository {
             v.getCurrency(), v.isSalaryGross() ? 1 : 0,
             v.getAddress(), v.getDistrict(), v.getExperience(), v.getEmployment(), v.getKeySkills(),
             v.isTrustedEmployer() ? 1 : 0, v.getValidThrough(), v.getScrapeStatus(),
-            v.isRemote() ? 1 : 0, now, v.getId());
+            v.isRemote() ? 1 : 0, v.getPublishedAt(), now, v.getId());
     }
 
     /**
@@ -412,7 +427,7 @@ public class VacancyRepository {
      */
     public void resetScore(Long id) {
         String now = Instant.now().toString();
-        jdbc.update("UPDATE vacancies SET ai_verdict='pending', ai_score=0, ai_reason='', updated_at=? WHERE id=?",
+        jdbc.update("UPDATE vacancies SET ai_verdict='pending', ai_score=0, ai_reason='', ai_attempts=0, updated_at=? WHERE id=?",
             now, id);
     }
 
@@ -504,6 +519,22 @@ public class VacancyRepository {
     }
 
     /**
+     * Which of these hh_ids already have a row for this (person, search) — one IN
+     * query per discovery page instead of one existsByHhIdPersonSearch round-trip
+     * per candidate.
+     */
+    public Set<String> findExistingHhIds(Collection<String> hhIds, String person, String searchName) {
+        if (hhIds == null || hhIds.isEmpty()) return Set.of();
+        String placeholders = String.join(",", Collections.nCopies(hhIds.size(), "?"));
+        List<Object> params = new ArrayList<>(hhIds);
+        params.add(person);
+        params.add(searchName);
+        return new HashSet<>(jdbc.queryForList(
+            "SELECT hh_id FROM vacancies WHERE hh_id IN (" + placeholders + ") AND person = ? AND search_name = ?",
+            String.class, params.toArray()));
+    }
+
+    /**
      * Vacancies previously scraped for this exact hh_id (any person/search) whose
      * scrape succeeded — lets the pipeline reuse already-fetched content instead of
      * re-scraping when a second (person, search) also matches the same real posting.
@@ -563,6 +594,30 @@ public class VacancyRepository {
                 ps.setString(1, criteriaHash);
                 ps.setLong(2, id);
             });
+    }
+
+    /** Count one more LLM round-trip for each row about to be sent for analysis. */
+    public void incrementAiAttemptsBatch(List<Long> ids) {
+        if (ids == null || ids.isEmpty()) return;
+        jdbc.batchUpdate("UPDATE vacancies SET ai_attempts = ai_attempts + 1 WHERE id=?", ids, ids.size(),
+            (ps, id) -> ps.setLong(1, id));
+    }
+
+    /**
+     * Terminal state for rows the model keeps silently omitting from its answers:
+     * still 'pending' after maxAttempts round-trips → marked 'error' so findPending
+     * stops returning them. Without this, analyzeAllPending's "repeat until no
+     * pending rows remain" loop re-sent the exact same stuck batch every ~12s until
+     * the provider rate-limited — pure token burn with zero progress. A manual
+     * rescan (resetAiForRescan) clears the state and gives them a fresh budget.
+     * Returns the number of rows given up on.
+     */
+    public int markAiExhausted(String person, String searchName, int maxAttempts) {
+        String now = Instant.now().toString();
+        return jdbc.update(
+            "UPDATE vacancies SET ai_verdict='error', ai_reason='AI не вернул результат после ' || ai_attempts || ' попыток', updated_at=? " +
+            "WHERE person=? AND search_name=? AND ai_verdict='pending' AND scrape_status='ok' AND ai_attempts >= ?",
+            now, person, searchName, maxAttempts);
     }
 
     // Stats — every method below is scoped to userId unless null (admin sees everything)
@@ -663,7 +718,7 @@ public class VacancyRepository {
     public int resetAiForRescan(String person, String searchName) {
         String now = Instant.now().toString();
         return jdbc.update(
-            "UPDATE vacancies SET ai_verdict='pending', ai_score=0, ai_reason='', updated_at=? " +
+            "UPDATE vacancies SET ai_verdict='pending', ai_score=0, ai_reason='', ai_attempts=0, updated_at=? " +
             "WHERE person=? AND search_name=? AND ai_verdict NOT IN ('no', 'fraud') AND (status IS NULL OR status != 'rejected')",
             now, person, searchName);
     }

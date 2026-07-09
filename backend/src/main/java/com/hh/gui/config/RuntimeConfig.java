@@ -77,6 +77,9 @@ public class RuntimeConfig {
                     p.setUrl((String) map.getOrDefault("url", ""));
                     p.setApiKey((String) map.getOrDefault("apiKey", ""));
                     p.setModel((String) map.getOrDefault("model", ""));
+                    if (map.get("requestDelayMs") instanceof Number n) {
+                        p.setRequestDelayMs(n.intValue());
+                    }
                     return p;
                 })
                 .collect(java.util.stream.Collectors.toList());

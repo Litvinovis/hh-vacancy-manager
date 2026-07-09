@@ -61,6 +61,13 @@
             <version>${snakeyaml.version}</version>
         </dependency>
 
+        <!-- Full HTML entity decoding for scraped descriptions (see VacancyPipelineService.htmlToText) -->
+        <dependency>
+            <groupId>org.jsoup</groupId>
+            <artifactId>jsoup</artifactId>
+            <version>1.18.3</version>
+        </dependency>
+
         <!-- Actuator + Prometheus metrics -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

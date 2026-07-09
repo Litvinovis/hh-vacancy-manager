@@ -64,9 +64,16 @@ CREATE TABLE IF NOT EXISTS vacancies (
     trusted_employer INTEGER DEFAULT 0,
     valid_through TEXT DEFAULT '',
     scrape_status TEXT NOT NULL DEFAULT 'pending',
+    -- scrape_attempts: failed per-vacancy scrape attempts (page loads that returned
+    -- no JobPosting data). Rows past the retry cap stop being re-queued every run.
+    scrape_attempts INTEGER DEFAULT 0,
     ai_score INTEGER DEFAULT 0,
     ai_verdict TEXT DEFAULT 'pending',
     ai_reason TEXT DEFAULT '',
+    -- ai_attempts: how many times this row was sent to the LLM while staying
+    -- 'pending' (model silently omitted it from the answer). Past the cap the
+    -- row is marked ai_verdict='error' instead of burning tokens forever.
+    ai_attempts INTEGER DEFAULT 0,
     description TEXT DEFAULT '',
     status TEXT NOT NULL DEFAULT 'new',
     rejection_reason TEXT DEFAULT '',
