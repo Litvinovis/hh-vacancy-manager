@@ -1,6 +1,8 @@
 package com.hh.gui.controller;
 
+import com.hh.gui.model.SearchConfig;
 import com.hh.gui.model.User;
+import com.hh.gui.service.SearchService;
 import com.hh.gui.service.UserService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -11,28 +13,40 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * User management for the owner — every endpoint here checks isAdmin()
- * itself (a handful of endpoints, not worth a second interceptor layer;
- * AuthInterceptor already guarantees a logged-in user got this far).
+ * User + shared-search management for the owner — every endpoint here checks
+ * isAdmin() itself (a handful of endpoints, not worth a second interceptor
+ * layer; AuthInterceptor already guarantees a logged-in user got this far).
+ * Creating/editing/deleting a global search itself still goes through the
+ * regular /api/searches CRUD (with isGlobal:true) — SearchService already lets
+ * any admin bypass ownership checks there; this controller only adds the
+ * "list every global search, not just mine" view those endpoints don't offer.
  */
 @RestController
-@RequestMapping("/api/admin/users")
+@RequestMapping("/api/admin")
 public class AdminController {
 
     private final UserService userService;
+    private final SearchService searchService;
 
-    public AdminController(UserService userService) {
+    public AdminController(UserService userService, SearchService searchService) {
         this.userService = userService;
+        this.searchService = searchService;
     }
 
-    @GetMapping
+    @GetMapping("/global-searches")
+    public ResponseEntity<?> listGlobalSearches(@RequestAttribute("currentUser") User currentUser) {
+        if (!currentUser.isAdmin()) return forbidden();
+        return ResponseEntity.ok(searchService.listGlobal());
+    }
+
+    @GetMapping("/users")
     public ResponseEntity<?> list(@RequestAttribute("currentUser") User currentUser) {
         if (!currentUser.isAdmin()) return forbidden();
         List<Map<String, Object>> result = userService.listAll().stream().map(this::toView).toList();
         return ResponseEntity.ok(result);
     }
 
-    @PostMapping
+    @PostMapping("/users")
     public ResponseEntity<?> create(@RequestBody Map<String, String> body, @RequestAttribute("currentUser") User currentUser) {
         if (!currentUser.isAdmin()) return forbidden();
         String username = body.get("username");
@@ -50,7 +64,7 @@ public class AdminController {
         }
     }
 
-    @PutMapping("/{id}")
+    @PutMapping("/users/{id}")
     public ResponseEntity<?> update(@PathVariable Long id, @RequestBody Map<String, Object> body,
                                      @RequestAttribute("currentUser") User currentUser) {
         if (!currentUser.isAdmin()) return forbidden();
@@ -64,7 +78,7 @@ public class AdminController {
         return ResponseEntity.ok(toView(updated.get()));
     }
 
-    @PostMapping("/{id}/reset-password")
+    @PostMapping("/users/{id}/reset-password")
     public ResponseEntity<?> resetPassword(@PathVariable Long id, @RequestAttribute("currentUser") User currentUser) {
         if (!currentUser.isAdmin()) return forbidden();
         Optional<String> newPassword = userService.resetPassword(id);
@@ -72,7 +86,7 @@ public class AdminController {
         return ResponseEntity.ok(Map.of("generatedPassword", newPassword.get()));
     }
 
-    @DeleteMapping("/{id}")
+    @DeleteMapping("/users/{id}")
     public ResponseEntity<?> delete(@PathVariable Long id, @RequestAttribute("currentUser") User currentUser) {
         if (!currentUser.isAdmin()) return forbidden();
         if (currentUser.getId().equals(id)) {

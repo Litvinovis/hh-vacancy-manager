@@ -66,6 +66,7 @@ public class VacancyRepository {
             long searchId = rs.getLong("search_id");
             v.setSearchId(rs.wasNull() ? null : searchId);
             v.setCriteriaHash(rs.getString("criteria_hash"));
+            v.setDedupKey(rs.getString("dedup_key"));
             return v;
         };
     }
@@ -127,7 +128,9 @@ public class VacancyRepository {
             params.add(searchName);
         }
         if (userId != null) {
-            conditions.add("v.user_id = ?");
+            // Non-admin's own vacancies, plus every vacancy from a shared (is_global) search —
+            // those are visible to all users, not scoped to whoever's admin account manages them.
+            conditions.add("(v.user_id = ? OR v.search_id IN (SELECT id FROM searches WHERE is_global = TRUE))");
             params.add(userId);
         }
 
@@ -210,7 +213,9 @@ public class VacancyRepository {
             params.add(searchName);
         }
         if (userId != null) {
-            conditions.add("v.user_id = ?");
+            // Non-admin's own vacancies, plus every vacancy from a shared (is_global) search —
+            // those are visible to all users, not scoped to whoever's admin account manages them.
+            conditions.add("(v.user_id = ? OR v.search_id IN (SELECT id FROM searches WHERE is_global = TRUE))");
             params.add(userId);
         }
 
@@ -242,8 +247,8 @@ public class VacancyRepository {
                 experience, employment, key_skills, trusted_employer, valid_through, scrape_status,
                 ai_score, ai_verdict, ai_reason, description, status,
                 rejection_reason, notes, applied_at, created_at, updated_at,
-                source, source_query, is_remote, notified, published_at, found_by_scan)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                source, source_query, is_remote, notified, published_at, found_by_scan, dedup_key)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """;
 
         KeyHolder keyHolder = new GeneratedKeyHolder();
@@ -287,7 +292,8 @@ public class VacancyRepository {
             ps.setInt(i++, v.isRemote() ? 1 : 0);
             ps.setInt(i++, v.isNotified() ? 1 : 0);
             ps.setString(i++, v.getPublishedAt());
-            ps.setInt(i, v.getFoundByScan());
+            ps.setInt(i++, v.getFoundByScan());
+            ps.setString(i, v.getDedupKey());
             return ps;
         }, keyHolder);
 
@@ -437,7 +443,7 @@ public class VacancyRepository {
      * Count pending (not yet AI-analyzed) vacancies, scoped to userId unless null (admin/global).
      */
     public int countPending(Long userId) {
-        String sql = "SELECT COUNT(*) FROM vacancies WHERE ai_verdict = 'pending'" + (userId != null ? " AND user_id = ?" : "");
+        String sql = "SELECT COUNT(*) FROM vacancies WHERE ai_verdict = 'pending'" + (userId != null ? " AND (user_id = ? OR search_id IN (SELECT id FROM searches WHERE is_global = TRUE))" : "");
         Integer count = userId != null
             ? jdbc.queryForObject(sql, Integer.class, userId)
             : jdbc.queryForObject(sql, Integer.class);
@@ -523,6 +529,28 @@ public class VacancyRepository {
         return results.isEmpty() ? Optional.empty() : Optional.of(results.get(0));
     }
 
+    /**
+     * Cross-city counterpart of findFirstScrapedByHhId: the same real posting listed
+     * separately per city has a different hh_id each time, so hh_id-based reuse never
+     * matches across them — dedup_key (normalized title+employer) is what does.
+     */
+    public Optional<Vacancy> findFirstScrapedByDedupKey(String dedupKey) {
+        if (dedupKey == null || dedupKey.isEmpty()) return Optional.empty();
+        List<Vacancy> results = jdbc.query(
+            "SELECT * FROM vacancies WHERE dedup_key = ? AND scrape_status = 'ok' LIMIT 1",
+            rowMapper, dedupKey);
+        return results.isEmpty() ? Optional.empty() : Optional.of(results.get(0));
+    }
+
+    /** Cross-city counterpart of findAnalyzedByHhIdAndCriteriaHash — see findFirstScrapedByDedupKey. */
+    public Optional<Vacancy> findAnalyzedByDedupKeyAndCriteriaHash(String dedupKey, String criteriaHash) {
+        if (dedupKey == null || dedupKey.isEmpty() || criteriaHash == null || criteriaHash.isEmpty()) return Optional.empty();
+        List<Vacancy> results = jdbc.query(
+            "SELECT * FROM vacancies WHERE dedup_key = ? AND criteria_hash = ? AND ai_verdict != 'pending' LIMIT 1",
+            rowMapper, dedupKey, criteriaHash);
+        return results.isEmpty() ? Optional.empty() : Optional.of(results.get(0));
+    }
+
     public void updateCriteriaHash(Long id, String criteriaHash) {
         jdbc.update("UPDATE vacancies SET criteria_hash=? WHERE id=?", criteriaHash, id);
     }
@@ -539,10 +567,11 @@ public class VacancyRepository {
 
     // Stats — every method below is scoped to userId unless null (admin sees everything)
     public Map<String, Integer> countByStatus(Long userId) {
-        String scope = userId != null ? " AND user_id = ?" : "";
+        String scope = userId != null ? " AND (user_id = ? OR search_id IN (SELECT id FROM searches WHERE is_global = TRUE))" : "";
         Map<String, Integer> result = new LinkedHashMap<>();
         if (userId != null) {
-            jdbc.query("SELECT status, COUNT(*) as cnt FROM vacancies WHERE user_id = ? GROUP BY status",
+            jdbc.query("SELECT status, COUNT(*) as cnt FROM vacancies " +
+                "WHERE (user_id = ? OR search_id IN (SELECT id FROM searches WHERE is_global = TRUE)) GROUP BY status",
                 (rs) -> { result.put(rs.getString("status"), rs.getInt("cnt")); }, userId);
         } else {
             jdbc.query("SELECT status, COUNT(*) as cnt FROM vacancies GROUP BY status",
@@ -566,12 +595,13 @@ public class VacancyRepository {
     }
 
     public int countTotal(Long userId) {
-        String sql = "SELECT COUNT(*) FROM vacancies" + (userId != null ? " WHERE user_id = ?" : "");
+        String sql = "SELECT COUNT(*) FROM vacancies" +
+            (userId != null ? " WHERE (user_id = ? OR search_id IN (SELECT id FROM searches WHERE is_global = TRUE))" : "");
         return queryCount(sql, userId);
     }
 
     public Double avgScoreNew(Long userId) {
-        String sql = "SELECT AVG(ai_score) FROM vacancies WHERE status='new'" + (userId != null ? " AND user_id = ?" : "");
+        String sql = "SELECT AVG(ai_score) FROM vacancies WHERE status='new'" + (userId != null ? " AND (user_id = ? OR search_id IN (SELECT id FROM searches WHERE is_global = TRUE))" : "");
         return userId != null
             ? jdbc.queryForObject(sql, Double.class, userId)
             : jdbc.queryForObject(sql, Double.class);
@@ -579,7 +609,7 @@ public class VacancyRepository {
 
     public Double avgSalaryNew(Long userId) {
         String sql = "SELECT AVG(CASE WHEN salary_to > 0 THEN salary_to ELSE salary_from END) " +
-            "FROM vacancies WHERE (salary_to > 0 OR salary_from > 0) AND status='new'" + (userId != null ? " AND user_id = ?" : "");
+            "FROM vacancies WHERE (salary_to > 0 OR salary_from > 0) AND status='new'" + (userId != null ? " AND (user_id = ? OR search_id IN (SELECT id FROM searches WHERE is_global = TRUE))" : "");
         return userId != null
             ? jdbc.queryForObject(sql, Double.class, userId)
             : jdbc.queryForObject(sql, Double.class);
@@ -587,7 +617,7 @@ public class VacancyRepository {
 
     public int countAppliedLast7Days(Long userId) {
         String sevenDaysAgo = Instant.now().minusSeconds(7 * 24 * 3600).toString();
-        String sql = "SELECT COUNT(*) FROM vacancies WHERE status='applied' AND applied_at > ?" + (userId != null ? " AND user_id = ?" : "");
+        String sql = "SELECT COUNT(*) FROM vacancies WHERE status='applied' AND applied_at > ?" + (userId != null ? " AND (user_id = ? OR search_id IN (SELECT id FROM searches WHERE is_global = TRUE))" : "");
         Integer count = userId != null
             ? jdbc.queryForObject(sql, Integer.class, sevenDaysAgo, userId)
             : jdbc.queryForObject(sql, Integer.class, sevenDaysAgo);
@@ -610,7 +640,7 @@ public class VacancyRepository {
      */
     public int countRescanable(Long userId) {
         String sql = "SELECT COUNT(*) FROM vacancies WHERE ai_verdict NOT IN ('no', 'fraud') AND (status IS NULL OR status != 'rejected')"
-            + (userId != null ? " AND user_id = ?" : "");
+            + (userId != null ? " AND (user_id = ? OR search_id IN (SELECT id FROM searches WHERE is_global = TRUE))" : "");
         return queryCount(sql, userId);
     }
 
@@ -619,7 +649,7 @@ public class VacancyRepository {
      */
     public int countUnassessed(Long userId) {
         String sql = "SELECT COUNT(*) FROM vacancies WHERE (ai_score = 0 OR ai_verdict IS NULL OR ai_verdict = '') AND ai_verdict != 'fraud'"
-            + (userId != null ? " AND user_id = ?" : "");
+            + (userId != null ? " AND (user_id = ? OR search_id IN (SELECT id FROM searches WHERE is_global = TRUE))" : "");
         return queryCount(sql, userId);
     }
 
@@ -640,7 +670,7 @@ public class VacancyRepository {
 
     public List<Map<String, Object>> topDistricts(int limit, Long userId) {
         String sql = "SELECT district, COUNT(*) as cnt FROM vacancies WHERE district != ''"
-            + (userId != null ? " AND user_id = ?" : "") + " GROUP BY district ORDER BY cnt DESC LIMIT ?";
+            + (userId != null ? " AND (user_id = ? OR search_id IN (SELECT id FROM searches WHERE is_global = TRUE))" : "") + " GROUP BY district ORDER BY cnt DESC LIMIT ?";
         return userId != null
             ? jdbc.queryForList(sql, userId, limit)
             : jdbc.queryForList(sql, limit);
@@ -648,7 +678,7 @@ public class VacancyRepository {
 
     public List<Map<String, Object>> listPeople(Long userId) {
         String sql = "SELECT person, COUNT(*) as cnt FROM vacancies WHERE person != ''"
-            + (userId != null ? " AND user_id = ?" : "") + " GROUP BY person ORDER BY person";
+            + (userId != null ? " AND (user_id = ? OR search_id IN (SELECT id FROM searches WHERE is_global = TRUE))" : "") + " GROUP BY person ORDER BY person";
         return userId != null ? jdbc.queryForList(sql, userId) : jdbc.queryForList(sql);
     }
 
@@ -661,7 +691,7 @@ public class VacancyRepository {
             params.add(person);
         }
         if (userId != null) {
-            conditions.add("user_id = ?");
+            conditions.add("(user_id = ? OR search_id IN (SELECT id FROM searches WHERE is_global = TRUE))");
             params.add(userId);
         }
         String sql = "SELECT search_name, COUNT(*) as cnt FROM vacancies WHERE "

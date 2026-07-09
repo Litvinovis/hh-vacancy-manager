@@ -2,7 +2,9 @@ package com.hh.gui.service;
 
 import com.hh.gui.model.*;
 import com.hh.gui.repository.HistoryRepository;
+import com.hh.gui.repository.SearchRepository;
 import com.hh.gui.repository.TagRepository;
+import com.hh.gui.repository.UserVacancyStatusRepository;
 import com.hh.gui.repository.VacancyRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -21,31 +23,83 @@ public class VacancyService {
     private final VacancyRepository vacancyRepo;
     private final TagRepository tagRepo;
     private final HistoryRepository historyRepo;
+    private final UserVacancyStatusRepository userVacancyStatusRepo;
+    private final SearchRepository searchRepo;
 
     @Autowired
     public VacancyService(VacancyRepository vacancyRepo, TagRepository tagRepo,
-                          HistoryRepository historyRepo) {
+                          HistoryRepository historyRepo, UserVacancyStatusRepository userVacancyStatusRepo,
+                          SearchRepository searchRepo) {
         this.vacancyRepo = vacancyRepo;
         this.tagRepo = tagRepo;
         this.historyRepo = historyRepo;
+        this.userVacancyStatusRepo = userVacancyStatusRepo;
+        this.searchRepo = searchRepo;
     }
 
+    /**
+     * @param viewerId the logged-in user viewing this page (even for an admin, who passes
+     *                 null as the scoping userId) — used only to overlay each viewer's own
+     *                 status/rejectionReason/appliedAt onto shared (global-search) vacancies.
+     *                 A vacancy from a personal search never has an overlay row, so it's
+     *                 always returned exactly as stored.
+     */
     public PageResponse<VacancyWithTags> list(String status, String district, Integer minSalary,
                                                Integer minScore, String search, String tag,
                                                Boolean remote, String person, String searchName, Long userId,
-                                               String sort, int page, int perPage) {
+                                               String sort, int page, int perPage, Long viewerId) {
         int offset = (page - 1) * perPage;
         List<Vacancy> vacancies = vacancyRepo.findAll(status, district, minSalary, minScore,
             search, tag, remote, person, searchName, userId, sort, offset, perPage);
         int total = vacancyRepo.countAll(status, district, minSalary, minScore, search, tag, remote, person, searchName, userId);
 
+        Map<Long, UserVacancyStatus> overlays = viewerId != null
+            ? userVacancyStatusRepo.findByUserAndVacancyIds(viewerId, vacancies.stream().map(Vacancy::getId).toList())
+            : Map.of();
+
         List<VacancyWithTags> items = new ArrayList<>();
         for (Vacancy v : vacancies) {
+            applyOverlay(v, overlays.get(v.getId()));
             List<String> tags = tagRepo.findNamesByVacancyId(v.getId());
             items.add(new VacancyWithTags(v, tags));
         }
 
         return new PageResponse<>(total, page, perPage, items);
+    }
+
+    /** Single-vacancy counterpart of list()'s bulk overlay — used by the detail endpoint. */
+    public void applyViewerOverlay(Vacancy v, Long viewerId) {
+        if (viewerId == null) return;
+        applyOverlay(v, userVacancyStatusRepo.findOne(viewerId, v.getId()).orElse(null));
+    }
+
+    private void applyOverlay(Vacancy v, UserVacancyStatus overlay) {
+        if (overlay == null) return;
+        v.setStatus(overlay.getStatus());
+        v.setRejectionReason(overlay.getRejectionReason());
+        v.setAppliedAt(overlay.getAppliedAt());
+    }
+
+    /**
+     * True if this vacancy came from a shared (is_global) search — its status is per-viewer,
+     * not on the row itself. Checked via the owning search, not just "user_id is null":
+     * legacy pre-multi-user rows can also have a null user_id without being global.
+     */
+    public boolean isGlobalVacancy(Long vacancyId) {
+        return vacancyRepo.findById(vacancyId)
+            .flatMap(v -> v.getSearchId() != null ? searchRepo.findById(v.getSearchId()) : Optional.empty())
+            .map(SearchConfig::isGlobal)
+            .orElse(false);
+    }
+
+    @Transactional
+    public boolean updatePersonalStatus(Long vacancyId, Long viewerId, String status) {
+        if (vacancyRepo.findById(vacancyId).isEmpty()) return false;
+        String appliedAt = "applied".equals(status) ? Instant.now().toString() : "";
+        String rejectionReason = userVacancyStatusRepo.findOne(viewerId, vacancyId)
+            .map(UserVacancyStatus::getRejectionReason).orElse("");
+        userVacancyStatusRepo.upsertStatus(viewerId, vacancyId, status, rejectionReason, appliedAt);
+        return true;
     }
 
     public Optional<VacancyDetail> findById(Long id) {

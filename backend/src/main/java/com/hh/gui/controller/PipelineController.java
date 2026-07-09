@@ -46,19 +46,34 @@ public class PipelineController {
     }
 
     /**
-     * All jobs the current user is allowed to trigger — every job for an admin,
-     * only their own for a regular user — optionally narrowed to one (person, search).
+     * All jobs the current user is allowed to trigger — every job for an admin, their own
+     * plus every global (shared) job for a regular user — optionally narrowed to one
+     * (person, search). Global jobs are included for everyone since triggering their
+     * pipeline only affects a shared search's own results, not another user's personal
+     * data — but see viewableJobsFor for read-only listing, which is not the same set
+     * for a subtler reason: a regular user manually re-running a global search still
+     * affects what every other user sees, so that's intentionally admin-only below.
      */
     private List<SearchJob> jobsFor(String person, String searchName, User currentUser) {
         List<SearchJob> jobs = profileFactory.build();
         if (!currentUser.isAdmin()) {
-            jobs = jobs.stream().filter(j -> currentUser.getId().equals(j.userId)).toList();
+            jobs = jobs.stream().filter(j -> currentUser.getId().equals(j.userId) || j.isGlobal).toList();
         }
         if (person == null && searchName == null) return jobs;
         return jobs.stream()
             .filter(j -> person == null || j.personName.equals(person))
             .filter(j -> searchName == null || j.searchName.equals(searchName))
             .toList();
+    }
+
+    /** Same job set as jobsFor(null, null, ...), but for manual pipeline-trigger endpoints
+     * a regular user should NOT be able to force-run a global search that affects every
+     * other user's shared results — those stay admin-only there. Listing (GET /pipeline/jobs)
+     * is read-only, so it's safe to include global jobs for everyone. */
+    private List<SearchJob> triggerableJobsFor(String person, String searchName, User currentUser) {
+        List<SearchJob> jobs = jobsFor(person, searchName, currentUser);
+        if (currentUser.isAdmin()) return jobs;
+        return jobs.stream().filter(j -> !j.isGlobal).toList();
     }
 
     /**
@@ -71,7 +86,7 @@ public class PipelineController {
             @RequestParam(name = "person", required = false) String person,
             @RequestParam(name = "searchName", required = false) String searchName,
             @RequestAttribute("currentUser") User currentUser) {
-        List<SearchJob> jobs = jobsFor(person, searchName, currentUser);
+        List<SearchJob> jobs = triggerableJobsFor(person, searchName, currentUser);
         log.info("Запуск пайплайна для {} поисков", jobs.size());
         try {
             PipelineResult total = new PipelineResult();
@@ -101,21 +116,20 @@ public class PipelineController {
     }
 
     /**
-     * EXPERIMENTAL, manual-trigger only — discover candidates from an hh.ru
-     * search-results URL the caller built themselves (via hh.ru's own filter UI)
-     * instead of the search's configured RSS queries, then run them through the
-     * normal scrape → AI-analyze → notify steps scored against that search's own
-     * criteria. Never invoked by the scheduler.
-     * POST /api/pipeline/discover-from-url  body: {searchId, url, maxPages?}
+     * Discover candidates from an hh.ru search-results URL — either the one saved on
+     * the search (search.sourceUrl, used automatically by PipelineScheduler too) or a
+     * one-off URL passed in the request body, which overrides the saved one for this
+     * manual run only (doesn't persist it). Runs the hits through the normal
+     * scrape → AI-analyze → notify steps scored against that search's own criteria.
+     * POST /api/pipeline/discover-from-url  body: {searchId, url?, maxPages?}
      */
     @PostMapping("/pipeline/discover-from-url")
     public ResponseEntity<Map<String, Object>> discoverFromUrl(
             @RequestBody Map<String, Object> body,
             @RequestAttribute("currentUser") User currentUser) {
         Object searchIdRaw = body.get("searchId");
-        String url = body.get("url") != null ? body.get("url").toString().trim() : null;
-        if (searchIdRaw == null || url == null || url.isBlank()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "Укажите searchId и url"));
+        if (searchIdRaw == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Укажите searchId"));
         }
         Long searchId;
         try {
@@ -133,6 +147,12 @@ public class PipelineController {
         SearchJob job = jobOpt.get();
         if (!currentUser.isAdmin() && !currentUser.getId().equals(job.userId)) {
             return ResponseEntity.status(404).body(Map.of("error", "Поиск не найден"));
+        }
+
+        String bodyUrl = body.get("url") != null ? body.get("url").toString().trim() : null;
+        String url = (bodyUrl != null && !bodyUrl.isBlank()) ? bodyUrl : job.sourceUrl;
+        if (url == null || url.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "У поиска не задана ссылка — укажите url или сохраните её в поиске"));
         }
 
         log.info("Запуск поиска по ссылке для {} · {}: {}", job.personName, job.searchName, url);
@@ -164,7 +184,7 @@ public class PipelineController {
              @RequestParam(name = "person", required = false) String person,
              @RequestParam(name = "searchName", required = false) String searchName,
              @RequestAttribute("currentUser") User currentUser) {
-         List<SearchJob> jobs = jobsFor(person, searchName, currentUser);
+         List<SearchJob> jobs = triggerableJobsFor(person, searchName, currentUser);
          log.info("Запрошена повторная оценка для {} поисков", jobs.size());
          try {
              VacancyPipelineService.ReanalyzeResult total = new VacancyPipelineService.ReanalyzeResult();
@@ -199,7 +219,7 @@ public class PipelineController {
              @RequestParam(name = "person", required = false) String person,
              @RequestParam(name = "searchName", required = false) String searchName,
              @RequestAttribute("currentUser") User currentUser) {
-         List<SearchJob> jobs = jobsFor(person, searchName, currentUser);
+         List<SearchJob> jobs = triggerableJobsFor(person, searchName, currentUser);
          log.info("Запрошен анализ необработанных для {} поисков", jobs.size());
          try {
              int analyzed = 0;

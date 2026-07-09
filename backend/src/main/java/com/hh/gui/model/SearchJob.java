@@ -25,6 +25,10 @@ public class SearchJob {
     public List<String> skills;
     public List<String> notSuitable;
     public String aiNotes;
+    public boolean isGlobal;
+    public String sourceUrl;
+    public Integer runIntervalHours;
+    public String lastRunAt;
 
     public boolean isRemote() {
         return "remote".equalsIgnoreCase(schedule) || area == 113;

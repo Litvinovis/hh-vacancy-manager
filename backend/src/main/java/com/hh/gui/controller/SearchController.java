@@ -32,8 +32,11 @@ public class SearchController {
 
     @PostMapping
     public ResponseEntity<?> create(@RequestBody SearchConfig search, @RequestAttribute("currentUser") User currentUser) {
+        if (search.isGlobal() && !currentUser.isAdmin()) {
+            return ResponseEntity.status(403).body(Map.of("error", "Только администратор может создавать общие поиски"));
+        }
         try {
-            return ResponseEntity.ok(searchService.create(currentUser.getId(), search));
+            return ResponseEntity.ok(searchService.create(currentUser.getId(), search, currentUser.isAdmin()));
         } catch (IllegalStateException e) {
             return ResponseEntity.status(400).body(Map.of("error", e.getMessage()));
         }

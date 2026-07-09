@@ -12,6 +12,7 @@ import org.springframework.stereotype.Repository;
 
 import java.sql.PreparedStatement;
 import java.sql.Statement;
+import java.sql.Types;
 import java.time.Instant;
 import java.util.Collections;
 import java.util.List;
@@ -39,6 +40,11 @@ public class SearchRepository {
         s.setEnabled(rs.getInt("enabled") == 1);
         s.setCreatedAt(rs.getString("created_at"));
         s.setUpdatedAt(rs.getString("updated_at"));
+        s.setGlobal(rs.getInt("is_global") == 1);
+        s.setSourceUrl(rs.getString("source_url"));
+        int runIntervalHours = rs.getInt("run_interval_hours");
+        s.setRunIntervalHours(rs.wasNull() ? null : runIntervalHours);
+        s.setLastRunAt(rs.getString("last_run_at"));
         return s;
     };
 
@@ -64,8 +70,10 @@ public class SearchRepository {
         }
     }
 
+    /** Excludes is_global searches — they're admin-managed and don't count against a user's personal cap. */
     public long countByUserId(Long userId) {
-        Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM searches WHERE user_id = ?", Integer.class, userId);
+        Integer count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM searches WHERE user_id = ? AND is_global = FALSE", Integer.class, userId);
         return count != null ? count : 0;
     }
 
@@ -79,8 +87,8 @@ public class SearchRepository {
         String sql = """
             INSERT INTO searches (user_id, name, queries, area, schedule, salary_min,
                 priority_districts, skills, not_suitable, exclude_words, ai_notes, enabled,
-                created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                created_at, updated_at, is_global, source_url, run_interval_hours, last_run_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """;
 
         KeyHolder keyHolder = new GeneratedKeyHolder();
@@ -100,7 +108,11 @@ public class SearchRepository {
             ps.setString(i++, s.getAiNotes());
             ps.setInt(i++, s.isEnabled() ? 1 : 0);
             ps.setString(i++, s.getCreatedAt());
-            ps.setString(i, s.getUpdatedAt());
+            ps.setString(i++, s.getUpdatedAt());
+            ps.setInt(i++, s.isGlobal() ? 1 : 0);
+            ps.setString(i++, s.getSourceUrl());
+            ps.setObject(i++, s.getRunIntervalHours(), Types.INTEGER);
+            ps.setString(i, s.getLastRunAt());
             return ps;
         }, keyHolder);
 
@@ -114,11 +126,18 @@ public class SearchRepository {
 
         jdbc.update(
             "UPDATE searches SET name=?, queries=?, area=?, schedule=?, salary_min=?, " +
-            "priority_districts=?, skills=?, not_suitable=?, exclude_words=?, ai_notes=?, enabled=?, updated_at=? " +
+            "priority_districts=?, skills=?, not_suitable=?, exclude_words=?, ai_notes=?, enabled=?, updated_at=?, " +
+            "source_url=?, run_interval_hours=? " +
             "WHERE id=?",
             s.getName(), writeList(s.getQueries()), s.getArea(), s.getSchedule(), s.getSalaryMin(),
             writeList(s.getPriorityDistricts()), writeList(s.getSkills()), writeList(s.getNotSuitable()),
-            writeList(s.getExcludeWords()), s.getAiNotes(), s.isEnabled() ? 1 : 0, s.getUpdatedAt(), s.getId());
+            writeList(s.getExcludeWords()), s.getAiNotes(), s.isEnabled() ? 1 : 0, s.getUpdatedAt(),
+            s.getSourceUrl(), s.getRunIntervalHours(), s.getId());
+    }
+
+    /** Stamps the last automatic/manual run time for a search, used by the per-search interval scheduler. */
+    public void updateLastRunAt(Long id, String lastRunAt) {
+        jdbc.update("UPDATE searches SET last_run_at=? WHERE id=?", lastRunAt, id);
     }
 
     public void delete(Long id) {
@@ -130,9 +149,13 @@ public class SearchRepository {
      * set per-connection (it isn't, here), so the schema's ON DELETE CASCADE on
      * searches.user_id is decorative — deleting a user must clean up their
      * searches explicitly. See UserService.delete().
+     *
+     * Excludes is_global searches: user_id on those is just "which admin manages
+     * it", not ownership of the shared result — deleting that admin's account
+     * shouldn't wipe out a search every user relies on.
      */
     public void deleteByUserId(Long userId) {
-        jdbc.update("DELETE FROM searches WHERE user_id=?", userId);
+        jdbc.update("DELETE FROM searches WHERE user_id=? AND is_global = FALSE", userId);
     }
 
     public Optional<SearchConfig> findById(Long id) {
@@ -146,5 +169,22 @@ public class SearchRepository {
 
     public List<SearchConfig> findAllEnabled() {
         return jdbc.query("SELECT * FROM searches WHERE enabled = 1 ORDER BY user_id, id", rowMapper);
+    }
+
+    public List<SearchConfig> findAllGlobal() {
+        return jdbc.query("SELECT * FROM searches WHERE is_global = TRUE ORDER BY id", rowMapper);
+    }
+
+    /**
+     * Enabled searches configured for scheduled URL-based runs (source_url +
+     * run_interval_hours both set) — candidates for PipelineScheduler's per-search
+     * interval trigger. Due-time comparison (last_run_at + interval vs now) happens
+     * in Java, not SQL, to avoid SQLite/H2 date-arithmetic differences.
+     */
+    public List<SearchConfig> findScheduledUrlSearches() {
+        return jdbc.query(
+            "SELECT * FROM searches WHERE enabled = TRUE AND source_url IS NOT NULL AND source_url != '' " +
+            "AND run_interval_hours IS NOT NULL ORDER BY id",
+            rowMapper);
     }
 }

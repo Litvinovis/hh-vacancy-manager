@@ -994,22 +994,34 @@ function renderCabinetSearches(searches) {
 }
 
 function cabinetSearchCardHtml(s) {
+  return searchCardHtml(s, { global: false });
+}
+
+/**
+ * Shared card markup for both a personal search (cabinet, one user) and a global
+ * search (admin, everyone) — the fields are the same, only save/delete wiring and
+ * the "isGlobal" flag sent to the backend differ. See globalSearchCardHtml.
+ */
+function searchCardHtml(s, opts) {
   const id = s.id != null ? s.id : '';
+  const global = !!opts.global;
   const listVal = (arr) => (arr || []).join('\n');
+  const delFn = global ? 'deleteGlobalSearch' : 'deleteCabinetSearch';
+  const saveFn = global ? 'saveGlobalSearch' : 'saveCabinetSearch';
   return `
-    <div class="provider-card" data-search-id="${id}">
+    <div class="provider-card" data-search-id="${id}" data-global="${global ? '1' : '0'}">
       <div class="provider-header">
-        <span class="provider-name-badge">${escHtml(s.name || 'Новый поиск')}</span>
+        <span class="provider-name-badge">${escHtml(s.name || 'Новый поиск')}${global ? ' 🌐' : ''}</span>
         <label class="switch" style="width:36px;height:20px" title="Активен">
           <input type="checkbox" class="cab-enabled" ${s.enabled !== false ? 'checked' : ''}>
           <span class="slider"></span>
         </label>
-        <button class="provider-btn provider-del" onclick="deleteCabinetSearch(this)" title="Удалить">✕</button>
+        <button class="provider-btn provider-del" onclick="${delFn}(this)" title="Удалить">✕</button>
       </div>
       <div class="provider-body">
         <div class="provider-field">
           <label>Название</label>
-          <input class="provider-inp cab-name" value="${escHtml(s.name || '')}" placeholder="Рядом с домом">
+          <input class="provider-inp cab-name" value="${escHtml(s.name || '')}" placeholder="${global ? 'Интересная удалёнка' : 'Рядом с домом'}">
         </div>
         <div class="provider-field">
           <label>Код региона hh.ru (99 = Уфа, 113 = вся Россия)</label>
@@ -1029,7 +1041,7 @@ function cabinetSearchCardHtml(s) {
           <input class="provider-inp cab-salary-min" type="number" value="${s.salaryMin || 0}">
         </div>
         <div class="provider-field provider-field-full">
-          <label>Поисковые запросы (по одному на строку)</label>
+          <label>Поисковые запросы (по одному на строку, необязательно при поиске по ссылке ниже)</label>
           <textarea class="provider-textarea cab-queries" placeholder="продавец&#10;консультант">${listVal(s.queries)}</textarea>
         </div>
         <div class="provider-field">
@@ -1053,25 +1065,29 @@ function cabinetSearchCardHtml(s) {
           <textarea class="provider-textarea cab-ai-notes" placeholder="Например: близость к дому важнее интересности задач">${escHtml(s.aiNotes || '')}</textarea>
         </div>
       </div>
-      ${id ? urlDiscoverySectionHtml() : ''}
+      ${id ? urlDiscoverySectionHtml(s) : ''}
       <div class="modal-foot" style="padding:10px 12px">
-        <button class="btn btn-prim" onclick="saveCabinetSearch(this)" style="width:100%">💾 Сохранить поиск</button>
+        <button class="btn btn-prim" onclick="${saveFn}(this)" style="width:100%">💾 Сохранить поиск</button>
       </div>
     </div>`;
 }
 
-function urlDiscoverySectionHtml() {
+function urlDiscoverySectionHtml(s) {
   return `
-    <div class="provider-body" style="grid-template-columns:1fr;border-top:1px solid var(--border);padding-top:12px">
+    <div class="provider-body" style="grid-template-columns:1fr 1fr;border-top:1px solid var(--border);padding-top:12px">
       <div class="provider-field provider-field-full">
-        <label>🧪 Поиск по ссылке (экспериментально) — вставьте ссылку на результаты поиска hh.ru, собранную с фильтрами в браузере; найденные вакансии оценятся по критериям этого поиска</label>
-        <input class="provider-inp cab-url-discover" placeholder="https://hh.ru/search/vacancy?text=...&amp;area=99&amp;...">
+        <label>🔗 Поиск по ссылке — вставьте ссылку на результаты поиска hh.ru, собранную с фильтрами в браузере; найденные вакансии оценятся по критериям этого поиска</label>
+        <input class="provider-inp cab-source-url" value="${escHtml(s.sourceUrl || '')}" placeholder="https://hh.ru/search/vacancy?text=...&amp;area=99&amp;...">
       </div>
-      <div class="provider-field" style="max-width:160px">
-        <label>Страниц (≈50 вак./стр.)</label>
+      <div class="provider-field">
+        <label>Автозапуск раз в, часов (пусто = только вручную)</label>
+        <input class="provider-inp cab-run-interval" type="number" min="1" value="${s.runIntervalHours != null ? s.runIntervalHours : ''}">
+      </div>
+      <div class="provider-field">
+        <label>Страниц за ручной запуск (≈50 вак./стр.)</label>
         <input class="provider-inp cab-url-discover-pages" type="number" min="1" max="10" value="3">
       </div>
-      <button class="btn btn-second cab-url-discover-btn" onclick="runUrlDiscovery(this)" style="width:100%">🔎 Найти и оценить по ссылке</button>
+      <button class="btn btn-second cab-url-discover-btn" onclick="runUrlDiscovery(this)" style="width:100%;grid-column:1/-1">🔎 Найти и оценить сейчас</button>
     </div>`;
 }
 
@@ -1079,7 +1095,7 @@ async function runUrlDiscovery(btn) {
   const card = btn.closest('.provider-card');
   if (!card) return;
   const searchId = card.dataset.searchId;
-  const url = card.querySelector('.cab-url-discover')?.value?.trim();
+  const url = card.querySelector('.cab-source-url')?.value?.trim();
   const maxPages = parseInt(card.querySelector('.cab-url-discover-pages')?.value) || 3;
   if (!url) { toast('✗ Вставьте ссылку на поиск hh.ru', 'err'); return; }
 
@@ -1115,6 +1131,7 @@ function addCabinetSearchCard() {
 
 function readCabinetSearchCard(card) {
   const splitLines = (el) => (el.value || '').split('\n').map(s => s.trim()).filter(Boolean);
+  const runIntervalRaw = card.querySelector('.cab-run-interval')?.value?.trim();
   return {
     name: card.querySelector('.cab-name')?.value?.trim() || '',
     area: parseInt(card.querySelector('.cab-area')?.value) || 113,
@@ -1127,6 +1144,8 @@ function readCabinetSearchCard(card) {
     excludeWords: splitLines(card.querySelector('.cab-exclude')),
     aiNotes: card.querySelector('.cab-ai-notes')?.value?.trim() || '',
     enabled: card.querySelector('.cab-enabled')?.checked !== false,
+    sourceUrl: card.querySelector('.cab-source-url')?.value?.trim() || '',
+    runIntervalHours: runIntervalRaw ? parseInt(runIntervalRaw) : null,
   };
 }
 
@@ -1160,6 +1179,56 @@ async function deleteCabinetSearch(btn) {
     await api(`/searches/${id}`, { method: 'DELETE' });
     toast('✓ Поиск удалён', 'ok');
     showCabinetModal();
+    loadJobs();
+  } catch (e) {
+    toast('✗ ' + e.message, 'err');
+  }
+}
+
+// ═══════ ОБЩИЕ ПОИСКИ (админ, видны всем пользователям) ═══════
+
+function globalSearchCardHtml(s) {
+  return searchCardHtml(s, { global: true });
+}
+
+function addGlobalSearchCard() {
+  const list = document.getElementById('admin-global-searches-list');
+  if (!list) return;
+  const wrap = document.createElement('div');
+  wrap.innerHTML = globalSearchCardHtml({});
+  list.appendChild(wrap.firstElementChild);
+}
+
+async function saveGlobalSearch(btn) {
+  const card = btn.closest('.provider-card');
+  if (!card) return;
+  const id = card.dataset.searchId;
+  const payload = { ...readCabinetSearchCard(card), isGlobal: true };
+  if (!payload.name) { toast('✗ Укажите название поиска', 'err'); return; }
+  try {
+    if (id) {
+      await api(`/searches/${id}`, { method: 'PUT', body: JSON.stringify(payload) });
+    } else {
+      await api('/searches', { method: 'POST', body: JSON.stringify(payload) });
+    }
+    toast('✓ Общий поиск сохранён', 'ok');
+    showAdminModal();
+    loadJobs();
+  } catch (e) {
+    toast('✗ ' + e.message, 'err');
+  }
+}
+
+async function deleteGlobalSearch(btn) {
+  const card = btn.closest('.provider-card');
+  if (!card) return;
+  const id = card.dataset.searchId;
+  if (!id) { card.remove(); return; }
+  if (!confirm('Удалить этот общий поиск? Вакансии, которые он уже нашёл, останутся в базе.')) return;
+  try {
+    await api(`/searches/${id}`, { method: 'DELETE' });
+    toast('✓ Общий поиск удалён', 'ok');
+    showAdminModal();
     loadJobs();
   } catch (e) {
     toast('✗ ' + e.message, 'err');
@@ -1227,10 +1296,13 @@ async function showAdminModal() {
     document.body.appendChild(modal);
   }
   try {
-    const users = await api('/admin/users');
-    renderAdminModal(users);
+    const [users, globalSearches] = await Promise.all([
+      api('/admin/users'),
+      api('/admin/global-searches'),
+    ]);
+    renderAdminModal(users, globalSearches);
   } catch (e) {
-    toast('✗ Ошибка загрузки пользователей: ' + e.message, 'err');
+    toast('✗ Ошибка загрузки данных админки: ' + e.message, 'err');
   }
 }
 
@@ -1239,8 +1311,9 @@ function closeAdminModal() {
   if (modal) modal.style.display = 'none';
 }
 
-function renderAdminModal(users) {
+function renderAdminModal(users, globalSearches) {
   const modal = document.getElementById('admin-modal');
+  const globalCards = (globalSearches || []).map(s => globalSearchCardHtml(s)).join('');
   const rows = users.map(u => `
     <tr>
       <td>${escHtml(u.username)}</td>
@@ -1293,6 +1366,12 @@ function renderAdminModal(users) {
           </div>
         </div>
         <button class="btn btn-second" onclick="adminCreateUser()" style="width:100%;margin-top:8px">+ Создать пользователя</button>
+
+        <div class="settings-separator"><span>🌐 Общие поиски (видны всем пользователям)</span></div>
+        <div class="providers-list" id="admin-global-searches-list">
+          ${globalCards}
+          <button class="btn btn-second" onclick="addGlobalSearchCard()" style="margin-top:8px;width:100%">+ Добавить общий поиск</button>
+        </div>
       </div>
       <div class="modal-foot">
         <button class="btn btn-ghost" onclick="closeAdminModal()">Закрыть</button>

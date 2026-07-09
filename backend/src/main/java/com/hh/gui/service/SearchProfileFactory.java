@@ -72,11 +72,15 @@ public class SearchProfileFactory {
         return Optional.of(toJob(search, userOpt.get()));
     }
 
+    /** Vacancies.person for a global search's discovered rows — the admin who set it up
+     * isn't who it's "for", so we don't stamp their display name on shared results. */
+    private static final String GLOBAL_PERSON_LABEL = "Все пользователи";
+
     private SearchJob toJob(SearchConfig search, User user) {
         SearchJob job = new SearchJob();
         job.userId = user.getId();
         job.searchId = search.getId();
-        job.personName = user.getDisplayName();
+        job.personName = search.isGlobal() ? GLOBAL_PERSON_LABEL : user.getDisplayName();
         job.searchName = search.getName();
         job.city = user.getCity();
         job.experienceSummary = user.getExperienceSummary();
@@ -89,6 +93,10 @@ public class SearchProfileFactory {
         job.skills = search.getSkills();
         job.notSuitable = search.getNotSuitable();
         job.aiNotes = search.getAiNotes();
+        job.isGlobal = search.isGlobal();
+        job.sourceUrl = search.getSourceUrl();
+        job.runIntervalHours = search.getRunIntervalHours();
+        job.lastRunAt = search.getLastRunAt();
         return job;
     }
 }
