@@ -4,6 +4,7 @@ import com.hh.gui.ai.AiProviderManager;
 import com.hh.gui.config.RuntimeConfig;
 import com.hh.gui.model.SearchJob;
 import com.hh.gui.model.User;
+import com.hh.gui.service.PipelineJobRunner;
 import com.hh.gui.service.SearchProfileFactory;
 import com.hh.gui.service.VacancyPipelineService;
 import com.hh.gui.service.VacancyPipelineService.PipelineResult;
@@ -31,18 +32,21 @@ public class PipelineController {
     private final SearchProfileFactory profileFactory;
     private final RuntimeConfig runtimeConfig;
     private final AiProviderManager aiProvider;
+    private final PipelineJobRunner jobRunner;
 
     @Autowired
     public PipelineController(VacancyPipelineService pipelineService,
                                VacancyRepository vacancyRepo,
                                SearchProfileFactory profileFactory,
                                RuntimeConfig runtimeConfig,
-                               AiProviderManager aiProvider) {
+                               AiProviderManager aiProvider,
+                               PipelineJobRunner jobRunner) {
         this.pipelineService = pipelineService;
         this.vacancyRepo = vacancyRepo;
         this.profileFactory = profileFactory;
         this.runtimeConfig = runtimeConfig;
         this.aiProvider = aiProvider;
+        this.jobRunner = jobRunner;
     }
 
     /**
@@ -77,8 +81,12 @@ public class PipelineController {
     }
 
     /**
-     * Run the full pipeline (discover → scrape → AI-analyze → notify) for every
-     * configured (person, search), or just one if person/searchName are given.
+     * Start the full pipeline (discover → scrape → AI-analyze → notify) in the
+     * BACKGROUND for every configured (person, search), or just one if
+     * person/searchName are given. Returns immediately; progress and the final
+     * counters come from GET /api/pipeline/run/status — the old synchronous
+     * behaviour held the HTTP request open for the whole multi-minute run, and a
+     * browser timeout meant the user never saw the result.
      * POST /api/pipeline/run[?person=Мама&searchName=Рядом с домом]
      */
     @PostMapping("/pipeline/run")
@@ -88,31 +96,33 @@ public class PipelineController {
             @RequestAttribute("currentUser") User currentUser) {
         List<SearchJob> jobs = triggerableJobsFor(person, searchName, currentUser);
         log.info("Запуск пайплайна для {} поисков", jobs.size());
-        try {
-            PipelineResult total = new PipelineResult();
-            for (SearchJob job : jobs) {
-                PipelineResult r = pipelineService.runFullPipeline(job);
-                total.collected += r.collected;
-                total.newVacancies += r.newVacancies;
-                total.analyzed += r.analyzed;
-                total.approved += r.approved;
-            }
+        boolean started = jobRunner.start(PipelineJobRunner.Type.RUN, jobs, job -> {
+            PipelineResult r = pipelineService.runFullPipeline(job);
+            Map<String, Integer> c = new LinkedHashMap<>();
+            c.put("collected", r.collected);
+            c.put("newVacancies", r.newVacancies);
+            c.put("analyzed", r.analyzed);
+            c.put("approved", r.approved);
+            return c;
+        });
+        return startResponse(started, jobs.size());
+    }
 
-            Map<String, Object> response = new LinkedHashMap<>();
-            response.put("status", "ok");
-            response.put("jobs", jobs.size());
-            response.put("collected", total.collected);
-            response.put("newVacancies", total.newVacancies);
-            response.put("analyzed", total.analyzed);
-            response.put("approved", total.approved);
-            return ResponseEntity.ok(response);
-        } catch (Exception e) {
-            log.error("Ошибка пайплайна: {}", e.getMessage(), e);
-            Map<String, Object> error = new LinkedHashMap<>();
-            error.put("status", "error");
-            error.put("message", e.getMessage());
-            return ResponseEntity.internalServerError().body(error);
+    /** Progress/result of the current (or last) manually-triggered background job. */
+    @GetMapping("/pipeline/run/status")
+    public ResponseEntity<Map<String, Object>> runStatus() {
+        return ResponseEntity.ok(jobRunner.status());
+    }
+
+    private ResponseEntity<Map<String, Object>> startResponse(boolean started, int jobs) {
+        Map<String, Object> response = new LinkedHashMap<>();
+        if (!started) {
+            response.put("status", "already_running");
+            return ResponseEntity.status(409).body(response);
         }
+        response.put("status", "started");
+        response.put("jobs", jobs);
+        return ResponseEntity.accepted().body(response);
     }
 
     /**
@@ -186,27 +196,15 @@ public class PipelineController {
              @RequestAttribute("currentUser") User currentUser) {
          List<SearchJob> jobs = triggerableJobsFor(person, searchName, currentUser);
          log.info("Запрошена повторная оценка для {} поисков", jobs.size());
-         try {
-             VacancyPipelineService.ReanalyzeResult total = new VacancyPipelineService.ReanalyzeResult();
-             for (SearchJob job : jobs) {
-                 VacancyPipelineService.ReanalyzeResult r = pipelineService.reanalyzeJob(job);
-                 total.reset += r.reset;
-                 total.analyzed += r.analyzed;
-                 total.approved += r.approved;
-             }
-             Map<String, Object> response = new LinkedHashMap<>();
-             response.put("status", "ok");
-             response.put("reset", total.reset);
-             response.put("analyzed", total.analyzed);
-             response.put("approved", total.approved);
-             return ResponseEntity.ok(response);
-         } catch (Exception e) {
-             log.error("Ошибка повторной оценки: {}", e.getMessage(), e);
-             Map<String, Object> error = new LinkedHashMap<>();
-             error.put("status", "error");
-             error.put("message", e.getMessage());
-             return ResponseEntity.internalServerError().body(error);
-         }
+         boolean started = jobRunner.start(PipelineJobRunner.Type.REANALYZE, jobs, job -> {
+             VacancyPipelineService.ReanalyzeResult r = pipelineService.reanalyzeJob(job);
+             Map<String, Integer> c = new LinkedHashMap<>();
+             c.put("reset", r.reset);
+             c.put("analyzed", r.analyzed);
+             c.put("approved", r.approved);
+             return c;
+         });
+         return startResponse(started, jobs.size());
      }
 
      /**
@@ -221,23 +219,13 @@ public class PipelineController {
              @RequestAttribute("currentUser") User currentUser) {
          List<SearchJob> jobs = triggerableJobsFor(person, searchName, currentUser);
          log.info("Запрошен анализ необработанных для {} поисков", jobs.size());
-         try {
-             int analyzed = 0;
-             for (SearchJob job : jobs) {
-                 analyzed += pipelineService.analyzeAllPending(job);
-             }
-             Map<String, Object> response = new LinkedHashMap<>();
-             response.put("status", "ok");
-             response.put("analyzed", analyzed);
-             response.put("remaining", vacancyRepo.countUnassessed(currentUser.isAdmin() ? null : currentUser.getId()));
-             return ResponseEntity.ok(response);
-         } catch (Exception e) {
-             log.error("Ошибка анализа необработанных: {}", e.getMessage(), e);
-             Map<String, Object> error = new LinkedHashMap<>();
-             error.put("status", "error");
-             error.put("message", e.getMessage());
-             return ResponseEntity.internalServerError().body(error);
-         }
+         boolean started = jobRunner.start(PipelineJobRunner.Type.ANALYZE_PENDING, jobs, job -> {
+             int analyzed = pipelineService.analyzeAllPending(job);
+             Map<String, Integer> c = new LinkedHashMap<>();
+             c.put("analyzed", analyzed);
+             return c;
+         });
+         return startResponse(started, jobs.size());
      }
 
     /**

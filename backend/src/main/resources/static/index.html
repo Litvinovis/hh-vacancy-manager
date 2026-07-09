@@ -4,9 +4,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>HH Monitor</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,450;9..144,550;9..144,650&family=Nunito+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <!-- Шрифты хостятся локально (/fonts, см. scripts/fetch_fonts.py) — сервис в LAN
+       не должен зависеть от доступности Google CDN при каждой загрузке страницы. -->
+  <link rel="stylesheet" href="/css/fonts.css">
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
@@ -90,10 +90,10 @@
       </div>
 
       <div class="sidebar-actions">
-        <button class="btn btn-prim" onclick="runPipeline()">▶ Запустить оценку</button>
+        <button class="btn btn-prim" onclick="runPipeline()" id="btn-run-pipeline">▶ Запустить оценку</button>
         <button class="btn btn-second" onclick="analyzePending()" id="btn-analyze-pending">⏳ Оценить все</button>
         <div class="btn-row">
-          <button class="btn btn-ghost" onclick="showReanalyzeModal()">🔄 Переоц.</button>
+          <button class="btn btn-ghost" onclick="showReanalyzeModal()" id="btn-reanalyze">🔄 Переоц.</button>
           <button class="btn btn-ghost" onclick="exportData()">⇩ Экспорт</button>
         </div>
         <div class="btn-row">
@@ -109,7 +109,10 @@
   <!-- ═══════ MAIN ═══════ -->
   <div class="main">
     <div class="topbar">
-      <div class="page-title">Здравствуйте! Вот, что <span class="accent">подходит</span></div>
+      <div class="page-title">
+        <button class="btn-ico sidebar-toggle" onclick="toggleSidebar()" title="Меню">☰</button>
+        Здравствуйте! Вот, что <span class="accent">подходит</span>
+      </div>
 
       <div class="search-row">
         <div class="search-box">
@@ -172,7 +175,17 @@
     </div>
 
     <div class="pagination" id="pagination"></div>
+
+    <div class="bulk-bar hidden" id="bulk-bar">
+      <span class="bulk-count" id="bulk-count">0</span>
+      <button class="btn btn-ghost" onclick="bulkSetStatus('favorite')">⭐ Избранное</button>
+      <button class="btn btn-ghost" onclick="bulkSetStatus('applied')">📤 Отклик</button>
+      <button class="btn btn-ghost" onclick="bulkSetStatus('rejected')">❌ Отклонено</button>
+      <button class="btn btn-ghost" onclick="clearBulkSelection()">Снять</button>
+    </div>
   </div>
+
+  <div class="sidebar-backdrop" id="sidebar-backdrop" onclick="toggleSidebar(false)"></div>
 
   <!-- ═══════ DETAIL ═══════ -->
   <div class="detail hidden" id="detail-panel"></div>
