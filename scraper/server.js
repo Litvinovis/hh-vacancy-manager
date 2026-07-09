@@ -57,6 +57,29 @@ function enqueue(task) {
   return result;
 }
 
+/**
+ * Polls locator.count() until it stops changing across consecutive checks (or maxWaitMs
+ * elapses) — for pages whose content renders in more than one wave, where a single fixed
+ * wait can catch it mid-render.
+ */
+async function waitForStableCount(page, selector, { pollMs = 400, stableChecks = 2, maxWaitMs = 6000 } = {}) {
+  let stable = 0;
+  let lastCount = -1;
+  const deadline = Date.now() + maxWaitMs;
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(pollMs);
+    const count = await page.locator(selector).count();
+    if (count === lastCount) {
+      stable++;
+      if (stable >= stableChecks) return count;
+    } else {
+      stable = 0;
+      lastCount = count;
+    }
+  }
+  return lastCount;
+}
+
 function parseSalary(rawText) {
   if (!rawText) return { salaryFrom: null, salaryTo: null, currency: null, gross: null };
   const numbers = (rawText.match(/[\d \s]{3,}/g) || [])
@@ -130,7 +153,12 @@ async function searchVacancies({ url: rawUrl, text, area, page: pageNum, schedul
     const status = resp ? resp.status() : 0;
     if (status >= 400) return { ok: false, reason: `http_${status}` };
 
-    await page.waitForTimeout(800); // let the client-side app finish rendering result cards
+    // Result cards render in at least two waves — measured on a real search page, the DOM
+    // held only ~17 of the eventual 50 cards at the 800ms mark this used to wait, then
+    // jumped to the full 50 by ~1.8s and stayed there. A fixed short wait silently returns
+    // a partial page instead of failing, so poll until the count stops changing (or give up
+    // after a generous cap) rather than trust one magic number.
+    await waitForStableCount(page, '[data-qa="vacancy-serp__vacancy"]');
 
     const items = await page.$$eval('[data-qa="vacancy-serp__vacancy"]', (cards) =>
       cards.map((c) => {
