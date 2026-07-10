@@ -37,12 +37,19 @@ done
 # он выполняется после старта Tomcat. На быстром CI-раннере первый grep попадал
 # в это окно, возвращал 1 и через set -e молча валил весь скрипт (голый grep в
 # $(...) — это и была причина «пустых» падений джоба за 12-20 секунд).
+# Непустого совпадения мало: опрос может прочитать недописанную строку лога и
+# унести ОБРЕЗАННЫЙ пароль — браузерный логин тогда молча падал по таймауту
+# app-root. Поэтому цикл крутится, пока пароль не подтвердится реальным логином.
 ADMIN_PASSWORD=""
 for i in $(seq 1 30); do
-  ADMIN_PASSWORD="$(grep -o 'пароль: [A-Za-z0-9]*' "$WORK_DIR/app.log" 2>/dev/null | head -1 | awk '{print $2}' || true)"
-  if [ -n "$ADMIN_PASSWORD" ]; then break; fi
+  CANDIDATE="$(grep -o 'пароль: [A-Za-z0-9]*' "$WORK_DIR/app.log" 2>/dev/null | head -1 | awk '{print $2}' || true)"
+  if [ -n "$CANDIDATE" ] && curl -sf -o /dev/null -X POST -H 'Content-Type: application/json' \
+       -d "{\"username\":\"admin\",\"password\":\"$CANDIDATE\"}" "http://127.0.0.1:$PORT/api/auth/login"; then
+    ADMIN_PASSWORD="$CANDIDATE"
+    break
+  fi
   sleep 1
 done
-if [ -z "$ADMIN_PASSWORD" ]; then echo "пароль админа не найден в логе"; tail -30 "$WORK_DIR/app.log"; exit 1; fi
+if [ -z "$ADMIN_PASSWORD" ]; then echo "рабочий пароль админа не найден в логе"; tail -30 "$WORK_DIR/app.log"; exit 1; fi
 
 BASE="http://127.0.0.1:$PORT" ADMIN_PASSWORD="$ADMIN_PASSWORD" node "$REPO_DIR/scripts/frontend-smoke.js"

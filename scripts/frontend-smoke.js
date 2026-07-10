@@ -87,7 +87,12 @@ async function seed(page) {
   await page.goto(BASE + '/index.html');
   await page.fill('#login-username', 'admin');
   await page.fill('#login-password', PASSWORD);
+  // Ответ логина ловим явно: раньше неудачный вход был виден только как немой
+  // таймаут app-root ниже, без HTTP-статуса в логе CI.
+  const loginResponsePromise = page.waitForResponse((r) => r.url().includes('/api/auth/login'));
   await page.click('.login-box .btn-prim');
+  const loginResponse = await loginResponsePromise;
+  check('логин админом', loginResponse.status() === 200, 'http ' + loginResponse.status());
   await page.waitForSelector('#app-root:not([style*="none"])', { timeout: 10000 });
   await seed(page);
   await page.reload();
