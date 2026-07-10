@@ -288,9 +288,11 @@ public class VacancyAiAnalyzer {
 
     private List<AiResult> analyzeChunk(List<Vacancy> vacancies, SearchJob job) throws Exception {
         String prompt = buildPrompt(vacancies, job);
-        // ~30-60 completion tokens per vacancy in practice; cap generously per batch
-        // instead of a flat 6000 so a runaway model can't produce pages of prose.
-        String response = callLlm(prompt, Math.min(6000, 400 + 150 * vacancies.size()));
+        // Same floor as the prescreen path: openrouter/free routes to reasoning models
+        // that burn thousands of tokens thinking before emitting the array, so a
+        // per-vacancy-only budget (400 + 150*N) got the JSON truncated mid-array on
+        // small batches. The cap is headroom, not extra spend (max_tokens only limits).
+        String response = callLlm(prompt, Math.min(6000, 3000 + 150 * vacancies.size()));
         return parseResponse(response, vacancies);
     }
 
@@ -551,6 +553,12 @@ public class VacancyAiAnalyzer {
         Map<?, ?> choice = (Map<?, ?>) choices.get(0);
         Map<?, ?> message = (Map<?, ?>) choice.get("message");
         String content = (String) message.get("content");
+        if (content == null || content.isBlank()) {
+            // Reasoning models sometimes return content=null having spent the whole
+            // budget on the reasoning field; without this check that surfaced as a
+            // bare NPE ("String.indexOf ... content is null") in the retry log.
+            throw new RuntimeException("Ответ AI без текста (content пуст)");
+        }
 
         String jsonArray = extractJsonArray(content);
         if (jsonArray == null) {

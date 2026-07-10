@@ -237,6 +237,36 @@ class VacancyAiAnalyzerTest {
         assertNull(extractJsonArray(content));
     }
 
+    // ── parseResponse: пустой content (reasoning-модели возвращают content=null) ──
+
+    private Exception parseResponseFailure(String json) throws Exception {
+        var method = VacancyAiAnalyzer.class.getDeclaredMethod("parseResponse", String.class, List.class);
+        method.setAccessible(true);
+        try {
+            method.invoke(analyzer, json, List.of());
+            return null;
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            return (Exception) e.getCause();
+        }
+    }
+
+    @Test
+    void parseResponse_nullContent_throwsClearErrorNotNpe() throws Exception {
+        String json = "{\"choices\":[{\"message\":{\"content\":null,\"reasoning\":\"...\"}}]}";
+        Exception e = parseResponseFailure(json);
+        assertNotNull(e);
+        assertFalse(e instanceof NullPointerException);
+        assertTrue(e.getMessage().contains("content пуст"), e.getMessage());
+    }
+
+    @Test
+    void parseResponse_blankContent_throwsClearError() throws Exception {
+        String json = "{\"choices\":[{\"message\":{\"content\":\"  \"}}]}";
+        Exception e = parseResponseFailure(json);
+        assertNotNull(e);
+        assertTrue(e.getMessage().contains("content пуст"), e.getMessage());
+    }
+
     @Test
     void extractJsonArray_noArrayAtAll_returnsNull() throws Exception {
         assertNull(extractJsonArray("User Safety: safe"));
