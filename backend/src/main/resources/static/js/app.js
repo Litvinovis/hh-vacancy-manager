@@ -1251,6 +1251,9 @@ function cabinetSearchCardHtml(s) {
 function searchCardHtml(s, opts) {
   const id = s.id != null ? s.id : '';
   const global = !!opts.global;
+  // Поиск по ссылке — админская настройка: обычному пользователю блок не показываем
+  // (бэкенд от не-админа sourceUrl/runIntervalHours всё равно не примет).
+  const isAdmin = currentUser?.role === 'admin';
   // escHtml обязателен: значения пользовательские, и «</textarea>» или тег в
   // слове-исключении без экранирования ломал разметку всей карточки (инъекция HTML).
   const listVal = (arr) => escHtml((arr || []).join('\n'));
@@ -1289,7 +1292,7 @@ function searchCardHtml(s, opts) {
           <input class="provider-inp cab-salary-min" type="number" value="${s.salaryMin || 0}">
         </div>
         <div class="provider-field provider-field-full">
-          <label>Поисковые запросы (по одному на строку, необязательно при поиске по ссылке ниже)</label>
+          <label>Поисковые запросы (по одному на строку${isAdmin ? ', необязательно при поиске по ссылке ниже' : ''})</label>
           <textarea class="provider-textarea cab-queries" placeholder="продавец&#10;консультант">${listVal(s.queries)}</textarea>
         </div>
         <div class="provider-field">
@@ -1313,14 +1316,23 @@ function searchCardHtml(s, opts) {
           <textarea class="provider-textarea cab-ai-notes" placeholder="Например: близость к дому важнее интересности задач">${escHtml(s.aiNotes || '')}</textarea>
         </div>
       </div>
-      ${id ? urlDiscoverySectionHtml(s) : ''}
+      ${isAdmin ? urlDiscoverySectionHtml(s, id) : ''}
       <div class="modal-foot" style="padding:10px 12px">
         <button class="btn btn-prim" onclick="${saveFn}(this)" style="width:100%">💾 Сохранить поиск</button>
       </div>
     </div>`;
 }
 
-function urlDiscoverySectionHtml(s) {
+function urlDiscoverySectionHtml(s, id) {
+  // «Найти и оценить сейчас» требует сохранённый поиск (searchId) — на новой
+  // карточке показываем только поле ссылки и интервал, чтобы админ мог создать
+  // URL-only поиск одним сохранением.
+  const runNow = id ? `
+      <div class="provider-field">
+        <label>Страниц за ручной запуск (≈50 вак./стр.)</label>
+        <input class="provider-inp cab-url-discover-pages" type="number" min="1" max="10" value="3">
+      </div>
+      <button class="btn btn-second cab-url-discover-btn" onclick="runUrlDiscovery(this)" style="width:100%;grid-column:1/-1">🔎 Найти и оценить сейчас</button>` : '';
   return `
     <div class="provider-body" style="grid-template-columns:1fr 1fr;border-top:1px solid var(--border);padding-top:12px">
       <div class="provider-field provider-field-full">
@@ -1330,12 +1342,7 @@ function urlDiscoverySectionHtml(s) {
       <div class="provider-field">
         <label>Автозапуск раз в, часов (пусто = только вручную)</label>
         <input class="provider-inp cab-run-interval" type="number" min="1" value="${s.runIntervalHours != null ? s.runIntervalHours : ''}">
-      </div>
-      <div class="provider-field">
-        <label>Страниц за ручной запуск (≈50 вак./стр.)</label>
-        <input class="provider-inp cab-url-discover-pages" type="number" min="1" max="10" value="3">
-      </div>
-      <button class="btn btn-second cab-url-discover-btn" onclick="runUrlDiscovery(this)" style="width:100%;grid-column:1/-1">🔎 Найти и оценить сейчас</button>
+      </div>${runNow}
     </div>`;
 }
 
@@ -1407,6 +1414,10 @@ async function saveCabinetSearch(btn) {
   const id = card.dataset.searchId;
   const payload = readCabinetSearchCard(card);
   if (!payload.name) { toast('✗ Укажите название поиска', 'err'); return; }
+  if (!payload.queries.length && !payload.sourceUrl) {
+    toast('✗ Укажите хотя бы один поисковый запрос', 'err');
+    return;
+  }
   try {
     if (id) {
       await api(`/searches/${id}`, { method: 'PUT', body: JSON.stringify(payload) });
@@ -1461,6 +1472,10 @@ async function saveGlobalSearch(btn) {
   const id = card.dataset.searchId;
   const payload = { ...readCabinetSearchCard(card), isGlobal: true };
   if (!payload.name) { toast('✗ Укажите название поиска', 'err'); return; }
+  if (!payload.queries.length && !payload.sourceUrl) {
+    toast('✗ Укажите поисковые запросы или ссылку на поиск hh.ru', 'err');
+    return;
+  }
   try {
     if (id) {
       await api(`/searches/${id}`, { method: 'PUT', body: JSON.stringify(payload) });

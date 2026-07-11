@@ -28,6 +28,8 @@ public class SearchService {
     /**
      * @param isAdmin gates search.isGlobal(): a non-admin's request is always forced
      *                to a personal (non-global) search regardless of what it asked for.
+     *                Also gates URL-based discovery (sourceUrl/runIntervalHours) — an
+     *                admin-only feature, a non-admin's values are silently dropped.
      *                Global searches are exempt from MAX_SEARCHES_PER_USER — they're
      *                shared, admin-managed resources, not part of anyone's personal quota.
      */
@@ -39,6 +41,11 @@ public class SearchService {
         search.setUserId(userId);
         search.setGlobal(global);
         search.setEnabled(true);
+        if (!isAdmin) {
+            search.setSourceUrl(null);
+            search.setRunIntervalHours(null);
+        }
+        requireDiscoverySource(search, isAdmin);
         SearchConfig saved = searchRepo.save(search);
         log.info("Создан {}поиск '{}' для user_id={}", global ? "общий " : "", saved.getName(), userId);
         return saved;
@@ -65,13 +72,34 @@ public class SearchService {
         existing.setNotSuitable(updates.getNotSuitable());
         existing.setExcludeWords(updates.getExcludeWords());
         existing.setAiNotes(updates.getAiNotes());
-        existing.setSourceUrl(updates.getSourceUrl());
-        existing.setRunIntervalHours(updates.getRunIntervalHours());
+        if (isAdmin) {
+            // URL-based discovery is admin-only: a non-admin's update keeps whatever
+            // is already stored instead of accepting (or wiping) the fields.
+            existing.setSourceUrl(updates.getSourceUrl());
+            existing.setRunIntervalHours(updates.getRunIntervalHours());
+        }
         if (updates.isEnabled() != existing.isEnabled()) {
             existing.setEnabled(updates.isEnabled());
         }
+        requireDiscoverySource(existing, isAdmin);
         searchRepo.update(existing);
         return Optional.of(existing);
+    }
+
+    /**
+     * A search with neither queries nor a sourceUrl silently collects nothing forever
+     * (real case: a user left queries blank because the hint said they're optional
+     * "when searching by link" — a link they had no field for). Validates the final
+     * state, so an update can't strip a search down to a do-nothing one either.
+     */
+    private static void requireDiscoverySource(SearchConfig search, boolean isAdmin) {
+        boolean hasQueries = search.getQueries() != null && !search.getQueries().isEmpty();
+        boolean hasUrl = search.getSourceUrl() != null && !search.getSourceUrl().isBlank();
+        if (!hasQueries && !hasUrl) {
+            throw new IllegalStateException(isAdmin
+                ? "Укажите поисковые запросы или ссылку на поиск hh.ru"
+                : "Укажите хотя бы один поисковый запрос");
+        }
     }
 
     /** @return false if the search doesn't exist or isn't owned by userId (unless isAdmin). */

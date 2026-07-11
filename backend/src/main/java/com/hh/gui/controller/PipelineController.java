@@ -137,6 +137,9 @@ public class PipelineController {
     public ResponseEntity<Map<String, Object>> discoverFromUrl(
             @RequestBody Map<String, Object> body,
             @RequestAttribute("currentUser") User currentUser) {
+        if (!currentUser.isAdmin()) {
+            return ResponseEntity.status(403).body(Map.of("error", "Поиск по ссылке доступен только администратору"));
+        }
         Object searchIdRaw = body.get("searchId");
         if (searchIdRaw == null) {
             return ResponseEntity.badRequest().body(Map.of("error", "Укажите searchId"));
@@ -155,10 +158,6 @@ public class PipelineController {
             return ResponseEntity.status(404).body(Map.of("error", "Поиск не найден"));
         }
         SearchJob job = jobOpt.get();
-        if (!currentUser.isAdmin() && !currentUser.getId().equals(job.userId)) {
-            return ResponseEntity.status(404).body(Map.of("error", "Поиск не найден"));
-        }
-
         String bodyUrl = body.get("url") != null ? body.get("url").toString().trim() : null;
         String url = (bodyUrl != null && !bodyUrl.isBlank()) ? bodyUrl : job.sourceUrl;
         if (url == null || url.isBlank()) {

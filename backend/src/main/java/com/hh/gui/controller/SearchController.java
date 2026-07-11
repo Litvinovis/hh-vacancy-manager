@@ -45,7 +45,12 @@ public class SearchController {
     @PutMapping("/{id}")
     public ResponseEntity<?> update(@PathVariable Long id, @RequestBody SearchConfig search,
                                      @RequestAttribute("currentUser") User currentUser) {
-        Optional<SearchConfig> updated = searchService.update(id, currentUser.getId(), currentUser.isAdmin(), search);
+        Optional<SearchConfig> updated;
+        try {
+            updated = searchService.update(id, currentUser.getId(), currentUser.isAdmin(), search);
+        } catch (IllegalStateException e) {
+            return ResponseEntity.status(400).body(Map.of("error", e.getMessage()));
+        }
         if (updated.isEmpty()) {
             return ResponseEntity.status(404).body(Map.of("error", "Поиск не найден"));
         }
