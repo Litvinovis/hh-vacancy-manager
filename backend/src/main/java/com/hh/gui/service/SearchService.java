@@ -28,6 +28,8 @@ public class SearchService {
     /**
      * @param isAdmin gates search.isGlobal(): a non-admin's request is always forced
      *                to a personal (non-global) search regardless of what it asked for.
+     *                Also gates URL-based discovery (sourceUrl/runIntervalHours) — an
+     *                admin-only feature, a non-admin's values are silently dropped.
      *                Global searches are exempt from MAX_SEARCHES_PER_USER — they're
      *                shared, admin-managed resources, not part of anyone's personal quota.
      */
@@ -39,6 +41,10 @@ public class SearchService {
         search.setUserId(userId);
         search.setGlobal(global);
         search.setEnabled(true);
+        if (!isAdmin) {
+            search.setSourceUrl(null);
+            search.setRunIntervalHours(null);
+        }
         SearchConfig saved = searchRepo.save(search);
         log.info("Создан {}поиск '{}' для user_id={}", global ? "общий " : "", saved.getName(), userId);
         return saved;
@@ -65,8 +71,12 @@ public class SearchService {
         existing.setNotSuitable(updates.getNotSuitable());
         existing.setExcludeWords(updates.getExcludeWords());
         existing.setAiNotes(updates.getAiNotes());
-        existing.setSourceUrl(updates.getSourceUrl());
-        existing.setRunIntervalHours(updates.getRunIntervalHours());
+        if (isAdmin) {
+            // URL-based discovery is admin-only: a non-admin's update keeps whatever
+            // is already stored instead of accepting (or wiping) the fields.
+            existing.setSourceUrl(updates.getSourceUrl());
+            existing.setRunIntervalHours(updates.getRunIntervalHours());
+        }
         if (updates.isEnabled() != existing.isEnabled()) {
             existing.setEnabled(updates.isEnabled());
         }

@@ -1251,6 +1251,9 @@ function cabinetSearchCardHtml(s) {
 function searchCardHtml(s, opts) {
   const id = s.id != null ? s.id : '';
   const global = !!opts.global;
+  // Поиск по ссылке — админская настройка: обычному пользователю блок не показываем
+  // (бэкенд от не-админа sourceUrl/runIntervalHours всё равно не примет).
+  const isAdmin = currentUser?.role === 'admin';
   // escHtml обязателен: значения пользовательские, и «</textarea>» или тег в
   // слове-исключении без экранирования ломал разметку всей карточки (инъекция HTML).
   const listVal = (arr) => escHtml((arr || []).join('\n'));
@@ -1289,7 +1292,7 @@ function searchCardHtml(s, opts) {
           <input class="provider-inp cab-salary-min" type="number" value="${s.salaryMin || 0}">
         </div>
         <div class="provider-field provider-field-full">
-          <label>Поисковые запросы (по одному на строку, необязательно при поиске по ссылке ниже)</label>
+          <label>Поисковые запросы (по одному на строку${isAdmin ? ', необязательно при поиске по ссылке ниже' : ''})</label>
           <textarea class="provider-textarea cab-queries" placeholder="продавец&#10;консультант">${listVal(s.queries)}</textarea>
         </div>
         <div class="provider-field">
@@ -1313,7 +1316,7 @@ function searchCardHtml(s, opts) {
           <textarea class="provider-textarea cab-ai-notes" placeholder="Например: близость к дому важнее интересности задач">${escHtml(s.aiNotes || '')}</textarea>
         </div>
       </div>
-      ${id ? urlDiscoverySectionHtml(s) : ''}
+      ${id && isAdmin ? urlDiscoverySectionHtml(s) : ''}
       <div class="modal-foot" style="padding:10px 12px">
         <button class="btn btn-prim" onclick="${saveFn}(this)" style="width:100%">💾 Сохранить поиск</button>
       </div>
