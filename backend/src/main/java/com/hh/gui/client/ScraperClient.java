@@ -158,7 +158,10 @@ public class ScraperClient {
                 items.add(new SearchHit(hhId, str(item.get("title")), str(item.get("employerName")),
                     str(item.get("salaryRawText")), str(item.get("address")), str(item.get("url"))));
             }
-            return new SearchPageResult(true, null, items, str(json.get("lastPageLabel")));
+            String lastPageLabel = str(json.get("lastPageLabel"));
+            log.debug("Скрейпер /search (страница {}): {} карточек, последняя страница пагинатора: {}",
+                page, items.size(), lastPageLabel);
+            return new SearchPageResult(true, null, items, lastPageLabel);
         } catch (Exception e) {
             log.error("Ошибка обращения к scraper-сервису (поиск по ссылке, страница {}): {}", page, e.getMessage());
             return SearchPageResult.failure("client_error: " + e.getMessage());

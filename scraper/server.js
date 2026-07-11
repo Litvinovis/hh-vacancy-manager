@@ -399,12 +399,17 @@ const server = http.createServer((req, res) => {
       return;
     }
 
+    // One line per request so the journal shows what the sidecar actually did;
+    // duration includes time spent waiting in the queue.
+    const started = Date.now();
     enqueue(() => scrapeVacancy(hhId))
       .then((result) => {
+        console.log(`[scrape] hhId=${hhId} ${result.ok ? 'ok' : `fail:${result.reason}`} ${Date.now() - started}ms`);
         res.writeHead(result.ok ? 200 : 502, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(result));
       })
       .catch((e) => {
+        console.log(`[scrape] hhId=${hhId} unhandled:${e.message} ${Date.now() - started}ms`);
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: false, reason: `unhandled: ${e.message}` }));
       });
@@ -424,12 +429,15 @@ const server = http.createServer((req, res) => {
     const schedule = url.searchParams.get('schedule') || '';
     const salary = url.searchParams.get('salary') || '';
 
+    const started = Date.now();
     enqueue(() => searchVacancies({ url: rawUrl, text, area, page: pageNum, schedule, salary }))
       .then((result) => {
+        console.log(`[search] page=${pageNum} ${result.ok ? `ok items=${result.items.length}` : `fail:${result.reason}`} ${Date.now() - started}ms`);
         res.writeHead(result.ok ? 200 : 502, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(result));
       })
       .catch((e) => {
+        console.log(`[search] page=${pageNum} unhandled:${e.message} ${Date.now() - started}ms`);
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: false, reason: `unhandled: ${e.message}` }));
       });
