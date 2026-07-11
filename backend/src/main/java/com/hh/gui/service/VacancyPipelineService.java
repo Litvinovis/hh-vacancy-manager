@@ -176,7 +176,11 @@ public class VacancyPipelineService {
      *      forever.
      * Stops walking pages early once EARLY_STOP threshold consecutive already-known hits
      * are seen — hh.ru lists newest-first, so a run of already-known hits means the rest
-     * of the listing was already covered by a previous run. The first adSlotsPerPage
+     * of the listing was already covered by a previous run. New hits collected on the
+     * current page BEFORE the stop point are still prescreened and saved: mass-reposted
+     * clone blocks (one employer re-publishing the same posting dozens of times) make a
+     * known trio near the bottom of the page routine, and bailing out mid-page used to
+     * silently discard everything new found above it. The first adSlotsPerPage
      * cards on EVERY page (not just the first) are hh.ru's paid/premium placements —
      * pinned at the top regardless of publish date, so an already-known one there says
      * nothing about whether the rest of the listing is old; they're skipped for the
@@ -193,9 +197,9 @@ public class VacancyPipelineService {
         int adSlotsPerPage = Math.max(0, runtimeConfig.getUrlSearchAdSlotsPerPage());
         int saved = 0;
         int consecutiveSeen = 0;
+        boolean earlyStop = false;
 
-        pageLoop:
-        for (int page = 0; page < pages; page++) {
+        for (int page = 0; page < pages && !earlyStop; page++) {
             ScraperClient.SearchPageResult result = scraperClient.searchByUrl(url, page);
             if (!result.ok()) {
                 log.warn("Поиск по ссылке ({} · {}) остановлен на странице {}: {}",
@@ -226,7 +230,8 @@ public class VacancyPipelineService {
                         if (consecutiveSeen >= earlyStopThreshold) {
                             log.info("Поиск по ссылке ({} · {}) остановлен: {} подряд уже известных вакансий — дальше только старые",
                                 job.personName, job.searchName, consecutiveSeen);
-                            break pageLoop;
+                            earlyStop = true;
+                            break;
                         }
                     }
                     continue;
