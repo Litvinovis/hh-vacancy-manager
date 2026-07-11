@@ -4,6 +4,7 @@ import com.hh.gui.model.SearchConfig;
 import com.hh.gui.repository.SearchRepository;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -29,6 +30,7 @@ class SearchServiceTest {
     private static SearchConfig searchWithUrl() {
         SearchConfig s = new SearchConfig();
         s.setName("Тест");
+        s.setQueries(List.of("оператор"));
         s.setSourceUrl("https://hh.ru/search/vacancy?text=test");
         s.setRunIntervalHours(6);
         return s;
@@ -83,5 +85,45 @@ class SearchServiceTest {
         assertTrue(updated.isPresent());
         assertEquals("https://hh.ru/search/vacancy?text=test", updated.get().getSourceUrl());
         assertEquals(6, updated.get().getRunIntervalHours());
+    }
+
+    // ── поиск без запросов и без ссылки молча не находил бы ничего — запрещён ──
+
+    @Test
+    void create_withoutQueriesAndUrl_throws() {
+        // Реальный случай: пользователь оставил запросы пустыми, потому что подсказка
+        // называла их необязательными «при поиске по ссылке», а поля ссылки у него нет.
+        SearchConfig s = new SearchConfig();
+        s.setName("Пустой");
+        SearchService svc = new SearchService(new FakeRepo());
+        assertThrows(IllegalStateException.class, () -> svc.create(7L, s, false));
+
+        // Для не-админа не спасает и присланная ссылка — она отбрасывается раньше.
+        assertThrows(IllegalStateException.class, () -> {
+            SearchConfig withUrl = searchWithUrl();
+            withUrl.setQueries(List.of());
+            svc.create(7L, withUrl, false);
+        });
+    }
+
+    @Test
+    void create_admin_urlOnlyWithoutQueries_allowed() {
+        SearchConfig s = searchWithUrl();
+        s.setQueries(List.of());
+        SearchConfig saved = new SearchService(new FakeRepo()).create(1L, s, true);
+        assertEquals("https://hh.ru/search/vacancy?text=test", saved.getSourceUrl());
+    }
+
+    @Test
+    void update_cannotStripSearchToDoNothing() {
+        FakeRepo repo = new FakeRepo();
+        repo.existing = new SearchConfig();
+        repo.existing.setUserId(7L);
+        repo.existing.setQueries(List.of("оператор"));
+        SearchConfig wipe = new SearchConfig();
+        wipe.setName("Тест");
+        wipe.setQueries(List.of());
+        assertThrows(IllegalStateException.class,
+            () -> new SearchService(repo).update(5L, 7L, false, wipe));
     }
 }
