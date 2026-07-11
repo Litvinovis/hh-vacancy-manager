@@ -1,14 +1,19 @@
 package com.hh.gui.service;
 
+import com.hh.gui.ai.VacancyAiAnalyzer;
 import com.hh.gui.client.ScraperClient;
 import com.hh.gui.config.RuntimeConfig;
+import com.hh.gui.model.SearchJob;
 import com.hh.gui.model.Vacancy;
+import com.hh.gui.repository.VacancyRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -233,5 +238,92 @@ class VacancyPipelineServiceTest {
         assertTrue(isSiteWideFailure("client_error: connect refused"));
         assertTrue(isSiteWideFailure("http_429"));
         assertTrue(isSiteWideFailure("http_500"));
+    }
+
+    // ── discoverFromUrl: ранний стоп не должен терять уже собранные новые хиты ──
+
+    private static ScraperClient.SearchHit hit(String hhId) {
+        return new ScraperClient.SearchHit(hhId, "Вакансия " + hhId, "ООО Ромашка", null, null,
+            "https://hh.ru/vacancy/" + hhId);
+    }
+
+    private static SearchJob urlJob() {
+        SearchJob job = new SearchJob();
+        job.personName = "Все пользователи";
+        job.searchName = "Интересная удалёнка";
+        job.isGlobal = true;
+        return job;
+    }
+
+    /** Отдаёт одну и ту же страницу выдачи и считает обращения. */
+    private static class FakeScraper extends ScraperClient {
+        final SearchPageResult page;
+        int calls = 0;
+        FakeScraper(RuntimeConfig config, SearchPageResult page) {
+            super(config);
+            this.page = page;
+        }
+        @Override
+        public SearchPageResult searchByUrl(String url, int pageNum) {
+            calls++;
+            return page;
+        }
+    }
+
+    /** Известность по фиксированному набору hh_id; сохранённое копится в saved. */
+    private static class FakeRepo extends VacancyRepository {
+        final Set<String> known;
+        final List<Vacancy> saved = new ArrayList<>();
+        FakeRepo(Set<String> known) {
+            super(null);
+            this.known = known;
+        }
+        @Override
+        public Set<String> findExistingHhIds(Collection<String> hhIds, String person, String searchName) {
+            Set<String> result = new java.util.HashSet<>(hhIds);
+            result.retainAll(known);
+            return result;
+        }
+        @Override
+        public Vacancy save(Vacancy v) {
+            saved.add(v);
+            return v;
+        }
+    }
+
+    /** Прескрин «всё подходит»: пустой список вердиктов = ни одного отсева. */
+    private static class FakeAnalyzer extends VacancyAiAnalyzer {
+        FakeAnalyzer(RuntimeConfig config) {
+            super(config, null, null);
+        }
+        @Override
+        public List<AiResult> prescreenHits(List<ScraperClient.SearchHit> hits, SearchJob job) {
+            return List.of();
+        }
+    }
+
+    @Test
+    void discoverFromUrl_earlyStopMidPage_stillSavesNewHitsCollectedBeforeIt() {
+        // Регрессия: break из середины обхода страницы выбрасывал уже собранные
+        // newHits — на выдаче со стеной переопубликованных клонов (трио известных
+        // в конце каждой страницы) поиск по ссылке сутками сохранял 0 новых,
+        // хотя новые вакансии стояли выше по странице.
+        RuntimeConfig config = new RuntimeConfig();
+        config.setUrlSearchEarlyStopThreshold(3);
+        config.setUrlSearchAdSlotsPerPage(0);
+        List<ScraperClient.SearchHit> page = List.of(
+            hit("101"), hit("102"),                 // новые — выше по странице
+            hit("901"), hit("902"), hit("903"));    // три известных подряд → ранний стоп
+        FakeScraper scraper = new FakeScraper(config,
+            new ScraperClient.SearchPageResult(true, null, page, null));
+        FakeRepo repo = new FakeRepo(Set.of("901", "902", "903"));
+        VacancyPipelineService svc = new VacancyPipelineService(
+            null, scraper, new FakeAnalyzer(config), repo, null, config, null);
+
+        int saved = svc.discoverFromUrl(urlJob(), "https://hh.ru/search/vacancy?text=x", 5);
+
+        assertEquals(2, saved, "новые вакансии, собранные до раннего стопа, должны сохраняться");
+        assertEquals(List.of("101", "102"), repo.saved.stream().map(Vacancy::getHhId).toList());
+        assertEquals(1, scraper.calls, "пагинация после раннего стопа не должна продолжаться");
     }
 }
