@@ -220,6 +220,8 @@ public class VacancyPipelineService {
             // One IN query per page instead of one exists-lookup per card.
             Set<String> knownHhIds = vacancyRepo.findExistingHhIds(
                 rawHits.stream().map(ScraperClient.SearchHit::hhId).toList(), job.personName, job.searchName);
+            log.debug("Поиск по ссылке ({} · {}), страница {}: {} карточек, из них уже известных {}",
+                job.personName, job.searchName, page, rawHits.size(), knownHhIds.size());
 
             List<ScraperClient.SearchHit> newHits = new ArrayList<>();
             for (ScraperClient.SearchHit hit : filterExcludedHits(rawHits, job.excludeWords)) {
@@ -228,8 +230,8 @@ public class VacancyPipelineService {
                     if (!adSlot) {
                         consecutiveSeen++;
                         if (consecutiveSeen >= earlyStopThreshold) {
-                            log.info("Поиск по ссылке ({} · {}) остановлен: {} подряд уже известных вакансий — дальше только старые",
-                                job.personName, job.searchName, consecutiveSeen);
+                            log.info("Поиск по ссылке ({} · {}) остановлен на странице {} (позиция {}): {} подряд уже известных вакансий — дальше только старые",
+                                job.personName, job.searchName, page, rawHits.indexOf(hit), consecutiveSeen);
                             earlyStop = true;
                             break;
                         }
@@ -243,6 +245,9 @@ public class VacancyPipelineService {
 
             Map<String, VacancyAiAnalyzer.AiResult> prescreen = aiAnalyzer.prescreenHits(newHits, job).stream()
                 .collect(Collectors.toMap(VacancyAiAnalyzer.AiResult::hhId, r -> r, (a, b) -> a));
+            long prescreenRejected = prescreen.values().stream().filter(r -> "no".equals(r.verdict())).count();
+            log.debug("Поиск по ссылке ({} · {}), страница {}: новых {}, из них отсеяно прескрином {}",
+                job.personName, job.searchName, page, newHits.size(), prescreenRejected);
 
             for (ScraperClient.SearchHit hit : newHits) {
                 VacancyAiAnalyzer.AiResult verdict = prescreen.get(hit.hhId());
