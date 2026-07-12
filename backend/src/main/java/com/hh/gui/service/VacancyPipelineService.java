@@ -174,17 +174,14 @@ public class VacancyPipelineService {
      *   3. hits that don't pass are still saved, just marked scrape_status='skipped' so
      *      they count as "already seen" on future runs instead of being re-prescreened
      *      forever.
-     * Stops walking pages early once EARLY_STOP threshold consecutive already-known hits
-     * are seen — hh.ru lists newest-first, so a run of already-known hits means the rest
-     * of the listing was already covered by a previous run. New hits collected on the
-     * current page BEFORE the stop point are still prescreened and saved: mass-reposted
-     * clone blocks (one employer re-publishing the same posting dozens of times) make a
-     * known trio near the bottom of the page routine, and bailing out mid-page used to
-     * silently discard everything new found above it. The first adSlotsPerPage
-     * cards on EVERY page (not just the first) are hh.ru's paid/premium placements —
-     * pinned at the top regardless of publish date, so an already-known one there says
-     * nothing about whether the rest of the listing is old; they're skipped for the
-     * early-stop count but still discovered/saved normally like any other hit.
+     * Always walks every page up to maxPages (capped at MAX_URL_SEARCH_PAGES) — an
+     * earlier per-page "stop once mostly known" heuristic was removed after live data
+     * showed it doesn't hold for this kind of listing: pages don't get monotonically
+     * older (mass-reposted/bumped clone blocks mean known and new hits interleave
+     * unpredictably not just within a page but across pages too), so a single
+     * "saturated" page could gate off substantial new content on the very next one.
+     * Scanning a bounded, fixed number of pages every run is simpler and correct;
+     * MAX_URL_SEARCH_PAGES is the only cost control needed.
      */
     @Transactional
     protected int discoverFromUrl(SearchJob job, String url, int maxPages) {
@@ -193,13 +190,9 @@ public class VacancyPipelineService {
             return 0;
         }
         int pages = Math.min(Math.max(maxPages, 1), MAX_URL_SEARCH_PAGES);
-        int earlyStopThreshold = Math.max(1, runtimeConfig.getUrlSearchEarlyStopThreshold());
-        int adSlotsPerPage = Math.max(0, runtimeConfig.getUrlSearchAdSlotsPerPage());
         int saved = 0;
-        int consecutiveSeen = 0;
-        boolean earlyStop = false;
 
-        for (int page = 0; page < pages && !earlyStop; page++) {
+        for (int page = 0; page < pages; page++) {
             ScraperClient.SearchPageResult result = scraperClient.searchByUrl(url, page);
             if (!result.ok()) {
                 log.warn("Поиск по ссылке ({} · {}) остановлен на странице {}: {}",
@@ -208,14 +201,7 @@ public class VacancyPipelineService {
             }
             if (result.items().isEmpty()) break;
 
-            // hh_ids in the paid/premium slots at the top of THIS page, computed before
-            // exclusion filtering so position is measured on the real page layout, not
-            // on an already-filtered list.
             List<ScraperClient.SearchHit> rawHits = result.items();
-            Set<String> adSlotHhIds = rawHits.stream()
-                .limit(adSlotsPerPage)
-                .map(ScraperClient.SearchHit::hhId)
-                .collect(Collectors.toSet());
 
             // One IN query per page instead of one exists-lookup per card.
             Set<String> knownHhIds = vacancyRepo.findExistingHhIds(
@@ -223,24 +209,9 @@ public class VacancyPipelineService {
             log.debug("Поиск по ссылке ({} · {}), страница {}: {} карточек, из них уже известных {}",
                 job.personName, job.searchName, page, rawHits.size(), knownHhIds.size());
 
-            List<ScraperClient.SearchHit> newHits = new ArrayList<>();
-            for (ScraperClient.SearchHit hit : filterExcludedHits(rawHits, job.excludeWords)) {
-                boolean adSlot = adSlotHhIds.contains(hit.hhId());
-                if (knownHhIds.contains(hit.hhId())) {
-                    if (!adSlot) {
-                        consecutiveSeen++;
-                        if (consecutiveSeen >= earlyStopThreshold) {
-                            log.info("Поиск по ссылке ({} · {}) остановлен на странице {} (позиция {}): {} подряд уже известных вакансий — дальше только старые",
-                                job.personName, job.searchName, page, rawHits.indexOf(hit), consecutiveSeen);
-                            earlyStop = true;
-                            break;
-                        }
-                    }
-                    continue;
-                }
-                if (!adSlot) consecutiveSeen = 0;
-                newHits.add(hit);
-            }
+            List<ScraperClient.SearchHit> newHits = filterExcludedHits(rawHits, job.excludeWords).stream()
+                .filter(hit -> !knownHhIds.contains(hit.hhId()))
+                .toList();
             if (newHits.isEmpty()) continue;
 
             Map<String, VacancyAiAnalyzer.AiResult> prescreen = aiAnalyzer.prescreenHits(newHits, job).stream()
