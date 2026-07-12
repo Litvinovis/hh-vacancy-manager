@@ -255,18 +255,19 @@ class VacancyPipelineServiceTest {
         return job;
     }
 
-    /** Отдаёт одну и ту же страницу выдачи и считает обращения. */
+    /** Отдаёт заранее заданные страницы по номеру вызова (0, 1, 2...) и считает обращения. */
     private static class FakeScraper extends ScraperClient {
-        final SearchPageResult page;
+        final List<SearchPageResult> pages;
         int calls = 0;
-        FakeScraper(RuntimeConfig config, SearchPageResult page) {
+        FakeScraper(RuntimeConfig config, SearchPageResult... pages) {
             super(config);
-            this.page = page;
+            this.pages = List.of(pages);
         }
         @Override
         public SearchPageResult searchByUrl(String url, int pageNum) {
+            SearchPageResult result = pages.get(calls);
             calls++;
-            return page;
+            return result;
         }
     }
 
@@ -303,27 +304,57 @@ class VacancyPipelineServiceTest {
     }
 
     @Test
-    void discoverFromUrl_earlyStopMidPage_stillSavesNewHitsCollectedBeforeIt() {
-        // Регрессия: break из середины обхода страницы выбрасывал уже собранные
-        // newHits — на выдаче со стеной переопубликованных клонов (трио известных
-        // в конце каждой страницы) поиск по ссылке сутками сохранял 0 новых,
-        // хотя новые вакансии стояли выше по странице.
+    void discoverFromUrl_interleavedKnownHits_stillSavesAllNewOnThePage() {
+        // Регрессия (версия 1, PR #45): break из середины обхода страницы выбрасывал
+        // уже собранные newHits при трёх известных подряд в конце страницы.
+        // Регрессия (версия 2, 2026-07-12): после долгого перерыва между прогонами
+        // новые и известные вакансии оказались вперемешку ПО ВСЕЙ странице (не только
+        // в хвосте) — порог "3 подряд известных" срабатывал где-то в середине страницы
+        // и обрывал ВСЮ дальнейшую пагинацию, теряя новые вакансии и после точки
+        // остановки на этой же странице, и на всех последующих страницах целиком.
+        // Правильное поведение: решение "останавливаться или нет" принимается только
+        // по итогам ВСЕЙ страницы (доля уже известных среди неё), а не по позиции
+        // внутри страницы — так что каждая новая вакансия на странице сохраняется
+        // независимо от того, где именно на странице она стоит.
         RuntimeConfig config = new RuntimeConfig();
-        config.setUrlSearchEarlyStopThreshold(3);
+        config.setUrlSearchEarlyStopKnownPercent(90);
         config.setUrlSearchAdSlotsPerPage(0);
-        List<ScraperClient.SearchHit> page = List.of(
-            hit("101"), hit("102"),                 // новые — выше по странице
-            hit("901"), hit("902"), hit("903"));    // три известных подряд → ранний стоп
+        List<ScraperClient.SearchHit> page0 = List.of(
+            hit("101"), hit("901"), hit("102"), hit("902"), hit("903")); // 2 новых вперемешку с 3 известными (60%) — страница ещё не "старая"
+        List<ScraperClient.SearchHit> page1 = List.of(
+            hit("904"), hit("905"), hit("906"), hit("907"), hit("908")); // 100% известных — здесь останавливаемся
         FakeScraper scraper = new FakeScraper(config,
-            new ScraperClient.SearchPageResult(true, null, page, null));
-        FakeRepo repo = new FakeRepo(Set.of("901", "902", "903"));
+            new ScraperClient.SearchPageResult(true, null, page0, null),
+            new ScraperClient.SearchPageResult(true, null, page1, null));
+        FakeRepo repo = new FakeRepo(Set.of("901", "902", "903", "904", "905", "906", "907", "908"));
         VacancyPipelineService svc = new VacancyPipelineService(
             null, scraper, new FakeAnalyzer(config), repo, null, config, null);
 
         int saved = svc.discoverFromUrl(urlJob(), "https://hh.ru/search/vacancy?text=x", 5);
 
-        assertEquals(2, saved, "новые вакансии, собранные до раннего стопа, должны сохраняться");
+        assertEquals(2, saved, "обе новые вакансии со страницы 0 должны сохраниться, несмотря на переплетение с известными");
         assertEquals(List.of("101", "102"), repo.saved.stream().map(Vacancy::getHhId).toList());
-        assertEquals(1, scraper.calls, "пагинация после раннего стопа не должна продолжаться");
+        assertEquals(2, scraper.calls, "страница 0 (60% известных) не должна останавливать пагинацию — переходим на страницу 1");
+    }
+
+    @Test
+    void discoverFromUrl_pageBelowThreshold_continuesPagination() {
+        RuntimeConfig config = new RuntimeConfig();
+        config.setUrlSearchEarlyStopKnownPercent(90);
+        config.setUrlSearchAdSlotsPerPage(0);
+        List<ScraperClient.SearchHit> page0 = List.of(hit("101"), hit("901")); // 50% известных — продолжаем
+        List<ScraperClient.SearchHit> page1 = List.of(hit("102"), hit("902")); // тоже 50% — продолжаем до maxPages
+        FakeScraper scraper = new FakeScraper(config,
+            new ScraperClient.SearchPageResult(true, null, page0, null),
+            new ScraperClient.SearchPageResult(true, null, page1, null));
+        FakeRepo repo = new FakeRepo(Set.of("901", "902"));
+        VacancyPipelineService svc = new VacancyPipelineService(
+            null, scraper, new FakeAnalyzer(config), repo, null, config, null);
+
+        int saved = svc.discoverFromUrl(urlJob(), "https://hh.ru/search/vacancy?text=x", 2);
+
+        assertEquals(2, saved);
+        assertEquals(List.of("101", "102"), repo.saved.stream().map(Vacancy::getHhId).toList());
+        assertEquals(2, scraper.calls, "обе страницы ниже порога — пагинация должна дойти до maxPages");
     }
 }

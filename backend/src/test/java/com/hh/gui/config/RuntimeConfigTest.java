@@ -60,7 +60,7 @@ class RuntimeConfigTest {
         assertTrue(m.containsKey("notificationsEnabled"));
         assertTrue(m.containsKey("aiBatchSize"));
         assertTrue(m.containsKey("pipelineEnabled"));
-        assertTrue(m.containsKey("urlSearchEarlyStopThreshold"));
+        assertTrue(m.containsKey("urlSearchEarlyStopKnownPercent"));
         assertTrue(m.containsKey("cardPrescreenBatchSize"));
         assertTrue(m.containsKey("urlSearchAdSlotsPerPage"));
         assertEquals(20, m.size());

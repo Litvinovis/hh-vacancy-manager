@@ -174,17 +174,19 @@ public class VacancyPipelineService {
      *   3. hits that don't pass are still saved, just marked scrape_status='skipped' so
      *      they count as "already seen" on future runs instead of being re-prescreened
      *      forever.
-     * Stops walking pages early once EARLY_STOP threshold consecutive already-known hits
-     * are seen — hh.ru lists newest-first, so a run of already-known hits means the rest
-     * of the listing was already covered by a previous run. New hits collected on the
-     * current page BEFORE the stop point are still prescreened and saved: mass-reposted
-     * clone blocks (one employer re-publishing the same posting dozens of times) make a
-     * known trio near the bottom of the page routine, and bailing out mid-page used to
-     * silently discard everything new found above it. The first adSlotsPerPage
-     * cards on EVERY page (not just the first) are hh.ru's paid/premium placements —
-     * pinned at the top regardless of publish date, so an already-known one there says
-     * nothing about whether the rest of the listing is old; they're skipped for the
-     * early-stop count but still discovered/saved normally like any other hit.
+     * Stops walking further pages once a whole page comes back at least
+     * earlyStopKnownPercent% already-known (excluding ad slots) — hh.ru lists
+     * newest-first, so a page that's almost entirely already-known means the rest of the
+     * listing was already covered by a previous run. This is evaluated per whole page,
+     * not on a short run of consecutive known hits: after a long gap between runs, new
+     * and already-known hits routinely interleave throughout an entire page (mass-reposted
+     * clone blocks scattered between genuinely new postings) — a small consecutive-known
+     * streak used to trigger mid-page and cut off scanning long before the actual boundary,
+     * silently missing new hits both later on that page and on subsequent pages entirely.
+     * The first adSlotsPerPage cards on EVERY page (not just the first) are hh.ru's
+     * paid/premium placements — pinned at the top regardless of publish date, so they're
+     * excluded from the known/total ratio but still discovered/saved normally like any
+     * other hit.
      */
     @Transactional
     protected int discoverFromUrl(SearchJob job, String url, int maxPages) {
@@ -193,10 +195,9 @@ public class VacancyPipelineService {
             return 0;
         }
         int pages = Math.min(Math.max(maxPages, 1), MAX_URL_SEARCH_PAGES);
-        int earlyStopThreshold = Math.max(1, runtimeConfig.getUrlSearchEarlyStopThreshold());
+        int earlyStopKnownPercent = Math.min(100, Math.max(1, runtimeConfig.getUrlSearchEarlyStopKnownPercent()));
         int adSlotsPerPage = Math.max(0, runtimeConfig.getUrlSearchAdSlotsPerPage());
         int saved = 0;
-        int consecutiveSeen = 0;
         boolean earlyStop = false;
 
         for (int page = 0; page < pages && !earlyStop; page++) {
@@ -224,22 +225,23 @@ public class VacancyPipelineService {
                 job.personName, job.searchName, page, rawHits.size(), knownHhIds.size());
 
             List<ScraperClient.SearchHit> newHits = new ArrayList<>();
+            int nonAdSlotTotal = 0;
+            int nonAdSlotKnown = 0;
             for (ScraperClient.SearchHit hit : filterExcludedHits(rawHits, job.excludeWords)) {
                 boolean adSlot = adSlotHhIds.contains(hit.hhId());
-                if (knownHhIds.contains(hit.hhId())) {
-                    if (!adSlot) {
-                        consecutiveSeen++;
-                        if (consecutiveSeen >= earlyStopThreshold) {
-                            log.info("Поиск по ссылке ({} · {}) остановлен на странице {} (позиция {}): {} подряд уже известных вакансий — дальше только старые",
-                                job.personName, job.searchName, page, rawHits.indexOf(hit), consecutiveSeen);
-                            earlyStop = true;
-                            break;
-                        }
-                    }
-                    continue;
+                boolean known = knownHhIds.contains(hit.hhId());
+                if (!adSlot) {
+                    nonAdSlotTotal++;
+                    if (known) nonAdSlotKnown++;
                 }
-                if (!adSlot) consecutiveSeen = 0;
+                if (known) continue;
                 newHits.add(hit);
+            }
+            if (nonAdSlotTotal > 0 && nonAdSlotKnown * 100L >= (long) nonAdSlotTotal * earlyStopKnownPercent) {
+                log.info("Поиск по ссылке ({} · {}) остановлен после страницы {}: {}/{} ({}%) уже известных — дальше только старые",
+                    job.personName, job.searchName, page, nonAdSlotKnown, nonAdSlotTotal,
+                    nonAdSlotKnown * 100 / nonAdSlotTotal);
+                earlyStop = true;
             }
             if (newHits.isEmpty()) continue;
 
