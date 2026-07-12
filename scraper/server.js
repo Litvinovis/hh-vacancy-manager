@@ -207,6 +207,14 @@ async function searchVacancies({ url: rawUrl, text, area, page: pageNum, schedul
   const context = await getContext();
   const page = await context.newPage();
   try {
+    // The same search URL is re-fetched on every scheduled run (every few hours,
+    // indefinitely) — Chromium's disk cache in this persistent profile happily
+    // served the exact same stale result set for 30+ hours straight instead of
+    // revalidating, silently hiding every vacancy posted since. Disable the
+    // cache for this navigation so each run actually sees hh.ru's current results.
+    const cdp = await context.newCDPSession(page);
+    await cdp.send('Network.setCacheDisabled', { cacheDisabled: true });
+
     let url;
     if (rawUrl) {
       let parsed;
