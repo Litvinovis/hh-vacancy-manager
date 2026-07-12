@@ -148,9 +148,7 @@ public class RuntimeConfig {
     private volatile boolean notificationsEnabled = false;
     private volatile int aiBatchSize = 5;
     private volatile boolean pipelineEnabled = true;
-    private volatile int urlSearchEarlyStopKnownPercent = 90;
     private volatile int cardPrescreenBatchSize = 30;
-    private volatile int urlSearchAdSlotsPerPage = 20;
 
     // ═══════ Persistence ═══════
 
@@ -297,23 +295,10 @@ public class RuntimeConfig {
                 "При выключении можно запускать только вручную через кнопку.",
                 "boolean", null, null, pipelineEnabled),
 
-            SettingDescriptor.of("urlSearchEarlyStopKnownPercent", "Порог остановки по ссылке",
-                "При обходе страниц поиска по ссылке — какой процент карточек НА ВСЕЙ СТРАНИЦЕ (без учёта " +
-                "рекламных мест) должен оказаться уже известным, чтобы считать её полностью старой и " +
-                "прекратить обход дальнейших страниц. Оценивается по странице целиком, а не по подряд идущим " +
-                "карточкам — новые и известные вакансии на одной странице часто идут вперемешку.",
-                "number", 50, 100, urlSearchEarlyStopKnownPercent),
-
             SettingDescriptor.of("cardPrescreenBatchSize", "Размер пачки прескрининга карточек",
                 "Сколько карточек из выдачи (без полного скрейпинга) отправляется за один AI-запрос " +
                 "на предварительную фильтрацию \"похоже/не похоже на интересную вакансию\".",
-                "number", 1, 100, cardPrescreenBatchSize),
-
-            SettingDescriptor.of("urlSearchAdSlotsPerPage", "Рекламных карточек сверху страницы",
-                "Сколько первых карточек на каждой странице выдачи hh.ru считаются рекламными/премиум " +
-                "местами (закреплены сверху независимо от даты публикации) и поэтому не учитываются " +
-                "при подсчёте подряд идущих уже известных вакансий для остановки поиска по ссылке.",
-                "number", 0, 50, urlSearchAdSlotsPerPage)
+                "number", 1, 100, cardPrescreenBatchSize)
         );
     }
 
@@ -354,9 +339,7 @@ public class RuntimeConfig {
                     case "notificationsEnabled" -> setNotificationsEnabled(toBool(value, errors, key));
                     case "aiBatchSize" -> setAiBatchSize(toInt(value, errors, key, 1, 50));
                     case "pipelineEnabled" -> setPipelineEnabled(toBool(value, errors, key));
-                    case "urlSearchEarlyStopKnownPercent" -> setUrlSearchEarlyStopKnownPercent(toInt(value, errors, key, 50, 100));
                     case "cardPrescreenBatchSize" -> setCardPrescreenBatchSize(toInt(value, errors, key, 1, 100));
-                    case "urlSearchAdSlotsPerPage" -> setUrlSearchAdSlotsPerPage(toInt(value, errors, key, 0, 50));
                     default -> errors.put(key, "Неизвестный параметр: " + key);
                 }
             } catch (IllegalArgumentException e) {
@@ -400,9 +383,7 @@ public class RuntimeConfig {
         m.put("notificationsEnabled", notificationsEnabled);
         m.put("aiBatchSize", aiBatchSize);
         m.put("pipelineEnabled", pipelineEnabled);
-        m.put("urlSearchEarlyStopKnownPercent", urlSearchEarlyStopKnownPercent);
         m.put("cardPrescreenBatchSize", cardPrescreenBatchSize);
-        m.put("urlSearchAdSlotsPerPage", urlSearchAdSlotsPerPage);
         return m;
     }
 
@@ -508,14 +489,8 @@ public class RuntimeConfig {
     public boolean isPipelineEnabled() { return pipelineEnabled; }
     public void setPipelineEnabled(boolean v) { this.pipelineEnabled = v; }
 
-    public int getUrlSearchEarlyStopKnownPercent() { return urlSearchEarlyStopKnownPercent; }
-    public void setUrlSearchEarlyStopKnownPercent(int v) { this.urlSearchEarlyStopKnownPercent = v; }
-
     public int getCardPrescreenBatchSize() { return cardPrescreenBatchSize; }
     public void setCardPrescreenBatchSize(int v) { this.cardPrescreenBatchSize = v; }
-
-    public int getUrlSearchAdSlotsPerPage() { return urlSearchAdSlotsPerPage; }
-    public void setUrlSearchAdSlotsPerPage(int v) { this.urlSearchAdSlotsPerPage = v; }
 
     // ═══════ Дескриптор для UI ═══════
 

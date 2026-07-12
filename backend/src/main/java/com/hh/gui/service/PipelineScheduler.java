@@ -38,9 +38,9 @@ public class PipelineScheduler implements SchedulingConfigurer {
     // independent of (and much finer-grained than) that interval itself, since interval_hours
     // is set per search and can't drive a single shared cron/rate trigger directly.
     private static final long URL_SEARCH_CHECK_INTERVAL_MS = 5 * 60 * 1000;
-    // Scheduled runs rely on discoverFromUrl's own early-stop-on-already-seen (see
-    // RuntimeConfig.urlSearchEarlyStopKnownPercent) to keep runs short, not on a small page
-    // cap — so ask for the same ceiling discoverFromUrl itself enforces.
+    // discoverFromUrl always walks every page up to this cap (see its javadoc for why
+    // an early-stop-on-already-seen heuristic was tried and removed) — this is the same
+    // ceiling MAX_URL_SEARCH_PAGES enforces there, just named for this call site.
     private static final int URL_SEARCH_SCHEDULED_MAX_PAGES = 10;
 
     private final VacancyPipelineService pipelineService;
