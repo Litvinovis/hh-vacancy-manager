@@ -21,7 +21,7 @@
     <properties>
         <java.version>17</java.version>
         <sqlite-jdbc.version>3.46.1.0</sqlite-jdbc.version>
-        <snakeyaml.version>2.2</snakeyaml.version>
+        <snakeyaml.version>2.6</snakeyaml.version>
     </properties>
 
     <dependencies>
