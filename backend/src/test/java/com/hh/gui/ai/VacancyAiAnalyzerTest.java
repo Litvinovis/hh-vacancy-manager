@@ -1,6 +1,6 @@
 package com.hh.gui.ai;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.hh.gui.config.AiProviderConfig;
 import com.hh.gui.config.RuntimeConfig;
 import com.hh.gui.model.SearchJob;

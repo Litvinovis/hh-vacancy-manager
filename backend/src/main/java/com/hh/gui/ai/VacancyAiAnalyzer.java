@@ -59,7 +59,7 @@ public class VacancyAiAnalyzer {
     // Rate limiter: free models need ~10-15s between requests to avoid 429
     private long lastRequestTime = 0;
 
-    private final com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+    private final tools.jackson.databind.ObjectMapper mapper = new tools.jackson.databind.ObjectMapper();
 
     public VacancyAiAnalyzer(RuntimeConfig runtimeConfig, AiProviderManager providerManager, AiMetrics metrics) {
         this.runtimeConfig = runtimeConfig;
