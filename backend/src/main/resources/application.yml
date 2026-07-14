@@ -7,6 +7,9 @@ server:
 spring:
   application:
     name: hh-vacancy-manager
+  threads:
+    virtual:
+      enabled: true   # Tomcat на виртуальных потоках: долгие вызовы scraper/AI не держат платформенные треды
   datasource:
     url: jdbc:sqlite:${user.dir}/data/vacancies.db?busy_timeout=30000&journal_mode=WAL&locking_mode=NORMAL
     driver-class-name: org.sqlite.JDBC
