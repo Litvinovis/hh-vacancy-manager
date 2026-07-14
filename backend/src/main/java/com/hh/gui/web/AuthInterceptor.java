@@ -1,6 +1,6 @@
 package com.hh.gui.web;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.hh.gui.model.User;
 import com.hh.gui.repository.UserRepository;
 import jakarta.servlet.http.HttpServletRequest;

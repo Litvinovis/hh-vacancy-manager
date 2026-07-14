@@ -1,8 +1,8 @@
 package com.hh.gui.config;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.SerializationFeature;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.SerializationFeature;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,8 +22,10 @@ import java.util.*;
 public class RuntimeConfig {
 
     private static final Logger log = LoggerFactory.getLogger(RuntimeConfig.class);
-    private static final ObjectMapper MAPPER = new ObjectMapper()
-            .enable(SerializationFeature.INDENT_OUTPUT);
+    // Jackson 3: ObjectMapper иммутабелен, конфигурация — через builder
+    private static final ObjectMapper MAPPER = tools.jackson.databind.json.JsonMapper.builder()
+            .enable(SerializationFeature.INDENT_OUTPUT)
+            .build();
 
     private static final String CONFIG_FILE = "runtime-config.json";
 
