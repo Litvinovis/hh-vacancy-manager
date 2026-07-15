@@ -94,6 +94,10 @@ def parse_rss(xml_text: str) -> list:
     try:
         root = ET.fromstring(xml_text)
     except ET.ParseError:
+        # HH иногда отдаёт HTML-заглушку/капчу вместо RSS — раньше это выглядело
+        # как «0 вакансий» без единого следа
+        preview = (xml_text or "")[:120].replace("\n", " ")
+        print(f"⚠️ RSS не является XML ({len(xml_text or '')} байт): {preview!r}", file=sys.stderr)
         return vacancies
     channel = root.find("channel")
     if channel is None:

@@ -411,12 +411,20 @@ def main():
 
     if not args.dry_run:
         saved = 0
+        failed = 0
         for v in all_vacancies:
             try:
                 save_vacancy(db, v)
                 saved += 1
+            except sqlite3.IntegrityError:
+                pass  # дубликат — штатно
             except Exception as e:
-                pass  # Дубликат или ошибка
+                # Реальные сбои вставки раньше глотались вместе с дубликатами
+                failed += 1
+                if failed <= 3:
+                    print(f"⚠️ Не удалось сохранить вакансию {v.get('url', v.get('title', '?'))}: {e}", file=sys.stderr)
+        if failed > 3:
+            print(f"⚠️ ...и ещё {failed - 3} сбоев сохранения", file=sys.stderr)
         db.commit()
         print(f"💾 Сохранено: {saved} новых вакансий", file=sys.stderr)
 
