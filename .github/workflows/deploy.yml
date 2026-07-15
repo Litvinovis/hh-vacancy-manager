@@ -116,7 +116,15 @@ jobs:
       - name: Smoke test
         run: |
           echo "Waiting for services to start..."
-          sleep 10
+          for i in $(seq 1 10); do
+            STATUS=$(sudo systemctl is-active hh-gui)
+            if [ "$STATUS" = "active" ] && curl -sf -o /dev/null http://localhost:8080/actuator/health; then
+              echo "✅ hh-gui ready after $((i*3))s"
+              break
+            fi
+            echo "  попытка $i/10 — ждём hh-gui..."
+            sleep 3
+          done
 
           STATUS=$(sudo systemctl is-active hh-gui)
           if [ "$STATUS" != "active" ]; then
