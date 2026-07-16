@@ -118,6 +118,24 @@ function enqueue(task) {
   return result;
 }
 
+// Coalesce duplicate scrape requests for the same hh_id. The client's read timeout
+// is shorter than the worst-case queue latency here, so under load hh-gui gives up
+// on a request whose work is still queued, marks the row failed, and re-requests the
+// SAME hh_id on its next run — each retry used to append another full page load,
+// making the queue (and everyone's latency) even worse. Observed live: the same id
+// scraped 4 times in one hour, all successfully, with only the last response heard.
+// Joining the still-pending promise makes such retries free — and they complete
+// quickly, since the original has already been waiting in line for a while.
+const inFlightScrapes = new Map();
+
+function enqueueScrapeCoalesced(hhId) {
+  const pending = inFlightScrapes.get(hhId);
+  if (pending) return pending;
+  const p = enqueue(() => scrapeVacancy(hhId)).finally(() => inFlightScrapes.delete(hhId));
+  inFlightScrapes.set(hhId, p);
+  return p;
+}
+
 /**
  * Polls locator.count() until it stops changing across consecutive checks (or maxWaitMs
  * elapses) — for pages whose content renders in more than one wave, where a single fixed
@@ -422,7 +440,7 @@ const server = http.createServer((req, res) => {
     // One line per request so the journal shows what the sidecar actually did;
     // duration includes time spent waiting in the queue.
     const started = Date.now();
-    enqueue(() => scrapeVacancy(hhId))
+    enqueueScrapeCoalesced(hhId)
       .then((result) => {
         console.log(`[scrape] hhId=${hhId} ${result.ok ? 'ok' : `fail:${result.reason}`} ${Date.now() - started}ms`);
         res.writeHead(result.ok ? 200 : 502, { 'Content-Type': 'application/json' });
