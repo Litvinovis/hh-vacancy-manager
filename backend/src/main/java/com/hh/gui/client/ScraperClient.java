@@ -60,8 +60,10 @@ public class ScraperClient {
             HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
             conn.setRequestMethod("GET");
             conn.setConnectTimeout(10000);
-            // Scraping involves a real page load — give it real time, reuse the AI read-timeout knob.
-            conn.setReadTimeout(runtimeConfig.getHttpReadTimeoutMs() > 0 ? runtimeConfig.getHttpReadTimeoutMs() : 30000);
+            // The sidecar serializes all page loads through one queue with anti-bot
+            // delays, so under load a response legitimately takes several minutes —
+            // and a client timeout discards work the sidecar still completes.
+            conn.setReadTimeout(scraperReadTimeoutMs());
 
             int code = conn.getResponseCode();
             String body;
@@ -99,6 +101,10 @@ public class ScraperClient {
         }
     }
 
+    private int scraperReadTimeoutMs() {
+        return runtimeConfig.getScraperReadTimeoutMs() > 0 ? runtimeConfig.getScraperReadTimeoutMs() : 240000;
+    }
+
     private static String str(Object o) { return o != null ? o.toString() : null; }
 
     private static Integer asInt(Object o) {
@@ -129,7 +135,7 @@ public class ScraperClient {
             HttpURLConnection conn = (HttpURLConnection) new URL(u).openConnection();
             conn.setRequestMethod("GET");
             conn.setConnectTimeout(10000);
-            conn.setReadTimeout(runtimeConfig.getHttpReadTimeoutMs() > 0 ? runtimeConfig.getHttpReadTimeoutMs() : 30000);
+            conn.setReadTimeout(scraperReadTimeoutMs());
 
             int code = conn.getResponseCode();
             String body;

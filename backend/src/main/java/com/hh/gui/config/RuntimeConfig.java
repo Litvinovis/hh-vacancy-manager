@@ -142,6 +142,7 @@ public class RuntimeConfig {
     private volatile int aiRequestDelayMs = 12000; // Задержка между AI-запросами (free-tier rate limit)
     private volatile int httpConnectTimeoutMs = 30000;
     private volatile int httpReadTimeoutMs = 120000;
+    private volatile int scraperReadTimeoutMs = 240000;
     private volatile int minScore = 50;
     private volatile int maxApproved = 10;
     private volatile int salaryMinRemote = 40000;
@@ -257,6 +258,13 @@ public class RuntimeConfig {
                 "120000 = 2 минуты.",
                 "number", 10000, 300000, httpReadTimeoutMs),
 
+            SettingDescriptor.of("scraperReadTimeoutMs", "Таймаут скрейпера",
+                "Таймаут ожидания ответа scraper-сервиса (в миллисекундах). " +
+                "Скрейпер сериализует запросы в одну очередь с анти-бот задержками, " +
+                "поэтому в пиках ответ может идти дольше 2 минут. " +
+                "240000 = 4 минуты.",
+                "number", 30000, 600000, scraperReadTimeoutMs),
+
             SettingDescriptor.of("minScore", "Мин. скор уведомлений",
                 "Минимальный AI-скор (0-100) для отправки уведомления в Telegram. " +
                 "Вакансии с меньшим скором не попадают в отчёт.",
@@ -333,6 +341,7 @@ public class RuntimeConfig {
                     case "aiRequestDelayMs" -> setAiRequestDelayMs(toInt(value, errors, key, 5000, 60000));
                     case "httpConnectTimeoutMs" -> setHttpConnectTimeoutMs(toInt(value, errors, key, 5000, 120000));
                     case "httpReadTimeoutMs" -> setHttpReadTimeoutMs(toInt(value, errors, key, 10000, 300000));
+                    case "scraperReadTimeoutMs" -> setScraperReadTimeoutMs(toInt(value, errors, key, 30000, 600000));
                     case "minScore" -> setMinScore(toInt(value, errors, key, 0, 100));
                     case "maxApproved" -> setMaxApproved(toInt(value, errors, key, 1, 50));
                     case "salaryMinRemote" -> setSalaryMinRemote(toInt(value, errors, key, 0, 500000));
@@ -377,6 +386,7 @@ public class RuntimeConfig {
         m.put("aiRequestDelayMs", aiRequestDelayMs);
         m.put("httpConnectTimeoutMs", httpConnectTimeoutMs);
         m.put("httpReadTimeoutMs", httpReadTimeoutMs);
+        m.put("scraperReadTimeoutMs", scraperReadTimeoutMs);
         m.put("minScore", minScore);
         m.put("maxApproved", maxApproved);
         m.put("salaryMinRemote", salaryMinRemote);
@@ -466,6 +476,9 @@ public class RuntimeConfig {
 
     public int getHttpReadTimeoutMs() { return httpReadTimeoutMs; }
     public void setHttpReadTimeoutMs(int v) { this.httpReadTimeoutMs = v; }
+
+    public int getScraperReadTimeoutMs() { return scraperReadTimeoutMs; }
+    public void setScraperReadTimeoutMs(int v) { this.scraperReadTimeoutMs = v; }
 
     public int getMinScore() { return minScore; }
     public void setMinScore(int v) { this.minScore = v; }

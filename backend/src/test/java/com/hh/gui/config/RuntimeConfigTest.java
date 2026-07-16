@@ -52,6 +52,7 @@ class RuntimeConfigTest {
         assertTrue(m.containsKey("aiRequestDelayMs"));
         assertTrue(m.containsKey("httpConnectTimeoutMs"));
         assertTrue(m.containsKey("httpReadTimeoutMs"));
+        assertTrue(m.containsKey("scraperReadTimeoutMs"));
         assertTrue(m.containsKey("minScore"));
         assertTrue(m.containsKey("maxApproved"));
         assertTrue(m.containsKey("salaryMinRemote"));
@@ -61,7 +62,7 @@ class RuntimeConfigTest {
         assertTrue(m.containsKey("aiBatchSize"));
         assertTrue(m.containsKey("pipelineEnabled"));
         assertTrue(m.containsKey("cardPrescreenBatchSize"));
-        assertEquals(18, m.size());
+        assertEquals(19, m.size());
     }
 
     // ═══════ Descriptors ═══════
@@ -69,7 +70,7 @@ class RuntimeConfigTest {
     @Test
     void descriptorsCoversAllKeys() {
         List<RuntimeConfig.SettingDescriptor> descs = config.getDescriptors();
-        assertEquals(17, descs.size());
+        assertEquals(18, descs.size());
         Set<String> keys = new HashSet<>();
         for (var d : descs) {
             assertNotNull(d.key);
