@@ -9,6 +9,7 @@ import com.hh.gui.config.RuntimeConfig;
 import com.hh.gui.model.SearchJob;
 import com.hh.gui.model.Vacancy;
 import com.hh.gui.repository.VacancyRepository;
+import com.hh.gui.util.DedupKeys;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -80,8 +81,19 @@ public class VacancyPipelineService {
 
     /**
      * Full pipeline for one job: discover → scrape → AI-analyze → notify.
+     * Manual-trigger entry point — analyzes whatever is pending immediately.
      */
     public PipelineResult runFullPipeline(SearchJob job) {
+        return runFullPipeline(job, false);
+    }
+
+    /**
+     * Same pipeline with the scheduler's batching behavior: with deferSmallAiBatches
+     * the AI step lets a small fresh backlog accumulate instead of paying the fixed
+     * prompt overhead (profile, rubric, format — ~500 tokens) for a 1-2-vacancy batch
+     * on every 10-minute tick (see shouldDeferAnalysis).
+     */
+    public PipelineResult runFullPipeline(SearchJob job, boolean deferSmallAiBatches) {
         log.info("=== Пайплайн: {} · {} ===", job.personName, job.searchName);
 
         // URL-only search (sourceUrl set, no RSS queries): the only way to discover
@@ -102,8 +114,13 @@ public class VacancyPipelineService {
         int scraped = scrapePending(job);
         log.info("Шаг 2 ({} · {}): скрейпинг обработал {} записей", job.personName, job.searchName, scraped);
 
-        int analyzed = analyzePending(job, runtimeConfig.getMaxPerRun());
-        log.info("Шаг 3 ({} · {}): {} вакансий проанализировано AI", job.personName, job.searchName, analyzed);
+        int analyzed;
+        if (deferSmallAiBatches && shouldDeferAnalysis(job)) {
+            analyzed = 0;
+        } else {
+            analyzed = analyzePending(job, runtimeConfig.getMaxPerRun());
+            log.info("Шаг 3 ({} · {}): {} вакансий проанализировано AI", job.personName, job.searchName, analyzed);
+        }
 
         List<Vacancy> approved = vacancyRepo.findUnnotifiedApproved(
             job.personName, job.searchName, runtimeConfig.getMinScore(), runtimeConfig.getMaxApproved());
@@ -119,6 +136,27 @@ public class VacancyPipelineService {
         result.analyzed = analyzed;
         result.approved = approved.size();
         return result;
+    }
+
+    // Scheduler-path batching: don't pay a full prompt's fixed overhead for a couple of
+    // fresh rows — they'll be joined by more within the hour (the pipeline ticks every
+    // ~10 minutes). Analysis proceeds once the backlog reaches a full AI batch OR the
+    // oldest waiting row has waited this long, whichever comes first, so nothing can
+    // starve. Manual triggers bypass this entirely.
+    private static final long AI_ACCUMULATE_MAX_WAIT_MS = 60L * 60 * 1000;
+
+    private boolean shouldDeferAnalysis(SearchJob job) {
+        VacancyRepository.PendingStats stats = vacancyRepo.pendingStats(job.personName, job.searchName);
+        if (stats.count() == 0 || stats.count() >= getBatchSize()) return false;
+        try {
+            Instant oldest = Instant.parse(stats.oldestWaitingSince());
+            if (oldest.plusMillis(AI_ACCUMULATE_MAX_WAIT_MS).isBefore(Instant.now())) return false;
+        } catch (Exception e) {
+            return false; // unparsable timestamp — analyze rather than risk starving the row
+        }
+        log.info("Шаг 3 ({} · {}): отложен — копим пакет ({} из {} вакансий, старейшая ждёт < часа)",
+            job.personName, job.searchName, stats.count(), getBatchSize());
+        return true;
     }
 
     // Safety cap on how many search-result pages a single manual "discover from URL"
@@ -238,7 +276,7 @@ public class VacancyPipelineService {
                 v.setUserId(job.isGlobal ? null : job.userId);
                 v.setSearchId(job.searchId);
                 v.setRemote(job.isRemote());
-                v.setDedupKey(computeDedupKey(hit.title(), hit.employerName()));
+                v.setDedupKey(DedupKeys.compute(hit.title(), hit.employerName()));
 
                 if (passed) {
                     v.setAiVerdict("pending");
@@ -260,28 +298,6 @@ public class VacancyPipelineService {
             }
         }
         return saved;
-    }
-
-    /**
-     * Normalizes title+employer (lowercased, punctuation stripped, whitespace collapsed)
-     * so the same real vacancy posted separately per city — different hh_id each time —
-     * can still be recognized as "the same posting" for scrape/AI-verdict reuse. City
-     * names deliberately aren't stripped out here: they rarely appear in the title itself,
-     * and this is a best-effort MVP heuristic, not a guaranteed match.
-     */
-    static String computeDedupKey(String title, String employerName) {
-        String t = normalizeForDedup(title);
-        String e = normalizeForDedup(employerName);
-        if (t.isEmpty()) return "";
-        return t + "|" + e;
-    }
-
-    private static String normalizeForDedup(String s) {
-        if (s == null) return "";
-        return s.toLowerCase()
-            .replaceAll("[^a-zа-яё0-9\\s]", " ")
-            .replaceAll("\\s+", " ")
-            .trim();
     }
 
     private List<ScraperClient.SearchHit> filterExcludedHits(List<ScraperClient.SearchHit> hits, List<String> excludeWords) {
@@ -327,7 +343,7 @@ public class VacancyPipelineService {
 
         Map<String, VacancyAiAnalyzer.AiResult> prescreen = aiAnalyzer.prescreenHits(
             fresh.stream()
-                .map(v -> new ScraperClient.SearchHit(v.getHhId(), v.getTitle(), null, null, null, v.getUrl()))
+                .map(v -> new ScraperClient.SearchHit(v.getHhId(), v.getTitle(), null, null, null, null, v.getUrl()))
                 .toList(), job).stream()
             .collect(Collectors.toMap(VacancyAiAnalyzer.AiResult::hhId, r -> r, (a, b) -> a));
 
@@ -534,6 +550,7 @@ public class VacancyPipelineService {
         if (to.getPublishedAt() == null || to.getPublishedAt().isBlank()) {
             to.setPublishedAt(from.getPublishedAt());
         }
+        to.setDedupKey(DedupKeys.compute(from.getTitle(), from.getEmployerName()));
         to.setScrapeStatus("ok");
     }
 
@@ -559,6 +576,11 @@ public class VacancyPipelineService {
         if (r.datePosted() != null && !r.datePosted().isBlank()) {
             v.setPublishedAt(r.datePosted());
         }
+        // RSS-discovered rows carry a title only at save time, so their dedup key can
+        // only be built here, once the scrape reveals the employer — without this the
+        // cross-city clone reuse below never fires for the RSS path at all (measured
+        // live: 6.7k of 7.6k rows had no key).
+        v.setDedupKey(DedupKeys.compute(v.getTitle(), v.getEmployerName()));
     }
 
     private static List<String> nonBlank(String... parts) {
@@ -689,23 +711,59 @@ public class VacancyPipelineService {
             metrics.recordVacanciesDeduped(deduped);
         }
 
+        // Clone collapsing within the batch itself: the DB lookups above only reuse
+        // verdicts that ALREADY exist, so a batch containing N copies of the same real
+        // posting (same dedup_key, different hh_id per city) still sent all N to the
+        // LLM. Send one representative per clone group; fan its verdict out to the rest.
+        Map<String, List<Vacancy>> cloneGroups = new LinkedHashMap<>();
+        List<Vacancy> representatives = new ArrayList<>();
+        for (Vacancy v : needsAi) {
+            String key = v.getDedupKey();
+            if (key == null || key.isEmpty()) {
+                representatives.add(v); // no key — never collapse, judge individually
+                continue;
+            }
+            List<Vacancy> group = cloneGroups.computeIfAbsent(key, k -> new ArrayList<>());
+            if (group.isEmpty()) representatives.add(v);
+            group.add(v);
+        }
+        if (representatives.size() < needsAi.size()) {
+            log.info("AI-анализ ({} · {}): {} вакансий схлопнуто в {} уникальных по dedup_key внутри пакета",
+                job.personName, job.searchName, needsAi.size(), representatives.size());
+        }
+
         int aiAnalyzed = 0;
-        if (!needsAi.isEmpty()) {
-            List<VacancyAiAnalyzer.AiResult> results = aiAnalyzer.analyzeBatch(needsAi, job);
+        if (!representatives.isEmpty()) {
+            Map<String, String> keyByHhId = new HashMap<>();
+            for (Vacancy v : representatives) {
+                if (v.getDedupKey() != null && !v.getDedupKey().isEmpty()) keyByHhId.put(v.getHhId(), v.getDedupKey());
+            }
+            List<VacancyAiAnalyzer.AiResult> results = aiAnalyzer.analyzeBatch(representatives, job);
             Set<String> returnedIds = new HashSet<>();
             for (var r : results) {
                 vacancyRepo.updateAiResult(r.hhId(), job.personName, job.searchName, r.score(), r.verdict(), r.reason());
                 returnedIds.add(r.hhId());
                 aiAnalyzed++;
+                // Fan the verdict out to this representative's clone group members.
+                List<Vacancy> group = cloneGroups.getOrDefault(keyByHhId.get(r.hhId()), List.of());
+                for (Vacancy member : group) {
+                    if (member.getHhId().equals(r.hhId())) continue;
+                    vacancyRepo.updateAiResult(member.getHhId(), job.personName, job.searchName,
+                        r.score(), r.verdict(), r.reason());
+                    deduped++;
+                    metrics.recordVacanciesDeduped(1);
+                }
             }
             metrics.recordVacanciesAnalyzed(aiAnalyzed);
 
             // The model DID answer but silently omitted some rows — count the wasted
             // round-trip against them, and give up on rows that keep being omitted.
             // An empty result (provider down/cooldown) deliberately doesn't count:
-            // it says nothing about these particular vacancies.
+            // it says nothing about these particular vacancies. Clone-group members of
+            // an omitted representative stay pending untouched — one of them simply
+            // becomes the representative on a later run.
             if (!results.isEmpty()) {
-                List<Long> omitted = needsAi.stream()
+                List<Long> omitted = representatives.stream()
                     .filter(v -> !returnedIds.contains(v.getHhId()))
                     .map(Vacancy::getId)
                     .toList();

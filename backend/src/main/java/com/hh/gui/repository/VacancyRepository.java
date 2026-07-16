@@ -397,7 +397,7 @@ public class VacancyRepository {
                 salary_from=?, salary_to=?, currency=?, salary_gross=?,
                 address=?, district=?, experience=?, employment=?, key_skills=?,
                 trusted_employer=?, valid_through=?, scrape_status=?, is_remote=?,
-                published_at=?, updated_at=?
+                published_at=?, dedup_key=?, updated_at=?
             WHERE id=?
             """,
             v.getTitle(), v.getCompany(), v.getEmployerName(), v.getDescription(),
@@ -406,7 +406,7 @@ public class VacancyRepository {
             v.getCurrency(), v.isSalaryGross() ? 1 : 0,
             v.getAddress(), v.getDistrict(), v.getExperience(), v.getEmployment(), v.getKeySkills(),
             v.isTrustedEmployer() ? 1 : 0, v.getValidThrough(), v.getScrapeStatus(),
-            v.isRemote() ? 1 : 0, v.getPublishedAt(), now, v.getId());
+            v.isRemote() ? 1 : 0, v.getPublishedAt(), v.getDedupKey(), now, v.getId());
     }
 
     /**
@@ -463,6 +463,18 @@ public class VacancyRepository {
             ? jdbc.queryForObject(sql, Integer.class, userId)
             : jdbc.queryForObject(sql, Integer.class);
         return count != null ? count : 0;
+    }
+
+    /** How many rows are waiting for AI analysis, and since when the oldest has been waiting (updated_at = scrape time). */
+    public record PendingStats(int count, String oldestWaitingSince) {}
+
+    /** See PendingStats — drives the scheduler-path decision to let small batches accumulate. */
+    public PendingStats pendingStats(String person, String searchName) {
+        return jdbc.queryForObject(
+            "SELECT COUNT(*) AS cnt, MIN(updated_at) AS oldest FROM vacancies " +
+            "WHERE ai_verdict = 'pending' AND scrape_status = 'ok' AND person=? AND search_name=?",
+            (rs, rowNum) -> new PendingStats(rs.getInt("cnt"), rs.getString("oldest")),
+            person, searchName);
     }
 
     /**

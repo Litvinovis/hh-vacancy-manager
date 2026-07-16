@@ -253,6 +253,12 @@ async function searchVacancies({ url: rawUrl, text, area, page: pageNum, schedul
         const salaryEl = c.querySelector('[data-qa="vacancy-serp__vacancy-compensation"]');
         const employerEl = c.querySelector('[data-qa="vacancy-serp__vacancy-employer-text"]');
         const addrEl = c.querySelector('[data-qa="vacancy-serp__vacancy-address"]');
+        // The card's short duties/requirements teaser — fed to the AI prescreen so it
+        // can judge substance (not just the title) before paying for a full page scrape.
+        const snippetParts = [
+          c.querySelector('[data-qa="vacancy-serp__vacancy_snippet_responsibility"]'),
+          c.querySelector('[data-qa="vacancy-serp__vacancy_snippet_requirement"]'),
+        ].filter(Boolean).map((el) => el.textContent.trim()).filter((t) => t);
         // Primary source of the id: the /vacancy/{id} href of the title link —
         // "first element carrying any id attribute" broke silently on layout
         // changes before; keep it only as a fallback.
@@ -264,6 +270,7 @@ async function searchVacancies({ url: rawUrl, text, area, page: pageNum, schedul
           employerName: employerEl ? employerEl.textContent.trim() : null,
           salaryRawText: salaryEl ? salaryEl.textContent.trim() : null,
           address: addrEl ? addrEl.textContent.trim() : null,
+          snippet: snippetParts.length ? snippetParts.join(' ') : null,
           url: titleLink ? titleLink.getAttribute('href') : null,
         };
       })
