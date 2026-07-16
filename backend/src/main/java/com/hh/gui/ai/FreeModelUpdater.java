@@ -128,7 +128,12 @@ public class FreeModelUpdater {
      */
     private List<String> selectModels(List<FreeModel> candidates, List<String> stillFree) {
         try {
-            List<String> ranked = askLlmForRanking(candidates, stillFree);
+            // The ranking request must not route through the configured list — it
+            // contains the dead model that triggered this refresh (a live run got 400
+            // that way). Survivors are known-good; with none left, the deterministic
+            // pick supplies a live chain for the one ranking call.
+            List<String> rankingChain = !stillFree.isEmpty() ? stillFree : fallbackSelection(candidates, stillFree);
+            List<String> ranked = askLlmForRanking(candidates, stillFree, String.join(", ", rankingChain));
             LinkedHashSet<String> valid = new LinkedHashSet<>();
             Set<String> pool = new LinkedHashSet<>(candidates.stream().map(FreeModel::id).toList());
             for (String id : ranked) {
@@ -163,8 +168,8 @@ public class FreeModelUpdater {
         return lower.contains("instruct") || lower.contains("-it:") || lower.contains("chat");
     }
 
-    /** LLM round-trip: candidates in, ordered id list out. Protected for tests. */
-    protected List<String> askLlmForRanking(List<FreeModel> candidates, List<String> stillFree) throws Exception {
+    /** LLM round-trip: candidates in, ordered id list out. rankingChain — known-live models to route this call through. Protected for tests. */
+    protected List<String> askLlmForRanking(List<FreeModel> candidates, List<String> stillFree, String rankingChain) throws Exception {
         StringBuilder sb = new StringBuilder();
         sb.append("Выбери ровно ").append(MODELS_IN_CHAIN).append(" модели из списка ниже для задачи: ")
           .append("классификация вакансий с hh.ru на русском языке, ответ строго JSON-массивом, ")
@@ -187,7 +192,7 @@ public class FreeModelUpdater {
             sb.append("\n");
         }
 
-        String response = analyzer.callLlm(sb.toString(), 1500);
+        String response = analyzer.callLlm(sb.toString(), 1500, rankingChain);
         Map<?, ?> parsed = mapper.readValue(response, Map.class);
         List<?> choices = (List<?>) parsed.get("choices");
         if (choices == null || choices.isEmpty()) throw new IllegalStateException("ответ без choices");

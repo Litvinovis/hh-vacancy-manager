@@ -22,6 +22,7 @@ class FreeModelUpdaterTest {
         List<String> llmAnswer;
         boolean llmThrows = false;
         boolean llmCalled = false;
+        String rankingChainUsed;
 
         TestUpdater(RuntimeConfig config) {
             super(config, null);
@@ -31,8 +32,9 @@ class FreeModelUpdaterTest {
             return catalog;
         }
         @Override
-        protected List<String> askLlmForRanking(List<FreeModel> candidates, List<String> stillFree) throws Exception {
+        protected List<String> askLlmForRanking(List<FreeModel> candidates, List<String> stillFree, String rankingChain) throws Exception {
             llmCalled = true;
+            rankingChainUsed = rankingChain;
             if (llmThrows) throw new IllegalStateException("LLM недоступен");
             return llmAnswer;
         }
@@ -80,6 +82,9 @@ class FreeModelUpdaterTest {
         assertEquals("updated", summary.get("status"));
         assertEquals(List.of("b/two:free"), summary.get("droppedFromFreePool"));
         assertEquals("a/one:free, c/three:free, d/new-instruct:free", openrouterModel());
+        // Живой инцидент: ранжирующий запрос через настроенный список (с мёртвой
+        // моделью первой) получал 400 — он обязан идти только через выжившие.
+        assertEquals("a/one:free, c/three:free", updater.rankingChainUsed);
     }
 
     @Test
