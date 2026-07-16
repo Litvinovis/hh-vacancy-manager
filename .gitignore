@@ -22,3 +22,7 @@ data/
 Thumbs.db
 __pycache__/
 PROJECT_DOCUMENTATION.txt
+
+# Runtime logs (file logging writes here when run from the repo)
+backend/logs/
+logs/
