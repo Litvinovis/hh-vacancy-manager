@@ -1,5 +1,6 @@
 package com.hh.gui.controller;
 
+import com.hh.gui.ai.FreeModelUpdater;
 import com.hh.gui.config.AiProviderConfig;
 import com.hh.gui.config.RuntimeConfig;
 import com.hh.gui.model.User;
@@ -25,9 +26,18 @@ public class SettingsController {
     private static final Logger log = LoggerFactory.getLogger(SettingsController.class);
 
     private final RuntimeConfig runtimeConfig;
+    private final FreeModelUpdater freeModelUpdater;
 
-    public SettingsController(RuntimeConfig runtimeConfig) {
+    public SettingsController(RuntimeConfig runtimeConfig, FreeModelUpdater freeModelUpdater) {
         this.runtimeConfig = runtimeConfig;
+        this.freeModelUpdater = freeModelUpdater;
+    }
+
+    /** Manual trigger of the free-model refresh (see FreeModelUpdater) — same pass the 12-hour schedule runs. */
+    @PostMapping("/providers/refresh-free-models")
+    public ResponseEntity<?> refreshFreeModels(@RequestAttribute("currentUser") User currentUser) {
+        if (!currentUser.isAdmin()) return forbidden();
+        return ResponseEntity.ok(freeModelUpdater.refresh());
     }
 
     @GetMapping

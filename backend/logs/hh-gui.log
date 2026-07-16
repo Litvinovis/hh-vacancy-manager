@@ -829,3 +829,194 @@
 2026-07-16 13:06:43.463 [SpringApplicationShutdownHook] INFO  com.zaxxer.hikari.HikariDataSource - HikariPool-1 - Shutdown completed.
 2026-07-16 13:06:43.468 [SpringApplicationShutdownHook] INFO  com.zaxxer.hikari.HikariDataSource - HikariPool-2 - Shutdown initiated...
 2026-07-16 13:06:43.469 [SpringApplicationShutdownHook] INFO  com.zaxxer.hikari.HikariDataSource - HikariPool-2 - Shutdown completed.
+2026-07-16 18:11:13.026 [main] INFO  c.hh.gui.service.VacancyServiceTest - Starting VacancyServiceTest using Java 25.0.3 with PID 2909249 (started by clawd in /home/clawd/hh-vacancy-manager/backend)
+2026-07-16 18:11:13.031 [main] INFO  c.hh.gui.service.VacancyServiceTest - The following 1 profile is active: "test"
+2026-07-16 18:11:13.089 [background-preinit] INFO  o.h.validator.internal.util.Version - HV000001: Hibernate Validator 9.1.0.Final
+2026-07-16 18:11:14.708 [main] INFO  com.hh.gui.config.RuntimeConfig - Runtime config загружен из /tmp/test-data/runtime-config.json (19 параметров, 1 провайдеров)
+2026-07-16 18:11:14.793 [main] INFO  com.zaxxer.hikari.HikariDataSource - HikariPool-1 - Starting...
+2026-07-16 18:11:14.985 [main] INFO  com.zaxxer.hikari.pool.HikariPool - HikariPool-1 - Added connection conn0: url=jdbc:h2:mem:testdb user=SA
+2026-07-16 18:11:14.987 [main] INFO  com.zaxxer.hikari.HikariDataSource - HikariPool-1 - Start completed.
+2026-07-16 18:11:15.410 [main] INFO  o.s.b.w.a.WelcomePageHandlerMapping - Adding welcome page: class path resource [static/index.html]
+2026-07-16 18:11:16.242 [main] INFO  o.s.b.a.e.web.EndpointLinksResolver - Exposing 3 endpoints beneath base path '/actuator'
+2026-07-16 18:11:16.367 [main] INFO  c.hh.gui.service.VacancyServiceTest - Started VacancyServiceTest in 3.954 seconds (process running for 5.985)
+2026-07-16 18:11:16.499 [main] INFO  com.hh.gui.config.SchemaMigrator - Миграция схемы: добавлена колонка vacancies.scrape_attempts
+2026-07-16 18:11:16.513 [main] INFO  com.hh.gui.config.SchemaMigrator - Миграция схемы: добавлена колонка vacancies.ai_attempts
+2026-07-16 18:11:16.631 [main] WARN  com.hh.gui.config.FirstBootSeeder - === Создан аккаунт admin, пароль: jUxCw6mzgFt3 — смените его после первого входа ===
+2026-07-16 18:11:16.632 [main] INFO  com.hh.gui.config.AppConfig - Нечего импортировать из /home/clawd/hh-vacancy-manager/backend/config/profiles/default.yaml: /home/clawd/hh-vacancy-manager/backend/config/profiles/default.yaml (No such file or directory)
+2026-07-16 18:11:17.358 [main] INFO  com.hh.gui.service.VacancyService - Создана вакансия: id=3, title=No HH ID
+2026-07-16 18:11:17.358 [main] INFO  com.hh.gui.service.VacancyService - Импорт завершён: импортировано=1, пропущено=0
+2026-07-16 18:11:17.402 [main] INFO  com.hh.gui.service.VacancyService - Создана вакансия: id=5, title=Test
+2026-07-16 18:11:17.455 [main] INFO  com.hh.gui.service.VacancyService - Создана вакансия: id=9, title=Test
+2026-07-16 18:11:17.515 [main] INFO  com.hh.gui.service.VacancyService - Создана вакансия: id=13, title=First
+2026-07-16 18:11:17.516 [main] INFO  com.hh.gui.service.VacancyService - Создана вакансия: id=14, title=Third
+2026-07-16 18:11:17.517 [main] INFO  com.hh.gui.service.VacancyService - Импорт завершён: импортировано=2, пропущено=1
+2026-07-16 18:11:17.525 [main] INFO  com.hh.gui.service.VacancyService - Импорт завершён: импортировано=0, пропущено=0
+2026-07-16 18:11:17.540 [main] INFO  com.hh.gui.service.VacancyService - Создана вакансия: id=15, title=Test
+2026-07-16 18:11:17.550 [main] INFO  com.hh.gui.service.VacancyService - Создана вакансия: id=16, title=Test
+2026-07-16 18:11:17.559 [main] INFO  com.hh.gui.service.VacancyService - Создана вакансия: id=17, title=Test
+2026-07-16 18:11:17.613 [main] INFO  com.hh.gui.service.VacancyService - Создана вакансия: id=22, title=Test
+2026-07-16 18:11:17.661 [main] INFO  o.s.t.c.s.AnnotationConfigContextLoaderUtils - Could not detect default configuration classes for test class [com.hh.gui.repository.VacancyRepositoryTest]: VacancyRepositoryTest does not declare any static, non-private, non-final, nested classes annotated with @Configuration.
+2026-07-16 18:11:17.674 [main] INFO  o.s.b.t.c.SpringBootTestContextBootstrapper - Found @SpringBootConfiguration com.hh.gui.HhGuiApplication for test class com.hh.gui.repository.VacancyRepositoryTest
+2026-07-16 18:11:17.675 [main] INFO  o.s.t.c.s.AnnotationConfigContextLoaderUtils - Could not detect default configuration classes for test class [com.hh.gui.repository.VacancyRepositoryTest]: VacancyRepositoryTest does not declare any static, non-private, non-final, nested classes annotated with @Configuration.
+2026-07-16 18:11:17.677 [main] INFO  o.s.b.t.c.SpringBootTestContextBootstrapper - Found @SpringBootConfiguration com.hh.gui.HhGuiApplication for test class com.hh.gui.repository.VacancyRepositoryTest
+2026-07-16 18:11:18.032 [main] INFO  o.s.t.c.s.AnnotationConfigContextLoaderUtils - Could not detect default configuration classes for test class [com.hh.gui.controller.AuthControllerTest]: AuthControllerTest does not declare any static, non-private, non-final, nested classes annotated with @Configuration.
+2026-07-16 18:11:18.054 [main] INFO  o.s.b.t.c.SpringBootTestContextBootstrapper - Found @SpringBootConfiguration com.hh.gui.HhGuiApplication for test class com.hh.gui.controller.AuthControllerTest
+2026-07-16 18:11:18.056 [main] INFO  o.s.t.c.s.AnnotationConfigContextLoaderUtils - Could not detect default configuration classes for test class [com.hh.gui.controller.AuthControllerTest]: AuthControllerTest does not declare any static, non-private, non-final, nested classes annotated with @Configuration.
+2026-07-16 18:11:18.059 [main] INFO  o.s.b.t.c.SpringBootTestContextBootstrapper - Found @SpringBootConfiguration com.hh.gui.HhGuiApplication for test class com.hh.gui.controller.AuthControllerTest
+2026-07-16 18:11:18.066 [main] INFO  o.s.b.d.r.RestartApplicationListener - Restart disabled due to context in which it is running
+2026-07-16 18:11:18.124 [main] INFO  c.h.g.controller.AuthControllerTest - Starting AuthControllerTest using Java 25.0.3 with PID 2909249 (started by clawd in /home/clawd/hh-vacancy-manager/backend)
+2026-07-16 18:11:18.124 [main] INFO  c.h.g.controller.AuthControllerTest - The following 1 profile is active: "test"
+2026-07-16 18:11:18.569 [main] INFO  com.hh.gui.config.RuntimeConfig - Runtime config загружен из /tmp/test-data/runtime-config.json (19 параметров, 1 провайдеров)
+2026-07-16 18:11:18.609 [main] INFO  com.zaxxer.hikari.HikariDataSource - HikariPool-2 - Starting...
+2026-07-16 18:11:18.610 [main] INFO  com.zaxxer.hikari.pool.HikariPool - HikariPool-2 - Added connection conn1: url=jdbc:h2:mem:testdb user=SA
+2026-07-16 18:11:18.635 [main] INFO  com.zaxxer.hikari.HikariDataSource - HikariPool-2 - Start completed.
+2026-07-16 18:11:18.706 [main] INFO  o.s.b.w.a.WelcomePageHandlerMapping - Adding welcome page: class path resource [static/index.html]
+2026-07-16 18:11:18.929 [main] INFO  o.s.b.t.m.w.SpringBootMockServletContext - Initializing Spring TestDispatcherServlet ''
+2026-07-16 18:11:18.929 [main] INFO  o.s.t.w.s.TestDispatcherServlet - Initializing Servlet ''
+2026-07-16 18:11:18.933 [main] INFO  o.s.b.a.e.web.EndpointLinksResolver - Exposing 3 endpoints beneath base path '/actuator'
+2026-07-16 18:11:18.940 [main] INFO  o.s.t.w.s.TestDispatcherServlet - Completed initialization in 11 ms
+2026-07-16 18:11:18.964 [main] INFO  c.h.g.controller.AuthControllerTest - Started AuthControllerTest in 0.898 seconds (process running for 8.582)
+2026-07-16 18:11:19.217 [main] INFO  c.hh.gui.controller.AuthController - Вход в систему: testuser
+2026-07-16 18:11:19.404 [main] INFO  c.hh.gui.controller.AuthController - Пароль изменён: testuser
+2026-07-16 18:11:19.484 [main] INFO  c.hh.gui.controller.AuthController - Вход в систему: testuser
+2026-07-16 18:11:19.620 [main] INFO  c.hh.gui.controller.AuthController - Вход в систему: testuser
+2026-07-16 18:11:19.822 [main] INFO  c.hh.gui.controller.AuthController - Вход в систему: testuser
+2026-07-16 18:11:20.244 [main] INFO  o.s.t.c.s.AnnotationConfigContextLoaderUtils - Could not detect default configuration classes for test class [com.hh.gui.controller.StatsControllerTest]: StatsControllerTest does not declare any static, non-private, non-final, nested classes annotated with @Configuration.
+2026-07-16 18:11:20.246 [main] INFO  o.s.b.t.c.SpringBootTestContextBootstrapper - Found @SpringBootConfiguration com.hh.gui.HhGuiApplication for test class com.hh.gui.controller.StatsControllerTest
+2026-07-16 18:11:20.247 [main] INFO  o.s.t.c.s.AnnotationConfigContextLoaderUtils - Could not detect default configuration classes for test class [com.hh.gui.controller.StatsControllerTest]: StatsControllerTest does not declare any static, non-private, non-final, nested classes annotated with @Configuration.
+2026-07-16 18:11:20.250 [main] INFO  o.s.b.t.c.SpringBootTestContextBootstrapper - Found @SpringBootConfiguration com.hh.gui.HhGuiApplication for test class com.hh.gui.controller.StatsControllerTest
+2026-07-16 18:11:21.319 [main] INFO  o.s.t.c.s.AnnotationConfigContextLoaderUtils - Could not detect default configuration classes for test class [com.hh.gui.controller.VacancyControllerTest]: VacancyControllerTest does not declare any static, non-private, non-final, nested classes annotated with @Configuration.
+2026-07-16 18:11:21.328 [main] INFO  o.s.b.t.c.SpringBootTestContextBootstrapper - Found @SpringBootConfiguration com.hh.gui.HhGuiApplication for test class com.hh.gui.controller.VacancyControllerTest
+2026-07-16 18:11:21.329 [main] INFO  o.s.t.c.s.AnnotationConfigContextLoaderUtils - Could not detect default configuration classes for test class [com.hh.gui.controller.VacancyControllerTest]: VacancyControllerTest does not declare any static, non-private, non-final, nested classes annotated with @Configuration.
+2026-07-16 18:11:21.333 [main] INFO  o.s.b.t.c.SpringBootTestContextBootstrapper - Found @SpringBootConfiguration com.hh.gui.HhGuiApplication for test class com.hh.gui.controller.VacancyControllerTest
+2026-07-16 18:11:21.618 [main] INFO  com.hh.gui.service.VacancyService - Создана вакансия: id=139, title=null
+2026-07-16 18:11:21.656 [main] INFO  com.hh.gui.service.VacancyService - Создана вакансия: id=142, title=New Vacancy
+2026-07-16 18:11:21.708 [main] WARN  o.s.w.s.m.s.DefaultHandlerExceptionResolver - Resolved [org.springframework.web.method.annotation.MethodArgumentTypeMismatchException: Method parameter 'id': Failed to convert value of type 'java.lang.String' to required type 'java.lang.Long'; For input string: "abc"]
+2026-07-16 18:11:21.758 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 2 провайдеров
+2026-07-16 18:11:21.759 [main] WARN  com.hh.gui.ai.AiProviderManager - Провайдер primary rate limited (429). Переключаемся на fallback.
+2026-07-16 18:11:21.759 [main] WARN  com.hh.gui.ai.AiProviderManager - Последний провайдер fallback (429), fallback недоступен. Входим в cooldown.
+2026-07-16 18:11:21.760 [main] WARN  com.hh.gui.ai.AiProviderManager - AI провайдеры исчерпаны. Cooldown до 2026-07-17 06:00 (hours=0)
+2026-07-16 18:11:21.760 [main] INFO  com.hh.gui.ai.AiProviderManager - AI провайдер сброшен на первый в списке
+2026-07-16 18:11:21.762 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 2 провайдеров
+2026-07-16 18:11:21.763 [main] WARN  com.hh.gui.ai.AiProviderManager - Провайдер primary rate limited (429). Переключаемся на fallback.
+2026-07-16 18:11:21.763 [main] WARN  com.hh.gui.ai.AiProviderManager - Последний провайдер fallback (429), fallback недоступен. Входим в cooldown.
+2026-07-16 18:11:21.763 [main] WARN  com.hh.gui.ai.AiProviderManager - AI провайдеры исчерпаны. Cooldown до 2026-07-17 06:00 (hours=0)
+2026-07-16 18:11:21.765 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 2 провайдеров
+2026-07-16 18:11:21.783 [pool-3-thread-1] WARN  com.hh.gui.ai.AiProviderManager - Провайдер primary rate limited (429). Переключаемся на fallback.
+2026-07-16 18:11:21.784 [pool-3-thread-2] WARN  com.hh.gui.ai.AiProviderManager - Последний провайдер fallback (429), fallback недоступен. Входим в cooldown.
+2026-07-16 18:11:21.784 [pool-3-thread-2] WARN  com.hh.gui.ai.AiProviderManager - AI провайдеры исчерпаны. Cooldown до 2026-07-17 06:00 (hours=0)
+2026-07-16 18:11:21.785 [pool-3-thread-6] WARN  com.hh.gui.ai.AiProviderManager - Последний провайдер fallback (cooldown) (429), fallback недоступен. Входим в cooldown.
+2026-07-16 18:11:21.785 [pool-3-thread-6] WARN  com.hh.gui.ai.AiProviderManager - AI провайдеры исчерпаны. Cooldown до 2026-07-17 06:00 (hours=0)
+2026-07-16 18:11:21.785 [pool-3-thread-7] WARN  com.hh.gui.ai.AiProviderManager - Последний провайдер fallback (cooldown) (429), fallback недоступен. Входим в cooldown.
+2026-07-16 18:11:21.786 [pool-3-thread-7] WARN  com.hh.gui.ai.AiProviderManager - AI провайдеры исчерпаны. Cooldown до 2026-07-17 06:00 (hours=0)
+2026-07-16 18:11:21.786 [pool-3-thread-3] WARN  com.hh.gui.ai.AiProviderManager - Последний провайдер fallback (cooldown) (429), fallback недоступен. Входим в cooldown.
+2026-07-16 18:11:21.786 [pool-3-thread-3] WARN  com.hh.gui.ai.AiProviderManager - AI провайдеры исчерпаны. Cooldown до 2026-07-17 06:00 (hours=0)
+2026-07-16 18:11:21.786 [pool-3-thread-4] WARN  com.hh.gui.ai.AiProviderManager - Последний провайдер fallback (cooldown) (429), fallback недоступен. Входим в cooldown.
+2026-07-16 18:11:21.787 [pool-3-thread-4] WARN  com.hh.gui.ai.AiProviderManager - AI провайдеры исчерпаны. Cooldown до 2026-07-17 06:00 (hours=0)
+2026-07-16 18:11:21.787 [pool-3-thread-5] WARN  com.hh.gui.ai.AiProviderManager - Последний провайдер fallback (cooldown) (429), fallback недоступен. Входим в cooldown.
+2026-07-16 18:11:21.787 [pool-3-thread-5] WARN  com.hh.gui.ai.AiProviderManager - AI провайдеры исчерпаны. Cooldown до 2026-07-17 06:00 (hours=0)
+2026-07-16 18:11:21.788 [pool-3-thread-8] WARN  com.hh.gui.ai.AiProviderManager - Последний провайдер fallback (cooldown) (429), fallback недоступен. Входим в cooldown.
+2026-07-16 18:11:21.788 [pool-3-thread-8] WARN  com.hh.gui.ai.AiProviderManager - AI провайдеры исчерпаны. Cooldown до 2026-07-17 06:00 (hours=0)
+2026-07-16 18:11:21.788 [pool-3-thread-9] WARN  com.hh.gui.ai.AiProviderManager - Последний провайдер fallback (cooldown) (429), fallback недоступен. Входим в cooldown.
+2026-07-16 18:11:21.789 [pool-3-thread-9] WARN  com.hh.gui.ai.AiProviderManager - AI провайдеры исчерпаны. Cooldown до 2026-07-17 06:00 (hours=0)
+2026-07-16 18:11:21.789 [pool-3-thread-10] WARN  com.hh.gui.ai.AiProviderManager - Последний провайдер fallback (cooldown) (429), fallback недоступен. Входим в cooldown.
+2026-07-16 18:11:21.789 [pool-3-thread-10] WARN  com.hh.gui.ai.AiProviderManager - AI провайдеры исчерпаны. Cooldown до 2026-07-17 06:00 (hours=0)
+2026-07-16 18:11:21.789 [pool-3-thread-11] WARN  com.hh.gui.ai.AiProviderManager - Последний провайдер fallback (cooldown) (429), fallback недоступен. Входим в cooldown.
+2026-07-16 18:11:21.790 [pool-3-thread-11] WARN  com.hh.gui.ai.AiProviderManager - AI провайдеры исчерпаны. Cooldown до 2026-07-17 06:00 (hours=0)
+2026-07-16 18:11:21.790 [pool-3-thread-12] WARN  com.hh.gui.ai.AiProviderManager - Последний провайдер fallback (cooldown) (429), fallback недоступен. Входим в cooldown.
+2026-07-16 18:11:21.790 [pool-3-thread-12] WARN  com.hh.gui.ai.AiProviderManager - AI провайдеры исчерпаны. Cooldown до 2026-07-17 06:00 (hours=0)
+2026-07-16 18:11:21.790 [pool-3-thread-13] WARN  com.hh.gui.ai.AiProviderManager - Последний провайдер fallback (cooldown) (429), fallback недоступен. Входим в cooldown.
+2026-07-16 18:11:21.791 [pool-3-thread-13] WARN  com.hh.gui.ai.AiProviderManager - AI провайдеры исчерпаны. Cooldown до 2026-07-17 06:00 (hours=0)
+2026-07-16 18:11:21.791 [pool-3-thread-14] WARN  com.hh.gui.ai.AiProviderManager - Последний провайдер fallback (cooldown) (429), fallback недоступен. Входим в cooldown.
+2026-07-16 18:11:21.791 [pool-3-thread-14] WARN  com.hh.gui.ai.AiProviderManager - AI провайдеры исчерпаны. Cooldown до 2026-07-17 06:00 (hours=0)
+2026-07-16 18:11:21.791 [pool-3-thread-15] WARN  com.hh.gui.ai.AiProviderManager - Последний провайдер fallback (cooldown) (429), fallback недоступен. Входим в cooldown.
+2026-07-16 18:11:21.792 [pool-3-thread-15] WARN  com.hh.gui.ai.AiProviderManager - AI провайдеры исчерпаны. Cooldown до 2026-07-17 06:00 (hours=0)
+2026-07-16 18:11:21.792 [pool-3-thread-16] WARN  com.hh.gui.ai.AiProviderManager - Последний провайдер fallback (cooldown) (429), fallback недоступен. Входим в cooldown.
+2026-07-16 18:11:21.792 [pool-3-thread-16] WARN  com.hh.gui.ai.AiProviderManager - AI провайдеры исчерпаны. Cooldown до 2026-07-17 06:00 (hours=0)
+2026-07-16 18:11:21.792 [pool-3-thread-17] WARN  com.hh.gui.ai.AiProviderManager - Последний провайдер fallback (cooldown) (429), fallback недоступен. Входим в cooldown.
+2026-07-16 18:11:21.793 [pool-3-thread-17] WARN  com.hh.gui.ai.AiProviderManager - AI провайдеры исчерпаны. Cooldown до 2026-07-17 06:00 (hours=0)
+2026-07-16 18:11:21.793 [pool-3-thread-18] WARN  com.hh.gui.ai.AiProviderManager - Последний провайдер fallback (cooldown) (429), fallback недоступен. Входим в cooldown.
+2026-07-16 18:11:21.793 [pool-3-thread-18] WARN  com.hh.gui.ai.AiProviderManager - AI провайдеры исчерпаны. Cooldown до 2026-07-17 06:00 (hours=0)
+2026-07-16 18:11:21.793 [pool-3-thread-19] WARN  com.hh.gui.ai.AiProviderManager - Последний провайдер fallback (cooldown) (429), fallback недоступен. Входим в cooldown.
+2026-07-16 18:11:21.794 [pool-3-thread-19] WARN  com.hh.gui.ai.AiProviderManager - AI провайдеры исчерпаны. Cooldown до 2026-07-17 06:00 (hours=0)
+2026-07-16 18:11:21.794 [pool-3-thread-20] WARN  com.hh.gui.ai.AiProviderManager - Последний провайдер fallback (cooldown) (429), fallback недоступен. Входим в cooldown.
+2026-07-16 18:11:21.794 [pool-3-thread-20] WARN  com.hh.gui.ai.AiProviderManager - AI провайдеры исчерпаны. Cooldown до 2026-07-17 06:00 (hours=0)
+2026-07-16 18:11:21.798 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 2 провайдеров
+2026-07-16 18:11:21.799 [main] WARN  com.hh.gui.ai.AiProviderManager - Провайдер primary rate limited (429). Переключаемся на fallback.
+2026-07-16 18:11:21.802 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 2 провайдеров
+2026-07-16 18:11:21.816 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 2 провайдеров
+2026-07-16 18:11:21.820 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 2 провайдеров
+2026-07-16 18:11:21.830 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 2 провайдеров
+2026-07-16 18:11:21.832 [main] WARN  com.hh.gui.ai.FreeModelUpdater - Обновление free-моделей: каталог вернул лишь 1 пригодных моделей — список не тронут
+2026-07-16 18:11:21.835 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 2 провайдеров
+2026-07-16 18:11:21.835 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 1 провайдеров
+2026-07-16 18:11:21.841 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 2 провайдеров
+2026-07-16 18:11:21.842 [main] WARN  com.hh.gui.ai.FreeModelUpdater - Обновление free-моделей: каталог OpenRouter недоступен (HTTP 503), список не тронут
+2026-07-16 18:11:21.853 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 2 провайдеров
+2026-07-16 18:11:21.860 [main] WARN  com.hh.gui.ai.FreeModelUpdater - Обновление free-моделей: AI-выбор не удался (LLM недоступен) — детерминированный фолбэк
+2026-07-16 18:11:21.864 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 2 провайдеров
+2026-07-16 18:11:21.864 [main] WARN  com.hh.gui.ai.FreeModelUpdater - Обновление free-моделей: список заменён [a/one:free, b/two:free, c/three:free] -> [a/one:free, c/three:free, d/new-instruct:free]
+2026-07-16 18:11:21.866 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 2 провайдеров
+2026-07-16 18:11:21.867 [main] WARN  com.hh.gui.ai.FreeModelUpdater - Обновление free-моделей: AI вернул лишь 0 валидных id — детерминированный фолбэк
+2026-07-16 18:11:21.868 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 2 провайдеров
+2026-07-16 18:11:21.869 [main] WARN  com.hh.gui.ai.FreeModelUpdater - Обновление free-моделей: список заменён [a/one:free, b/two:free, c/three:free] -> [a/one:free, c/three:free, d/big-instruct:free]
+2026-07-16 18:11:21.873 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 2 провайдеров
+2026-07-16 18:11:21.876 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 2 провайдеров
+2026-07-16 18:11:21.876 [main] WARN  com.hh.gui.ai.FreeModelUpdater - Обновление free-моделей: список заменён [a/one:free, b/two:free, c/three:free] -> [a/one:free, c/three:free, d/new-instruct:free]
+2026-07-16 18:11:21.879 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 2 провайдеров
+2026-07-16 18:11:21.881 [main] WARN  com.hh.gui.ai.FreeModelUpdater - Обновление free-моделей: AI-выбор не удался (LLM недоступен) — детерминированный фолбэк
+2026-07-16 18:11:21.881 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 2 провайдеров
+2026-07-16 18:11:21.881 [main] WARN  com.hh.gui.ai.FreeModelUpdater - Обновление free-моделей: список заменён [a/one:free, b/two:free, c/three:free] -> [a/one:free, c/three:free, d/new-instruct:free]
+2026-07-16 18:11:21.884 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 2 провайдеров
+2026-07-16 18:11:21.885 [main] INFO  com.hh.gui.ai.FreeModelUpdater - Обновление free-моделей: все 3 текущих моделей по-прежнему бесплатны
+2026-07-16 18:11:21.890 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 1 провайдеров
+2026-07-16 18:11:21.893 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 1 провайдеров
+2026-07-16 18:11:21.899 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 1 провайдеров
+2026-07-16 18:11:21.903 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 1 провайдеров
+2026-07-16 18:11:21.905 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 1 провайдеров
+2026-07-16 18:11:21.909 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 1 провайдеров
+2026-07-16 18:11:21.912 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 1 провайдеров
+2026-07-16 18:11:21.915 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 1 провайдеров
+2026-07-16 18:11:21.918 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 1 провайдеров
+2026-07-16 18:11:21.924 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 1 провайдеров
+2026-07-16 18:11:21.928 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 1 провайдеров
+2026-07-16 18:11:21.931 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 1 провайдеров
+2026-07-16 18:11:21.934 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 1 провайдеров
+2026-07-16 18:11:21.937 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 1 провайдеров
+2026-07-16 18:11:21.939 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 1 провайдеров
+2026-07-16 18:11:21.941 [main] INFO  com.hh.gui.ai.VacancyAiAnalyzer - Прескрининг (Тест · Тест): 4 карточек схлопнуто в 2 уникальных по названию+работодателю
+2026-07-16 18:11:21.944 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 1 провайдеров
+2026-07-16 18:11:21.947 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 1 провайдеров
+2026-07-16 18:11:21.951 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 1 провайдеров
+2026-07-16 18:11:21.957 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 1 провайдеров
+2026-07-16 18:11:21.961 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 1 провайдеров
+2026-07-16 18:11:21.964 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 1 провайдеров
+2026-07-16 18:11:21.967 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 1 провайдеров
+2026-07-16 18:11:21.970 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 1 провайдеров
+2026-07-16 18:11:21.973 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 1 провайдеров
+2026-07-16 18:11:21.981 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 1 провайдеров
+2026-07-16 18:11:21.989 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 1 провайдеров
+2026-07-16 18:11:21.995 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 1 провайдеров
+2026-07-16 18:11:22.002 [main] INFO  com.hh.gui.config.RuntimeConfig - Список AI провайдеров обновлён: 1 провайдеров
+2026-07-16 18:11:22.007 [main] INFO  com.hh.gui.config.RuntimeConfig - Настройки обновлены: [maxPerRun]
+2026-07-16 18:11:22.012 [main] INFO  com.hh.gui.config.RuntimeConfig - Настройки обновлены: [dailyCron]
+2026-07-16 18:11:22.017 [main] WARN  com.hh.gui.config.RuntimeConfig - Ошибки обновления настроек: {maxPerRun=Нецелое число: abc}
+2026-07-16 18:11:22.024 [main] INFO  com.hh.gui.config.RuntimeConfig - Настройки обновлены: [notificationsEnabled, pipelineEnabled]
+2026-07-16 18:11:22.027 [main] INFO  com.hh.gui.config.RuntimeConfig - Настройки обновлены: [maxRetries]
+2026-07-16 18:11:22.028 [main] INFO  com.hh.gui.config.RuntimeConfig - Настройки обновлены: [notificationsEnabled, pipelineEnabled]
+2026-07-16 18:11:22.031 [main] INFO  com.hh.gui.config.RuntimeConfig - Настройки обновлены: [minScore, httpReadTimeoutMs, maxPerRun, maxRetries]
+2026-07-16 18:11:22.035 [main] WARN  com.hh.gui.config.RuntimeConfig - Ошибки обновления настроек: {unknownParam=Неизвестный параметр: unknownParam}
+2026-07-16 18:11:22.037 [main] WARN  com.hh.gui.config.RuntimeConfig - Ошибки обновления настроек: {dailyCron=Cron должен содержать 6 полей (сек мин час день месяц день_недели)}
+2026-07-16 18:11:22.045 [main] WARN  com.hh.gui.config.RuntimeConfig - Ошибки обновления настроек: {dailyCron=Cron должен содержать 6 полей (сек мин час день месяц день_недели)}
+2026-07-16 18:11:22.049 [main] WARN  com.hh.gui.config.RuntimeConfig - Ошибки обновления настроек: {maxPerRun=Значение 0 вне диапазона [1, 500]}
+2026-07-16 18:11:22.051 [main] WARN  com.hh.gui.config.RuntimeConfig - Ошибки обновления настроек: {notificationsEnabled=Неверный тип: ожидается true/false}
+2026-07-16 18:11:22.057 [main] INFO  com.hh.gui.config.RuntimeConfig - Настройки обновлены: [maxRetries, requestDelayMs, minScore, salaryMinRemote, cooldownHours, maxPerRun, maxApproved]
+2026-07-16 18:11:22.059 [main] WARN  com.hh.gui.config.RuntimeConfig - Ошибки обновления настроек: {maxPerRun=Неверный тип: ожидается число}
+2026-07-16 18:11:22.061 [main] WARN  com.hh.gui.config.RuntimeConfig - Ошибки обновления настроек: {maxPerRun=Значение 999 вне диапазона [1, 500]}
+2026-07-16 18:11:22.064 [main] WARN  com.hh.gui.config.RuntimeConfig - Ошибки обновления настроек: {maxPerRun=Значение -1 вне диапазона [1, 500]}
+2026-07-16 18:11:22.065 [main] WARN  com.hh.gui.config.RuntimeConfig - Ошибки обновления настроек: {maxPerRun=Значение -10 вне диапазона [1, 500]}
+2026-07-16 18:11:22.067 [main] INFO  com.hh.gui.config.RuntimeConfig - Настройки обновлены: [minScore, maxPerRun, maxRetries, salaryMinRemote]
+2026-07-16 18:11:22.086 [SpringApplicationShutdownHook] INFO  com.zaxxer.hikari.HikariDataSource - HikariPool-1 - Shutdown initiated...
+2026-07-16 18:11:22.092 [SpringApplicationShutdownHook] INFO  com.zaxxer.hikari.HikariDataSource - HikariPool-1 - Shutdown completed.
+2026-07-16 18:11:22.096 [SpringApplicationShutdownHook] INFO  com.zaxxer.hikari.HikariDataSource - HikariPool-2 - Shutdown initiated...
+2026-07-16 18:11:22.098 [SpringApplicationShutdownHook] INFO  com.zaxxer.hikari.HikariDataSource - HikariPool-2 - Shutdown completed.

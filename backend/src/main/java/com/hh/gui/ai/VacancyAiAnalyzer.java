@@ -500,10 +500,22 @@ public class VacancyAiAnalyzer {
         return sb.toString();
     }
 
-    private String callLlm(String prompt, int maxTokens) throws Exception {
+    // Package-private: FreeModelUpdater reuses the same call path (rate limiting,
+    // provider chain, model-list fallback, token metrics) for its ranking request.
+    String callLlm(String prompt, int maxTokens) throws Exception {
+        return callLlm(prompt, maxTokens, null);
+    }
+
+    /**
+     * modelOverride replaces the provider's configured model string for this one call —
+     * FreeModelUpdater needs it because its whole reason to call is that the CONFIGURED
+     * list contains a dead model: routing the ranking request through that same list
+     * got a 400 back (observed live) and the AI selection silently never ran.
+     */
+    String callLlm(String prompt, int maxTokens, String modelOverride) throws Exception {
         String url = providerManager.getCurrentUrl();
         String key = providerManager.getCurrentKey();
-        String model = providerManager.getCurrentModel();
+        String model = modelOverride != null ? modelOverride : providerManager.getCurrentModel();
         String provider = providerManager.getCurrentProviderName();
 
         if (key == null || key.isEmpty()) {
@@ -646,7 +658,7 @@ public class VacancyAiAnalyzer {
      * would misparse that case, or accidentally include trailing prose after the
      * array as if it were part of it.
      */
-    private static String extractJsonArray(String content) {
+    static String extractJsonArray(String content) {
         int startIdx = content.indexOf('[');
         if (startIdx < 0) return null;
 
