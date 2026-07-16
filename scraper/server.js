@@ -227,9 +227,14 @@ async function searchVacancies({ url: rawUrl, text, area, page: pageNum, schedul
         return { ok: false, reason: 'host_not_allowed' };
       }
       if (pageNum) parsed.searchParams.set('page', pageNum);
+      // Cards carry a duties/requirements teaser ONLY with enable_snippets=true —
+      // hh.ru omits the elements entirely otherwise (verified live), and the AI
+      // prescreen downstream depends on that teaser. Forced here so a saved user
+      // URL with the parameter absent (or =false) doesn't silently degrade it.
+      parsed.searchParams.set('enable_snippets', 'true');
       url = parsed.toString();
     } else {
-      url = `https://hh.ru/search/vacancy?text=${encodeURIComponent(text)}&area=${encodeURIComponent(area)}&page=${encodeURIComponent(pageNum)}`;
+      url = `https://hh.ru/search/vacancy?text=${encodeURIComponent(text)}&area=${encodeURIComponent(area)}&page=${encodeURIComponent(pageNum)}&enable_snippets=true`;
       if (schedule) url += `&schedule=${encodeURIComponent(schedule)}`;
       if (salary) url += `&salary=${encodeURIComponent(salary)}`;
     }
