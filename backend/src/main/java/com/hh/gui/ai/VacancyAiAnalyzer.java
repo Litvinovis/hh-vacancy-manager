@@ -500,7 +500,9 @@ public class VacancyAiAnalyzer {
         return sb.toString();
     }
 
-    private String callLlm(String prompt, int maxTokens) throws Exception {
+    // Package-private: FreeModelUpdater reuses the same call path (rate limiting,
+    // provider chain, model-list fallback, token metrics) for its ranking request.
+    String callLlm(String prompt, int maxTokens) throws Exception {
         String url = providerManager.getCurrentUrl();
         String key = providerManager.getCurrentKey();
         String model = providerManager.getCurrentModel();
@@ -646,7 +648,7 @@ public class VacancyAiAnalyzer {
      * would misparse that case, or accidentally include trailing prose after the
      * array as if it were part of it.
      */
-    private static String extractJsonArray(String content) {
+    static String extractJsonArray(String content) {
         int startIdx = content.indexOf('[');
         if (startIdx < 0) return null;
 

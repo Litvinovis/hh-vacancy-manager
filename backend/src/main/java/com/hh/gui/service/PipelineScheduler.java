@@ -1,5 +1,6 @@
 package com.hh.gui.service;
 
+import com.hh.gui.ai.FreeModelUpdater;
 import com.hh.gui.ai.VacancyAiAnalyzer;
 import com.hh.gui.config.RuntimeConfig;
 import com.hh.gui.model.SearchConfig;
@@ -43,19 +44,30 @@ public class PipelineScheduler implements SchedulingConfigurer {
     // ceiling MAX_URL_SEARCH_PAGES enforces there, just named for this call site.
     private static final int URL_SEARCH_SCHEDULED_MAX_PAGES = 10;
 
+    // The OpenRouter ":free" pool is volatile — models get promoted to paid or removed;
+    // see FreeModelUpdater. Half a day keeps the list fresh without meaningful cost
+    // (one catalog GET; an LLM call only when something actually changed).
+    private static final Duration FREE_MODEL_REFRESH_INTERVAL = Duration.ofHours(12);
+    // Not at boot: a deploy restart mustn't burn an LLM ranking call every time, and
+    // the very first scheduled run still catches a dead list within minutes.
+    private static final Duration FREE_MODEL_REFRESH_INITIAL_DELAY = Duration.ofMinutes(10);
+
     private final VacancyPipelineService pipelineService;
     private final SearchProfileFactory profileFactory;
     private final RuntimeConfig runtimeConfig;
     private final VacancyAiAnalyzer aiAnalyzer;
     private final SearchRepository searchRepo;
+    private final FreeModelUpdater freeModelUpdater;
 
     public PipelineScheduler(VacancyPipelineService pipelineService, SearchProfileFactory profileFactory,
-                              RuntimeConfig runtimeConfig, VacancyAiAnalyzer aiAnalyzer, SearchRepository searchRepo) {
+                              RuntimeConfig runtimeConfig, VacancyAiAnalyzer aiAnalyzer, SearchRepository searchRepo,
+                              FreeModelUpdater freeModelUpdater) {
         this.pipelineService = pipelineService;
         this.profileFactory = profileFactory;
         this.runtimeConfig = runtimeConfig;
         this.aiAnalyzer = aiAnalyzer;
         this.searchRepo = searchRepo;
+        this.freeModelUpdater = freeModelUpdater;
     }
 
     @Override
@@ -63,6 +75,17 @@ public class PipelineScheduler implements SchedulingConfigurer {
         registrar.addTriggerTask(this::runPipeline, this::nextPipelineExecution);
         registrar.addTriggerTask(this::runDailyAnalysis, this::nextDailyExecution);
         registrar.addTriggerTask(this::runDueUrlSearches, new PeriodicTrigger(Duration.ofMillis(URL_SEARCH_CHECK_INTERVAL_MS)));
+        PeriodicTrigger freeModelTrigger = new PeriodicTrigger(FREE_MODEL_REFRESH_INTERVAL);
+        freeModelTrigger.setInitialDelay(FREE_MODEL_REFRESH_INITIAL_DELAY);
+        registrar.addTriggerTask(this::refreshFreeModels, freeModelTrigger);
+    }
+
+    private void refreshFreeModels() {
+        try {
+            freeModelUpdater.refresh();
+        } catch (Exception e) {
+            log.error("Плановое обновление free-моделей завершилось ошибкой: {}", e.getMessage(), e);
+        }
     }
 
     private Instant nextPipelineExecution(TriggerContext context) {
