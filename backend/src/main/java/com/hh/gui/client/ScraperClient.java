@@ -112,8 +112,14 @@ public class ScraperClient {
         return null;
     }
 
-    /** One vacancy card as listed on an hh.ru search-results page (see /search on the sidecar). */
-    public record SearchHit(String hhId, String title, String employerName, String salaryRawText, String address, String url) {}
+    /**
+     * One vacancy card as listed on an hh.ru search-results page (see /search on the
+     * sidecar). snippet is the card's short duties/requirements teaser — the richest
+     * signal the AI prescreen gets without paying for a full page scrape (null for
+     * RSS-discovered candidates, which carry a title only).
+     */
+    public record SearchHit(String hhId, String title, String employerName, String salaryRawText, String address,
+                            String snippet, String url) {}
 
     public record SearchPageResult(boolean ok, String reason, List<SearchHit> items, String lastPageLabel) {
         static SearchPageResult failure(String reason) {
@@ -162,7 +168,8 @@ public class ScraperClient {
                 String hhId = str(item.get("hhId"));
                 if (hhId == null || hhId.isBlank()) continue;
                 items.add(new SearchHit(hhId, str(item.get("title")), str(item.get("employerName")),
-                    str(item.get("salaryRawText")), str(item.get("address")), str(item.get("url"))));
+                    str(item.get("salaryRawText")), str(item.get("address")), str(item.get("snippet")),
+                    str(item.get("url"))));
             }
             String lastPageLabel = str(json.get("lastPageLabel"));
             log.debug("Скрейпер /search (страница {}): {} карточек, последняя страница пагинатора: {}",

@@ -278,6 +278,57 @@ class VacancyAiAnalyzerTest {
         assertEquals(content, extractJsonArray(content));
     }
 
+    // ── prescreenHits: схлопывание клонов (одинаковые название+работодатель) ──
+
+    /** Возвращает вердикт по каждой карточке без HTTP и считает, сколько карточек реально ушло в LLM. */
+    private static class CountingAnalyzer extends VacancyAiAnalyzer {
+        final java.util.List<Integer> llmBatchSizes = new java.util.ArrayList<>();
+        CountingAnalyzer(RuntimeConfig config, AiProviderManager pm, AiMetrics metrics) {
+            super(config, pm, metrics);
+        }
+        @Override
+        protected List<AiResult> prescreenBatchWithRetry(List<com.hh.gui.client.ScraperClient.SearchHit> batch, SearchJob job) {
+            llmBatchSizes.add(batch.size());
+            return batch.stream()
+                .map(h -> new AiResult(h.hhId(), 50, h.title().contains("поддержк") ? "no" : "yes", "тест"))
+                .toList();
+        }
+    }
+
+    private static com.hh.gui.client.ScraperClient.SearchHit card(String hhId, String title, String employer, String address) {
+        return new com.hh.gui.client.ScraperClient.SearchHit(hhId, title, employer, "50 000 ₽", address, null,
+            "https://hh.ru/vacancy/" + hhId);
+    }
+
+    @Test
+    void prescreenHits_collapsesCityClones_fansVerdictOutToAllMembers() throws Exception {
+        RuntimeConfig config = new RuntimeConfig();
+        config.setAiProviders(List.of(new AiProviderConfig("test", "http://localhost/mock", "key", "m")));
+        AiProviderManager pm = new AiProviderManager(config, new AiMetrics(new SimpleMeterRegistry(), config));
+        CountingAnalyzer counting = new CountingAnalyzer(config, pm, new AiMetrics(new SimpleMeterRegistry(), config));
+
+        // Живой сценарий: одна и та же вакансия Т-Банка размещена в трёх городах
+        // (разные hh_id и адреса), плюс одна действительно другая вакансия.
+        List<com.hh.gui.client.ScraperClient.SearchHit> hits = List.of(
+            card("1", "Специалист клиентской поддержки", "Т-Банк", "Уфа"),
+            card("2", "Специалист клиентской поддержки", "Т-Банк", "Казань"),
+            card("3", "Специалист клиентской поддержки", "Т-Банк", "Самара"),
+            card("4", "Аналитик данных", "Ромашка", "Уфа"));
+
+        SearchJob job = new SearchJob();
+        job.personName = "Тест";
+        job.searchName = "Тест";
+        List<VacancyAiAnalyzer.AiResult> results = counting.prescreenHits(hits, job);
+
+        assertEquals(List.of(2), counting.llmBatchSizes, "в LLM должны уйти только 2 уникальные карточки из 4");
+        assertEquals(4, results.size(), "вердикт должен вернуться по каждой из 4 карточек");
+        for (String cloneId : List.of("1", "2", "3")) {
+            assertEquals("no", results.stream().filter(r -> r.hhId().equals(cloneId)).findFirst().orElseThrow().verdict(),
+                "клон " + cloneId + " должен унаследовать вердикт представителя");
+        }
+        assertEquals("yes", results.stream().filter(r -> r.hhId().equals("4")).findFirst().orElseThrow().verdict());
+    }
+
     // ── AiResult record ──
 
     @Test

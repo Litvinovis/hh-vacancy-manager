@@ -4,6 +4,7 @@ import com.hh.gui.client.ScraperClient;
 import com.hh.gui.config.RuntimeConfig;
 import com.hh.gui.model.SearchJob;
 import com.hh.gui.model.Vacancy;
+import com.hh.gui.util.DedupKeys;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -16,9 +17,11 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.ArrayList;
 import java.util.Set;
 
 /**
@@ -150,22 +153,54 @@ public class VacancyAiAnalyzer {
             return passAllOpen(hits, "AI недоступен — прескрининг пропущен");
         }
 
-        List<AiResult> results = new ArrayList<>();
+        // Clone collapsing: the same real vacancy posted per city floods a listing with
+        // dozens of near-identical cards (measured live: one T-Bank posting appeared as
+        // 87 cards, each burning a prescreen slot for the same inevitable answer). Only
+        // one representative per group goes to the LLM; its verdict fans out to the rest.
+        // Grouping deliberately allows an empty employer (unlike DedupKeys.compute) —
+        // RSS candidates carry a title only, and the prescreen's own input for them IS
+        // just the title, so identical titles get identical answers by construction.
+        Map<String, List<ScraperClient.SearchHit>> groups = new LinkedHashMap<>();
+        for (ScraperClient.SearchHit h : hits) {
+            String key = DedupKeys.normalize(h.title()) + "|" + DedupKeys.normalize(h.employerName());
+            // No usable title — never collapse, judge individually.
+            groups.computeIfAbsent("|".equals(key) ? "raw:" + h.hhId() : key, k -> new ArrayList<>()).add(h);
+        }
+        List<ScraperClient.SearchHit> representatives = groups.values().stream().map(g -> g.get(0)).toList();
+        if (representatives.size() < hits.size()) {
+            log.info("Прескрининг ({} · {}): {} карточек схлопнуто в {} уникальных по названию+работодателю",
+                job.personName, job.searchName, hits.size(), representatives.size());
+        }
+
+        List<AiResult> repResults = new ArrayList<>();
         int batchSize = runtimeConfig.getCardPrescreenBatchSize() > 0 ? runtimeConfig.getCardPrescreenBatchSize() : 30;
-        for (int i = 0; i < hits.size(); i += batchSize) {
-            List<ScraperClient.SearchHit> batch = hits.subList(i, Math.min(i + batchSize, hits.size()));
+        for (int i = 0; i < representatives.size(); i += batchSize) {
+            List<ScraperClient.SearchHit> batch = representatives.subList(i, Math.min(i + batchSize, representatives.size()));
             if (providerManager.isInCooldown()) {
-                results.addAll(passAllOpen(batch, "Cooldown — прескрининг пропущен"));
+                repResults.addAll(passAllOpen(batch, "Cooldown — прескрининг пропущен"));
                 continue;
             }
             try {
-                results.addAll(prescreenBatchWithRetry(batch, job));
+                repResults.addAll(prescreenBatchWithRetry(batch, job));
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                results.addAll(passAllOpen(batch, "Прервано — прескрининг пропущен"));
+                repResults.addAll(passAllOpen(batch, "Прервано — прескрининг пропущен"));
             } catch (Exception e) {
                 log.warn("Прескрининг карточек не удался ({} · {}): {} — пропускаем фильтр для этой пачки", job.personName, job.searchName, e.getMessage());
-                results.addAll(passAllOpen(batch, "Ошибка прескрининга — пропущен"));
+                repResults.addAll(passAllOpen(batch, "Ошибка прескрининга — пропущен"));
+            }
+        }
+
+        Map<String, AiResult> byRepId = new HashMap<>();
+        for (AiResult r : repResults) byRepId.put(r.hhId(), r);
+        List<AiResult> results = new ArrayList<>();
+        for (List<ScraperClient.SearchHit> group : groups.values()) {
+            AiResult rep = byRepId.get(group.get(0).hhId());
+            for (ScraperClient.SearchHit member : group) {
+                if (rep == null) continue; // representative omitted from the answer — member stays unfiltered (fail open)
+                results.add(member.hhId().equals(rep.hhId())
+                    ? rep
+                    : new AiResult(member.hhId(), rep.score(), rep.verdict(), rep.reason()));
             }
         }
         return results;
@@ -184,7 +219,7 @@ public class VacancyAiAnalyzer {
      * on every batch. The generous cap is headroom, not extra spend (max_tokens only
      * bounds generation), and the retry usually lands on a different model.
      */
-    private List<AiResult> prescreenBatchWithRetry(List<ScraperClient.SearchHit> batch, SearchJob job) throws Exception {
+    protected List<AiResult> prescreenBatchWithRetry(List<ScraperClient.SearchHit> batch, SearchJob job) throws Exception {
         String prompt = buildPrescreenPrompt(batch, job);
         int maxTokens = Math.min(6000, 3000 + 60 * batch.size());
         for (int attempt = 1; ; attempt++) {
@@ -208,9 +243,9 @@ public class VacancyAiAnalyzer {
         }
         if (job.salaryMin > 0) sb.append("Мин. зарплата: ").append(job.salaryMin).append("₽\n");
         sb.append("\n");
-        sb.append("Для каждой карточки поставь verdict=\"yes\", если по названию/работодателю/зарплате она МОЖЕТ подойти " +
-            "и стоит открыть полностью для детальной оценки. verdict=\"no\" — только если явно не подходит " +
-            "(видно из одного названия/работодателя). Сомневаешься — ставь \"yes\": лучше открыть лишнюю карточку, " +
+        sb.append("Для каждой карточки поставь verdict=\"yes\", если по названию/работодателю/зарплате/краткому описанию " +
+            "она МОЖЕТ подойти и стоит открыть полностью для детальной оценки. verdict=\"no\" — только если явно не подходит " +
+            "(видно из названия, работодателя или краткого описания). Сомневаешься — ставь \"yes\": лучше открыть лишнюю карточку, " +
             "чем пропустить подходящую по скудным данным. score всегда 50, reason — до 8 слов.\n");
         sb.append("Верни JSON-массив: [{\"id\":\"...\",\"score\":50,\"verdict\":\"yes\"|\"no\",\"reason\":\"...\"}]. Никакого текста вне массива.\n\n");
         sb.append("КАРТОЧКИ:\n");
@@ -221,6 +256,12 @@ public class VacancyAiAnalyzer {
             sb.append("Работодатель: ").append(h.employerName() != null ? h.employerName() : "").append("\n");
             sb.append("Зарплата: ").append(h.salaryRawText() != null ? h.salaryRawText() : "не указана").append("\n");
             sb.append("Адрес: ").append(h.address() != null ? h.address() : "").append("\n");
+            if (h.snippet() != null && !h.snippet().isBlank()) {
+                // The serp card's own duties/requirements teaser — the strongest signal
+                // available pre-scrape; capped so one verbose card can't bloat the batch.
+                String snippet = h.snippet().length() > 300 ? h.snippet().substring(0, 300) + "…" : h.snippet();
+                sb.append("Кратко о вакансии: ").append(snippet).append("\n");
+            }
         }
         return sb.toString();
     }
@@ -478,12 +519,26 @@ public class VacancyAiAnalyzer {
         conn.setReadTimeout(runtimeConfig.getHttpReadTimeoutMs());
         conn.setDoOutput(true);
 
-        Map<String, Object> requestBody = Map.of(
-            "model", model,
-            "messages", List.of(Map.of("role", "user", "content", prompt)),
-            "temperature", 0.3,
-            "max_tokens", maxTokens
-        );
+        Map<String, Object> requestBody = new LinkedHashMap<>();
+        requestBody.put("model", model);
+        requestBody.put("messages", List.of(Map.of("role", "user", "content", prompt)));
+        requestBody.put("temperature", 0.3);
+        requestBody.put("max_tokens", maxTokens);
+        if (model.contains(",")) {
+            // Comma-separated model list = OpenRouter's server-side fallback routing
+            // ("models" array): each is tried in order until one isn't upstream-rate-limited.
+            // Chosen over the "openrouter/free" router after live logs showed the router
+            // regularly landing on a content-safety guard model (whose entire answer is
+            // "User Safety: safe") and on reasoning models that burn the whole completion
+            // budget thinking — a pinned list of instruct models eliminates both, and
+            // reasoning is explicitly disabled for any hybrid models on the list.
+            // OpenRouter rejects arrays longer than 3, hence the cap.
+            List<String> models = java.util.Arrays.stream(model.split(","))
+                .map(String::trim).filter(s -> !s.isEmpty()).limit(3).toList();
+            requestBody.put("model", models.get(0));
+            requestBody.put("models", models);
+            requestBody.put("reasoning", Map.of("enabled", false));
+        }
         byte[] payload = mapper.writeValueAsBytes(requestBody);
 
         long startNanos = System.nanoTime();

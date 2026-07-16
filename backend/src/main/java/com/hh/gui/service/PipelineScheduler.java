@@ -97,7 +97,8 @@ public class PipelineScheduler implements SchedulingConfigurer {
         }
         for (SearchJob job : jobs) {
             try {
-                VacancyPipelineService.PipelineResult result = pipelineService.runFullPipeline(job);
+                // true = let small fresh AI backlogs accumulate across ticks (see shouldDeferAnalysis)
+                VacancyPipelineService.PipelineResult result = pipelineService.runFullPipeline(job, true);
                 log.info("Пайплайн {} · {} завершён: собрано={}, проанализировано={}, одобрено={}",
                     job.personName, job.searchName, result.collected, result.analyzed, result.approved);
             } catch (Exception e) {

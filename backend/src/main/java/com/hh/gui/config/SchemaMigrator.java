@@ -1,5 +1,6 @@
 package com.hh.gui.config;
 
+import com.hh.gui.util.DedupKeys;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.ApplicationArguments;
@@ -12,6 +13,8 @@ import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Adds columns introduced after a DB was first created — schema.sql's
@@ -53,6 +56,37 @@ public class SchemaMigrator implements ApplicationRunner {
         runIgnoringErrors("CREATE INDEX IF NOT EXISTS idx_searches_is_global ON searches(is_global)");
         runIgnoringErrors("CREATE INDEX IF NOT EXISTS idx_uvs_user_id ON user_vacancy_status(user_id)");
         runIgnoringErrors("CREATE INDEX IF NOT EXISTS idx_uvs_vacancy_id ON user_vacancy_status(vacancy_id)");
+
+        backfillDedupKeys();
+    }
+
+    /**
+     * dedup_key used to be set only on the URL-discovery path, so RSS-discovered rows
+     * (the vast majority) never got one and the cross-city clone reuse in
+     * VacancyPipelineService couldn't fire for them. New rows get their key when
+     * scraped; this fills it in for already-scraped history. Also recomputes keys
+     * ending in '|' — an earlier version built employer-less keys, which could
+     * cross-match unrelated companies sharing a generic title (DedupKeys.compute now
+     * returns "" for those). No-op on every boot after the first.
+     */
+    private void backfillDedupKeys() {
+        try {
+            var rows = jdbc.queryForList(
+                "SELECT id, title, COALESCE(NULLIF(employer_name, ''), company) AS employer FROM vacancies " +
+                "WHERE scrape_status = 'ok' AND (dedup_key IS NULL OR dedup_key = '' OR dedup_key LIKE '%|')");
+            if (rows.isEmpty()) return;
+            List<Object[]> updates = new ArrayList<>();
+            for (var row : rows) {
+                String key = DedupKeys.compute((String) row.get("title"), (String) row.get("employer"));
+                if (!key.isEmpty()) {
+                    updates.add(new Object[]{key, row.get("id")});
+                }
+            }
+            jdbc.batchUpdate("UPDATE vacancies SET dedup_key = ? WHERE id = ?", updates);
+            log.info("Миграция данных: dedup_key заполнен для {} из {} строк без ключа", updates.size(), rows.size());
+        } catch (Exception e) {
+            log.error("Миграция данных: бэкфилл dedup_key не удался: {}", e.getMessage());
+        }
     }
 
     private void runIgnoringErrors(String sql) {

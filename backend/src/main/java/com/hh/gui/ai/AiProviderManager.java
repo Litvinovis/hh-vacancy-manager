@@ -229,12 +229,20 @@ public class AiProviderManager {
         AiProviderConfig p = providers.get(index);
         String shortName = p.getName();
         String model = p.getModel();
+        String suffix = "";
+        if (model != null && model.contains(",")) {
+            // Comma-separated fallback list (see VacancyAiAnalyzer.callLlm) — label by
+            // the primary model plus how many fallbacks stand behind it.
+            String[] list = model.split(",");
+            model = list[0].trim();
+            suffix = "+" + (list.length - 1);
+        }
         if (model != null && !model.isBlank()) {
             String[] parts = model.split("/");
             String shortModel = parts[parts.length - 1]
                 .replace("-3-mini", "")
                 .replace("-2-vision", "");
-            return shortName + "/" + shortModel;
+            return shortName + "/" + shortModel + suffix;
         }
         return shortName;
     }

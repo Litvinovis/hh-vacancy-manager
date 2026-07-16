@@ -227,9 +227,14 @@ async function searchVacancies({ url: rawUrl, text, area, page: pageNum, schedul
         return { ok: false, reason: 'host_not_allowed' };
       }
       if (pageNum) parsed.searchParams.set('page', pageNum);
+      // Cards carry a duties/requirements teaser ONLY with enable_snippets=true —
+      // hh.ru omits the elements entirely otherwise (verified live), and the AI
+      // prescreen downstream depends on that teaser. Forced here so a saved user
+      // URL with the parameter absent (or =false) doesn't silently degrade it.
+      parsed.searchParams.set('enable_snippets', 'true');
       url = parsed.toString();
     } else {
-      url = `https://hh.ru/search/vacancy?text=${encodeURIComponent(text)}&area=${encodeURIComponent(area)}&page=${encodeURIComponent(pageNum)}`;
+      url = `https://hh.ru/search/vacancy?text=${encodeURIComponent(text)}&area=${encodeURIComponent(area)}&page=${encodeURIComponent(pageNum)}&enable_snippets=true`;
       if (schedule) url += `&schedule=${encodeURIComponent(schedule)}`;
       if (salary) url += `&salary=${encodeURIComponent(salary)}`;
     }
@@ -253,6 +258,12 @@ async function searchVacancies({ url: rawUrl, text, area, page: pageNum, schedul
         const salaryEl = c.querySelector('[data-qa="vacancy-serp__vacancy-compensation"]');
         const employerEl = c.querySelector('[data-qa="vacancy-serp__vacancy-employer-text"]');
         const addrEl = c.querySelector('[data-qa="vacancy-serp__vacancy-address"]');
+        // The card's short duties/requirements teaser — fed to the AI prescreen so it
+        // can judge substance (not just the title) before paying for a full page scrape.
+        const snippetParts = [
+          c.querySelector('[data-qa="vacancy-serp__vacancy_snippet_responsibility"]'),
+          c.querySelector('[data-qa="vacancy-serp__vacancy_snippet_requirement"]'),
+        ].filter(Boolean).map((el) => el.textContent.trim()).filter((t) => t);
         // Primary source of the id: the /vacancy/{id} href of the title link —
         // "first element carrying any id attribute" broke silently on layout
         // changes before; keep it only as a fallback.
@@ -264,6 +275,7 @@ async function searchVacancies({ url: rawUrl, text, area, page: pageNum, schedul
           employerName: employerEl ? employerEl.textContent.trim() : null,
           salaryRawText: salaryEl ? salaryEl.textContent.trim() : null,
           address: addrEl ? addrEl.textContent.trim() : null,
+          snippet: snippetParts.length ? snippetParts.join(' ') : null,
           url: titleLink ? titleLink.getAttribute('href') : null,
         };
       })

@@ -124,7 +124,7 @@ class VacancyPipelineServiceTest {
     }
 
     private ScraperClient.SearchHit hit(String hhId, String title) {
-        return new ScraperClient.SearchHit(hhId, title, "ООО Ромашка", null, "Уфа", "https://hh.ru/vacancy/" + hhId);
+        return new ScraperClient.SearchHit(hhId, title, "ООО Ромашка", null, "Уфа", null, "https://hh.ru/vacancy/" + hhId);
     }
 
     @Test
@@ -243,7 +243,7 @@ class VacancyPipelineServiceTest {
     // ── discoverFromUrl: ранний стоп не должен терять уже собранные новые хиты ──
 
     private static ScraperClient.SearchHit hit(String hhId) {
-        return new ScraperClient.SearchHit(hhId, "Вакансия " + hhId, "ООО Ромашка", null, null,
+        return new ScraperClient.SearchHit(hhId, "Вакансия " + hhId, "ООО Ромашка", null, null, null,
             "https://hh.ru/vacancy/" + hhId);
     }
 
@@ -334,5 +334,80 @@ class VacancyPipelineServiceTest {
         assertEquals(2, saved, "новые вакансии и до, и после полностью известной страницы должны сохраниться");
         assertEquals(List.of("101", "102"), repo.saved.stream().map(Vacancy::getHhId).toList());
         assertEquals(3, scraper.calls, "должны быть запрошены все 3 страницы, включая ту, что идёт после 100%-известной");
+    }
+
+    // ── analyzeBatchWithDedup: схлопывание клонов по dedup_key внутри одного пакета ──
+
+    /** Репозиторий для анализа: без уже готовых вердиктов, копит вызовы updateAiResult. */
+    private static class FakeAnalyzeRepo extends VacancyRepository {
+        final List<String> aiResultsFor = new ArrayList<>();
+        FakeAnalyzeRepo() { super(null); }
+        @Override
+        public void updateCriteriaHashBatch(List<Long> ids, String criteriaHash) {}
+        @Override
+        public java.util.Optional<Vacancy> findAnalyzedByHhIdAndCriteriaHash(String hhId, String criteriaHash) {
+            return java.util.Optional.empty();
+        }
+        @Override
+        public java.util.Optional<Vacancy> findAnalyzedByDedupKeyAndCriteriaHash(String dedupKey, String criteriaHash) {
+            return java.util.Optional.empty();
+        }
+        @Override
+        public void updateAiResult(String hhId, String person, String searchName, int score, String verdict, String reason) {
+            aiResultsFor.add(hhId);
+        }
+        @Override
+        public void incrementAiAttemptsBatch(List<Long> ids) {}
+        @Override
+        public int markAiExhausted(String person, String searchName, int maxAttempts) { return 0; }
+    }
+
+    /** Отвечает вердиктом на всё, что прислали, и запоминает размер пакета, ушедшего в LLM. */
+    private static class FakeBatchAnalyzer extends VacancyAiAnalyzer {
+        final List<Integer> llmBatchSizes = new ArrayList<>();
+        FakeBatchAnalyzer(RuntimeConfig config) { super(config, null, null); }
+        @Override
+        public String computeCriteriaHash(SearchJob job) { return "hash"; }
+        @Override
+        public List<AiResult> analyzeBatch(List<Vacancy> vacancies, SearchJob job) {
+            llmBatchSizes.add(vacancies.size());
+            return vacancies.stream().map(v -> new AiResult(v.getHhId(), 70, "yes", "ок")).toList();
+        }
+    }
+
+    private static Vacancy pendingVacancy(String hhId, String dedupKey) {
+        Vacancy v = new Vacancy();
+        v.setId(Long.parseLong(hhId));
+        v.setHhId(hhId);
+        v.setTitle("Вакансия " + hhId);
+        v.setDedupKey(dedupKey);
+        return v;
+    }
+
+    @Test
+    void analyzeBatchWithDedup_cityClonesInSameBatch_onlyRepresentativeGoesToLlm() throws Exception {
+        // Живой сценарий: пачка pending содержит 3 клона одной вакансии (один dedup_key,
+        // разные hh_id по городам) и 1 без ключа — в LLM должны уйти 2, вердикт — на все 4.
+        RuntimeConfig config = new RuntimeConfig();
+        FakeAnalyzeRepo repo = new FakeAnalyzeRepo();
+        FakeBatchAnalyzer analyzer = new FakeBatchAnalyzer(config);
+        VacancyPipelineService svc = new VacancyPipelineService(
+            null, null, analyzer, repo, null, config,
+            new com.hh.gui.ai.AiMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry(), config));
+
+        List<Vacancy> batch = List.of(
+            pendingVacancy("1", "поддержка|т банк"),
+            pendingVacancy("2", "поддержка|т банк"),
+            pendingVacancy("3", "поддержка|т банк"),
+            pendingVacancy("4", null));
+
+        Method m = VacancyPipelineService.class.getDeclaredMethod("analyzeBatchWithDedup", List.class, SearchJob.class);
+        m.setAccessible(true);
+        int analyzed = (int) m.invoke(svc, batch, urlJob());
+
+        assertEquals(List.of(2), analyzer.llmBatchSizes, "в LLM должны уйти представитель клонов и вакансия без ключа");
+        assertEquals(4, analyzed, "все 4 вакансии должны считаться обработанными");
+        assertEquals(Set.of("1", "2", "3", "4"), Set.copyOf(repo.aiResultsFor),
+            "вердикт должен быть записан каждой вакансии, включая клонов");
     }
 }
