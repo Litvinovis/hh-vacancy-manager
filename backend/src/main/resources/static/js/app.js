@@ -118,7 +118,7 @@ function ringSvg(size, radius, strokeWidth, score, isPending) {
 }
 
 function statusLabel(status) {
-  const map = { new: 'Новые', favorite: 'Избранное', applied: 'Отклик', rejected: 'Отклонено', fraud: 'Обман' };
+  const map = { new: 'Новые', favorite: 'Избранное', applied: 'Отклик', rejected: 'Отклонено', fraud: 'Обман', closed: 'Закрытые' };
   return map[status] || status || '—';
 }
 
@@ -166,6 +166,7 @@ async function loadStats() {
     document.getElementById('cnt-applied').textContent = s.byStatus?.applied || 0;
     document.getElementById('cnt-rejected').textContent = s.byStatus?.rejected || 0;
     document.getElementById('cnt-fraud').textContent = s.byStatus?.fraud || 0;
+    document.getElementById('cnt-closed').textContent = s.byStatus?.closed || 0;
 
     // Progress
     const total = s.total || 1;

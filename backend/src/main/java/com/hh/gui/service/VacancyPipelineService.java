@@ -401,7 +401,7 @@ public class VacancyPipelineService {
     // site-wide signal where every next attempt in this run is just as likely to fail too.
     // As a backstop against a 403 rate-limit that doesn't carry the DDoS-Guard signature,
     // scrapePending still bails out when too many 403s pile up in one run.
-    private static final Set<String> PER_VACANCY_FAILURE_REASONS = Set.of("not_found", "no_job_posting_data", "http_403");
+    private static final Set<String> PER_VACANCY_FAILURE_REASONS = Set.of("not_found", "no_job_posting_data", "http_403", "archived");
     private static final int MAX_HTTP_403_PER_RUN = 8;
     private static final int MAX_CONSECUTIVE_SCRAPE_FAILURES = 3;
     // Per-vacancy failed attempts (page loads with no JobPosting data) before a row
@@ -493,7 +493,9 @@ public class VacancyPipelineService {
                 consecutiveFailures = 0;
                 onScrapeSuccess();
             } else {
-                v.setScrapeStatus("not_found".equals(r.reason()) ? "not_found" : "failed");
+                // archived is terminal like not_found — the posting exists but is closed;
+                // retrying the scrape will never make it analyzable.
+                v.setScrapeStatus("not_found".equals(r.reason()) || "archived".equals(r.reason()) ? "not_found" : "failed");
                 log.warn("Скрейпинг {} ({} · {}) не удался: {}", v.getHhId(), job.personName, job.searchName, r.reason());
                 if (isSiteWideFailure(r.reason())) {
                     consecutiveFailures++;
@@ -529,6 +531,72 @@ public class VacancyPipelineService {
             }
         }
         return count;
+    }
+
+    // Freshness re-check pacing (see checkVacancyFreshness): a 7-day cadence over the
+    // ~3.6k 'yes' postings needs ~520 checks/day; 5 per 10-minute scheduler tick caps
+    // at ~720/day — enough headroom, spread perfectly evenly, and each page load still
+    // goes through the sidecar's human-paced queue. No bursts an anti-bot could latch onto.
+    static final int FRESHNESS_RECHECK_DAYS = 7;
+    public static final int FRESHNESS_BATCH_PER_TICK = 5;
+
+    /**
+     * Re-verifies that approved ('yes') postings are still live on hh.ru — they get
+     * archived and deleted all the time, and a dead posting in the UI or a Telegram
+     * report wastes the reader's attention. Each posting is re-checked at most once
+     * per FRESHNESS_RECHECK_DAYS, oldest-confirmation first (expired valid_through
+     * jumps the queue — see findDueFreshnessCheck).
+     *
+     * Deliberately the lowest-priority scraper client: skips entirely while any NEW
+     * vacancy still waits for its first scrape, or while the scrape cooldown is
+     * active, so it only ever consumes idle capacity.
+     */
+    public FreshnessResult checkVacancyFreshness(int limit) {
+        FreshnessResult result = new FreshnessResult();
+        if (isScrapeCoolingDown()) return result;
+        if (vacancyRepo.countScrapeBacklog(MAX_SCRAPE_ATTEMPTS) > 0) return result;
+
+        List<Vacancy> due = vacancyRepo.findDueFreshnessCheck(FRESHNESS_RECHECK_DAYS, limit);
+        for (Vacancy v : due) {
+            if (isScrapeCoolingDown()) break; // a parallel run may have hit a block mid-loop
+            ScrapeResult r = scraperClient.scrape(v.getHhId());
+            if (r.ok()) {
+                // Alive — refresh the content too: salary/description edits are common.
+                applyScrapeResult(v, r);
+                v.setScrapeStatus("ok");
+                vacancyRepo.updateScraped(v);
+                vacancyRepo.markFreshnessChecked(v.getId());
+                result.alive++;
+                onScrapeSuccess();
+            } else if ("archived".equals(r.reason()) || "not_found".equals(r.reason())) {
+                vacancyRepo.markClosed(v.getId());
+                result.closed++;
+                log.info("Актуализация: вакансия {} ({} · {}) снята с hh.ru ({}) — скрыта",
+                    v.getHhId(), v.getPerson(), v.getSearchName(), r.reason());
+            } else if (isSiteWideFailure(r.reason())) {
+                // Same signal scrapePending freezes on — don't grind a blocked session
+                // for the sake of a background chore; the rows stay due for later.
+                log.warn("Актуализация остановлена: {} — оставшиеся проверки подождут", r.reason());
+                break;
+            } else {
+                // Per-vacancy hiccup (403/render glitch) — inconclusive, not proof of
+                // death: stamp the check so this row waits its full interval again
+                // instead of being retried every tick.
+                vacancyRepo.markFreshnessChecked(v.getId());
+                result.inconclusive++;
+            }
+        }
+        if (result.alive + result.closed + result.inconclusive > 0) {
+            log.info("Актуализация вакансий: живых {}, закрытых {}, неясных {}",
+                result.alive, result.closed, result.inconclusive);
+        }
+        return result;
+    }
+
+    public static class FreshnessResult {
+        public int alive;
+        public int closed;
+        public int inconclusive;
     }
 
     private void copyScraped(Vacancy from, Vacancy to) {

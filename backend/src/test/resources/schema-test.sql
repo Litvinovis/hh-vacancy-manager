@@ -71,10 +71,14 @@ CREATE TABLE IF NOT EXISTS vacancies (
     source VARCHAR(32) DEFAULT 'hh',
     source_query VARCHAR(256),
     is_remote BOOLEAN DEFAULT FALSE,
-    notified BOOLEAN DEFAULT FALSE,
+    -- INTEGER 0/1 как в проде (schema.sql): H2 BOOLEAN не сравним с 0/1 в
+    -- запросах вида "notified = 0" — тесты падали там, где прод работает.
+    notified INTEGER DEFAULT 0,
     published_at VARCHAR(64),
     found_by_scan INTEGER DEFAULT 0,
     dedup_key VARCHAR(512) DEFAULT '',
+    last_checked_at VARCHAR(64) DEFAULT NULL,
+    closed_at VARCHAR(64) DEFAULT NULL,
     UNIQUE(hh_id, person, search_name)
 );
 

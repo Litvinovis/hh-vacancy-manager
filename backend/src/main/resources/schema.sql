@@ -91,6 +91,10 @@ CREATE TABLE IF NOT EXISTS vacancies (
     -- recognize "same real posting, different city" (e.g. the same remote support
     -- role listed separately for Moscow and Ufa) even though hh_id differs.
     dedup_key TEXT DEFAULT '',
+    -- Freshness re-check: when the posting was last confirmed live on hh.ru,
+    -- and when it was found closed/archived (NULL = considered active).
+    last_checked_at TEXT DEFAULT NULL,
+    closed_at TEXT DEFAULT NULL,
     UNIQUE(hh_id, person, search_name)
 );
 

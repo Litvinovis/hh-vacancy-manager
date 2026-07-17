@@ -453,6 +453,65 @@ class VacancyRepositoryTest {
 
     // ── Helper factory methods ──
 
+    // ── Актуализация (liveness re-check): findDueFreshnessCheck / markClosed / скрытие закрытых ──
+
+    private Long saveApproved(String hhId, String createdAt, String validThrough) {
+        Vacancy v = createTestVacancy(hhId, "Approved " + hhId, "new");
+        v.setAiVerdict("yes");
+        v.setScrapeStatus("ok");
+        v.setAiScore(80);
+        v.setCreatedAt(createdAt);
+        v.setValidThrough(validThrough != null ? validThrough : "");
+        return vacancyRepo.save(v).getId();
+    }
+
+    @Test
+    void findDueFreshnessCheck_returnsOnlyStaleYes_expiredValidThroughFirst() {
+        String old = java.time.Instant.now().minusSeconds(10 * 24 * 3600).toString();
+        Long expired = saveApproved("fr-expired", old, "2020-01-01");   // старый + истёкший срок
+        Long stale = saveApproved("fr-stale", old, "2099-01-01");       // старый, срок не истёк
+        saveApproved("fr-fresh", java.time.Instant.now().toString(), null); // свежий — не due
+        Vacancy no = createTestVacancy("fr-no", "Rejected by AI", "new");   // не yes — не due
+        no.setAiVerdict("no");
+        no.setScrapeStatus("ok");
+        no.setCreatedAt(old);
+        vacancyRepo.save(no);
+
+        List<Vacancy> due = vacancyRepo.findDueFreshnessCheck(7, 10);
+
+        assertEquals(List.of(expired, stale), due.stream().map(Vacancy::getId).toList(),
+            "due только устаревшие yes-строки, истёкший valid_through — первым");
+    }
+
+    @Test
+    void findDueFreshnessCheck_recheckedRowWaitsFullIntervalAgain() {
+        String old = java.time.Instant.now().minusSeconds(10 * 24 * 3600).toString();
+        Long id = saveApproved("fr-recheck", old, null);
+        assertEquals(1, vacancyRepo.findDueFreshnessCheck(7, 10).size());
+
+        vacancyRepo.markFreshnessChecked(id);
+
+        assertTrue(vacancyRepo.findDueFreshnessCheck(7, 10).isEmpty(),
+            "после проверки строка снова ждёт полный интервал");
+    }
+
+    @Test
+    void markClosed_hidesFromListsCountsAndReports() {
+        String old = java.time.Instant.now().minusSeconds(10 * 24 * 3600).toString();
+        Long id = saveApproved("fr-closed", old, null);
+
+        vacancyRepo.markClosed(id);
+
+        assertTrue(vacancyRepo.findDueFreshnessCheck(7, 10).isEmpty(), "закрытая не проверяется повторно");
+        assertTrue(vacancyRepo.findAll(null, null, null, null, null, null, null, null, null, null,
+            null, 0, 100).isEmpty(), "закрытая скрыта из списка по умолчанию");
+        assertEquals(1, vacancyRepo.findAll("closed", null, null, null, null, null, null, null, null, null,
+            null, 0, 100).size(), "но доступна по фильтру closed");
+        assertTrue(vacancyRepo.findUnnotifiedApproved("test-person", "test-search", 50, 10).isEmpty(),
+            "закрытая не попадает в Telegram-отчёт");
+        assertEquals(1, vacancyRepo.countByStatus(null).get("closed"));
+    }
+
     private Vacancy createTestVacancy(String hhId, String title, String status) {
         Vacancy v = new Vacancy();
         v.setHhId(hhId);

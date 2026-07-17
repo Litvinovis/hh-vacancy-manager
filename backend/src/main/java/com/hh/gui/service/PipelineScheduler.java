@@ -78,6 +78,20 @@ public class PipelineScheduler implements SchedulingConfigurer {
         PeriodicTrigger freeModelTrigger = new PeriodicTrigger(FREE_MODEL_REFRESH_INTERVAL);
         freeModelTrigger.setInitialDelay(FREE_MODEL_REFRESH_INITIAL_DELAY);
         registrar.addTriggerTask(this::refreshFreeModels, freeModelTrigger);
+        // Liveness re-checks of approved postings — a background chore that only eats
+        // idle scraper capacity (see checkVacancyFreshness's own guards).
+        PeriodicTrigger freshnessTrigger = new PeriodicTrigger(Duration.ofMinutes(10));
+        freshnessTrigger.setInitialDelay(Duration.ofMinutes(5));
+        registrar.addTriggerTask(this::runFreshnessCheck, freshnessTrigger);
+    }
+
+    private void runFreshnessCheck() {
+        if (!runtimeConfig.isPipelineEnabled()) return;
+        try {
+            pipelineService.checkVacancyFreshness(VacancyPipelineService.FRESHNESS_BATCH_PER_TICK);
+        } catch (Exception e) {
+            log.error("Актуализация вакансий завершилась ошибкой: {}", e.getMessage(), e);
+        }
     }
 
     private void refreshFreeModels() {
