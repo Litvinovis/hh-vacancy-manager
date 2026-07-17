@@ -67,6 +67,8 @@ public class VacancyRepository {
             v.setSearchId(rs.wasNull() ? null : searchId);
             v.setCriteriaHash(rs.getString("criteria_hash"));
             v.setDedupKey(rs.getString("dedup_key"));
+            v.setLastCheckedAt(rs.getString("last_checked_at"));
+            v.setClosedAt(rs.getString("closed_at"));
             return v;
         };
     }
@@ -85,7 +87,14 @@ public class VacancyRepository {
         }
 
         List<String> conditions = new ArrayList<>();
-        if (status != null && !status.isEmpty() && !"all".equals(status)) {
+        // Postings found closed/archived on hh.ru are hidden everywhere by default —
+        // they're kept in the DB for dedup history, and reachable via status='closed'.
+        if ("closed".equals(status)) {
+            conditions.add("v.closed_at IS NOT NULL");
+        } else {
+            conditions.add("v.closed_at IS NULL");
+        }
+        if (status != null && !status.isEmpty() && !"all".equals(status) && !"closed".equals(status)) {
             if ("pending".equals(status)) {
                 conditions.add("v.ai_verdict = 'pending'");
             } else if ("fraud".equals(status)) {
@@ -134,9 +143,7 @@ public class VacancyRepository {
             params.add(userId);
         }
 
-        if (!conditions.isEmpty()) {
-            sql.append(" WHERE ").append(String.join(" AND ", conditions));
-        }
+        sql.append(" WHERE ").append(String.join(" AND ", conditions));
 
         // Sort
         String orderBy = switch (sort != null ? sort : "score_desc") {
@@ -170,7 +177,13 @@ public class VacancyRepository {
         }
 
         List<String> conditions = new ArrayList<>();
-        if (status != null && !status.isEmpty() && !"all".equals(status)) {
+        // Mirrors findAll: closed postings are hidden unless explicitly requested.
+        if ("closed".equals(status)) {
+            conditions.add("v.closed_at IS NOT NULL");
+        } else {
+            conditions.add("v.closed_at IS NULL");
+        }
+        if (status != null && !status.isEmpty() && !"all".equals(status) && !"closed".equals(status)) {
             if ("pending".equals(status)) {
                 conditions.add("v.ai_verdict = 'pending'");
             } else if ("fraud".equals(status)) {
@@ -219,9 +232,7 @@ public class VacancyRepository {
             params.add(userId);
         }
 
-        if (!conditions.isEmpty()) {
-            sql.append(" WHERE ").append(String.join(" AND ", conditions));
-        }
+        sql.append(" WHERE ").append(String.join(" AND ", conditions));
 
         Integer count = jdbc.queryForObject(sql.toString(), Integer.class, params.toArray());
         return count != null ? count : 0;
@@ -449,9 +460,48 @@ public class VacancyRepository {
     public List<Vacancy> findUnnotifiedApproved(String person, String searchName, int minScore, int limit) {
         return jdbc.query(
             "SELECT * FROM vacancies WHERE person=? AND search_name=? " +
-            "AND ai_verdict='yes' AND ai_score >= ? AND notified = 0 " +
+            "AND ai_verdict='yes' AND ai_score >= ? AND notified = 0 AND closed_at IS NULL " +
             "ORDER BY ai_score DESC, published_at DESC LIMIT ?",
             rowMapper, person, searchName, minScore, limit);
+    }
+
+    /**
+     * Approved postings due for a liveness re-check on hh.ru (see
+     * VacancyPipelineService.checkVacancyFreshness): only 'yes' verdicts anyone
+     * actually sees, not yet known closed, last confirmed (or first saved) more
+     * than checkIntervalDays ago. Postings whose own valid_through has passed go
+     * first — hh.ru extends postings routinely, so expiry alone never closes a
+     * row, it only raises its check priority.
+     */
+    public List<Vacancy> findDueFreshnessCheck(int checkIntervalDays, int limit) {
+        String threshold = Instant.now().minusSeconds(checkIntervalDays * 24L * 3600).toString();
+        String today = Instant.now().toString().substring(0, 10);
+        return jdbc.query(
+            "SELECT * FROM vacancies WHERE ai_verdict='yes' AND closed_at IS NULL " +
+            "AND (status IS NULL OR status != 'rejected') AND scrape_status='ok' " +
+            "AND COALESCE(last_checked_at, created_at) < ? " +
+            "ORDER BY CASE WHEN valid_through != '' AND valid_through < ? THEN 0 ELSE 1 END, " +
+            "COALESCE(last_checked_at, created_at) ASC LIMIT ?",
+            rowMapper, threshold, today, limit);
+    }
+
+    /** The posting was confirmed still live (or the check was inconclusive) — next check in another interval. */
+    public void markFreshnessChecked(Long id) {
+        jdbc.update("UPDATE vacancies SET last_checked_at=? WHERE id=?", Instant.now().toString(), id);
+    }
+
+    /** The posting is gone from hh.ru (archived/deleted) — hide it from lists and reports, keep for dedup history. */
+    public void markClosed(Long id) {
+        String now = Instant.now().toString();
+        jdbc.update("UPDATE vacancies SET closed_at=?, last_checked_at=?, updated_at=? WHERE id=?", now, now, now, id);
+    }
+
+    /** Total scrape backlog across all jobs — new content always outranks freshness re-checks. */
+    public int countScrapeBacklog(int maxAttempts) {
+        Integer count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM vacancies WHERE scrape_status IN ('pending','failed') AND scrape_attempts < ?",
+            Integer.class, maxAttempts);
+        return count != null ? count : 0;
     }
 
     /**
@@ -651,6 +701,8 @@ public class VacancyRepository {
         result.put("fraud", fraud);
         Integer newPending = queryCount("SELECT COUNT(*) FROM vacancies WHERE status = 'new' AND ai_verdict = 'pending'" + scope, userId);
         result.put("newPending", newPending);
+        Integer closed = queryCount("SELECT COUNT(*) FROM vacancies WHERE closed_at IS NOT NULL" + scope, userId);
+        result.put("closed", closed);
         return result;
     }
 

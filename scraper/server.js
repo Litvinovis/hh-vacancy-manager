@@ -360,8 +360,15 @@ async function scrapeVacancy(hhId) {
     }
 
     if (!ld || ld['@type'] !== 'JobPosting') {
-      // Page loaded but didn't render the expected structure (archived vacancy,
-      // unexpected layout, or a bot-challenge page slipping through).
+      // An archived/closed posting renders a real page with an explicit banner but no
+      // JobPosting data — that's a definitive "vacancy is gone" (the freshness
+      // re-check hides such rows), not the render glitch no_job_posting_data implies.
+      const bodyText = await page.evaluate(() => document.body.innerText).catch(() => '');
+      if (/вакансия в архиве|вакансия закрыта|вакансия не найдена или скрыта/i.test(bodyText)) {
+        return { ok: false, reason: 'archived' };
+      }
+      // Page loaded but didn't render the expected structure (unexpected layout,
+      // or a bot-challenge page slipping through).
       return { ok: false, reason: 'no_job_posting_data' };
     }
 

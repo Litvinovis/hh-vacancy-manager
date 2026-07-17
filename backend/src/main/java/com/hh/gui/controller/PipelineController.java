@@ -294,6 +294,27 @@ public class PipelineController {
     }
 
     /**
+     * POST /api/pipeline/freshness-check — manually run one liveness re-check batch
+     * (the same pass the 10-minute schedule runs; see checkVacancyFreshness).
+     */
+    @PostMapping("/pipeline/freshness-check")
+    public ResponseEntity<Map<String, Object>> freshnessCheck(
+            @RequestBody(required = false) Map<String, Object> body,
+            @RequestAttribute("currentUser") User currentUser) {
+        if (!currentUser.isAdmin()) return ResponseEntity.status(403).body(Map.of("error", "Требуются права администратора"));
+        int limit = VacancyPipelineService.FRESHNESS_BATCH_PER_TICK;
+        if (body != null && body.get("limit") instanceof Number n) {
+            limit = Math.max(1, Math.min(50, n.intValue()));
+        }
+        VacancyPipelineService.FreshnessResult r = pipelineService.checkVacancyFreshness(limit);
+        Map<String, Object> resp = new LinkedHashMap<>();
+        resp.put("alive", r.alive);
+        resp.put("closed", r.closed);
+        resp.put("inconclusive", r.inconclusive);
+        return ResponseEntity.ok(resp);
+    }
+
+    /**
      * POST /api/ai/reset-provider — manually reset to primary
      */
     @PostMapping("/ai/reset-provider")

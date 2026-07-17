@@ -410,4 +410,79 @@ class VacancyPipelineServiceTest {
         assertEquals(Set.of("1", "2", "3", "4"), Set.copyOf(repo.aiResultsFor),
             "вердикт должен быть записан каждой вакансии, включая клонов");
     }
+
+    // ── checkVacancyFreshness: актуализация одобренных вакансий ──
+
+    private static class FakeFreshnessRepo extends VacancyRepository {
+        List<Vacancy> due = new ArrayList<>();
+        int backlog = 0;
+        final List<Long> checked = new ArrayList<>();
+        final List<Long> closed = new ArrayList<>();
+        FakeFreshnessRepo() { super(null); }
+        @Override
+        public int countScrapeBacklog(int maxAttempts) { return backlog; }
+        @Override
+        public List<Vacancy> findDueFreshnessCheck(int days, int limit) { return due; }
+        @Override
+        public void markFreshnessChecked(Long id) { checked.add(id); }
+        @Override
+        public void markClosed(Long id) { closed.add(id); }
+        @Override
+        public void updateScraped(Vacancy v) {}
+    }
+
+    private static class FreshnessScraper extends ScraperClient {
+        final java.util.Map<String, ScrapeResult> byId = new java.util.HashMap<>();
+        int calls = 0;
+        FreshnessScraper(RuntimeConfig config) { super(config); }
+        @Override
+        public ScrapeResult scrape(String hhId) {
+            calls++;
+            return byId.get(hhId);
+        }
+    }
+
+    private static ScraperClient.ScrapeResult failResult(String reason) {
+        return new ScraperClient.ScrapeResult(false, reason, null, null, null, null, null, null, null,
+            null, null, null, null, null, List.of(), false, null, null);
+    }
+
+    @Test
+    void checkVacancyFreshness_aliveArchivedAndInconclusive_handledDistinctly() {
+        RuntimeConfig config = new RuntimeConfig();
+        FakeFreshnessRepo repo = new FakeFreshnessRepo();
+        repo.due = List.of(pendingVacancy("11", null), pendingVacancy("12", null), pendingVacancy("13", null));
+        FreshnessScraper scraper = new FreshnessScraper(config);
+        scraper.byId.put("11", new ScraperClient.ScrapeResult(true, null, "Живая", "Ромашка", "<p>desc</p>",
+            null, null, null, null, "Уфа", null, null, null, null, List.of(), false, null, null));
+        scraper.byId.put("12", failResult("archived"));
+        scraper.byId.put("13", failResult("http_403"));
+        VacancyPipelineService svc = new VacancyPipelineService(
+            null, scraper, new FakeAnalyzer(config), repo, null, config, null);
+
+        VacancyPipelineService.FreshnessResult r = svc.checkVacancyFreshness(5);
+
+        assertEquals(1, r.alive);
+        assertEquals(1, r.closed);
+        assertEquals(1, r.inconclusive);
+        assertEquals(List.of(12L), repo.closed, "архивная помечена закрытой");
+        // Живая и неубедительная (403) — обе получают штамп проверки, чтобы ждать полный интервал.
+        assertEquals(List.of(11L, 13L), repo.checked);
+    }
+
+    @Test
+    void checkVacancyFreshness_newContentBacklog_alwaysWins() {
+        RuntimeConfig config = new RuntimeConfig();
+        FakeFreshnessRepo repo = new FakeFreshnessRepo();
+        repo.backlog = 3; // очередь скрейпа новых вакансий не пуста
+        repo.due = List.of(pendingVacancy("11", null));
+        FreshnessScraper scraper = new FreshnessScraper(config);
+        VacancyPipelineService svc = new VacancyPipelineService(
+            null, scraper, new FakeAnalyzer(config), repo, null, config, null);
+
+        VacancyPipelineService.FreshnessResult r = svc.checkVacancyFreshness(5);
+
+        assertEquals(0, r.alive + r.closed + r.inconclusive);
+        assertEquals(0, scraper.calls, "актуализация не должна конкурировать со скрейпом новых вакансий");
+    }
 }

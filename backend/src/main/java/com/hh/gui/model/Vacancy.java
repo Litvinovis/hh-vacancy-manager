@@ -49,6 +49,12 @@ public class Vacancy {
     private String criteriaHash;
     private String dedupKey;
 
+    // Freshness re-check (see VacancyPipelineService.checkVacancyFreshness):
+    // when we last confirmed the posting is still live, and when it was found
+    // closed/archived on hh.ru (null = considered active).
+    private String lastCheckedAt;
+    private String closedAt;
+
     // Default constructor
     public Vacancy() {}
 
@@ -172,4 +178,10 @@ public class Vacancy {
 
     public String getDedupKey() { return dedupKey; }
     public void setDedupKey(String dedupKey) { this.dedupKey = dedupKey; }
+
+    public String getLastCheckedAt() { return lastCheckedAt; }
+    public void setLastCheckedAt(String lastCheckedAt) { this.lastCheckedAt = lastCheckedAt; }
+
+    public String getClosedAt() { return closedAt; }
+    public void setClosedAt(String closedAt) { this.closedAt = closedAt; }
 }
