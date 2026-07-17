@@ -29,6 +29,30 @@ class AiProviderManagerTest {
     }
 
     @Test
+    void fallback_returnsToPrimaryAfterWindow() throws Exception {
+        // Инцидент 2026-07-17: FALLBACK был «липким» навсегда — один транзитный 429
+        // припарковал цепочку на fallback с протухшим ключом на ~10 часов.
+        long saved = AiProviderManager.fallbackRetryPrimaryMs;
+        AiProviderManager.fallbackRetryPrimaryMs = 50;
+        try {
+            manager.switchToFallback();
+            assertEquals("fallback", manager.getCurrentProviderName());
+            Thread.sleep(80);
+            assertEquals("primary", manager.getCurrentProviderName(),
+                "после окна цепочка должна сама вернуться на primary");
+        } finally {
+            AiProviderManager.fallbackRetryPrimaryMs = saved;
+        }
+    }
+
+    @Test
+    void fallback_staysWithinWindow() {
+        manager.switchToFallback();
+        // Окно (15 мин по умолчанию) не истекло — остаёмся на fallback.
+        assertEquals("fallback", manager.getCurrentProviderName());
+    }
+
+    @Test
     void startsOnPrimaryProvider() {
         assertEquals("primary", manager.getCurrentProviderName());
         assertFalse(manager.isInCooldown());

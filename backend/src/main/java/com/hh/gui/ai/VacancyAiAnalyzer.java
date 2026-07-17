@@ -284,8 +284,18 @@ public class VacancyAiAnalyzer {
 
     /**
      * Analyze with exponential backoff retry.
-     * On 429 (rate limit): switch to the next provider in the chain.
-     * If all providers are rate limited, enter cooldown.
+     *
+     * 429 no longer abandons the provider on first sight — with OpenRouter's free
+     * pool a top-level 429 is usually a moment of upstream congestion that clears in
+     * seconds (the "models" fallback array already absorbs per-model limits), and the
+     * 2026-07-17 incident showed what instant switching costs: one transient 429
+     * flipped the chain onto a fallback whose key had silently expired, and analysis
+     * hung there for ~10 hours. Now: 429 → backoff-retry the SAME provider up to
+     * maxRetries, and only then advance down the chain (cooldown when it runs out).
+     *
+     * 401/403 is the opposite case — dead credentials never heal by retrying, so the
+     * chain advances immediately (same incident: three 30-second retry cycles against
+     * "Bad credentials" per batch, 1559 wasted requests).
      */
     private List<AiResult> analyzeWithRetry(List<Vacancy> vacancies, SearchJob job, int maxRetries)
             throws Exception {
@@ -300,21 +310,25 @@ public class VacancyAiAnalyzer {
                 return analyzeChunk(vacancies, job);
             } catch (Exception e) {
                 attempt++;
-                boolean isRateLimit = e.getMessage() != null && e.getMessage().contains("429");
+                String msg = e.getMessage() != null ? e.getMessage() : "";
+                boolean isRateLimit = msg.contains("429");
+                boolean isAuthError = msg.contains("401") || msg.contains("403");
 
-                if (isRateLimit) {
+                if (isAuthError || (isRateLimit && attempt >= maxRetries)) {
                     String currentProvider = providerManager.getCurrentProviderName();
                     providerManager.switchToFallback();
                     if (providerManager.isInCooldown()) {
-                        log.warn("Все провайдеры rate limited. Cooldown. Последний был: {}", currentProvider);
-                        throw new RuntimeException("All providers rate limited, entering cooldown");
+                        log.warn("Провайдеры исчерпаны ({}). Cooldown. Последний был: {}", msg, currentProvider);
+                        throw new RuntimeException("All providers exhausted, entering cooldown");
                     }
-                    String nextProvider = providerManager.getCurrentProviderName();
-                    log.warn("429 от {}. Переключаемся на провайдера: {}", currentProvider, nextProvider);
+                    log.warn("{} от {}. Переключаемся на провайдера: {}",
+                        isAuthError ? "Ошибка авторизации" : "Стабильный 429",
+                        currentProvider, providerManager.getCurrentProviderName());
+                    attempt = 0; // свежий бюджет попыток для нового провайдера
                     continue;
                 }
 
-                if (attempt >= maxRetries) {
+                if (!isRateLimit && attempt >= maxRetries) {
                     log.error("AI-анализ не удался после {} попыток: {}", maxRetries, e.getMessage());
                     throw e;
                 }

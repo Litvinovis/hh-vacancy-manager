@@ -33,6 +33,14 @@ public class AiProviderManager {
     private ProviderState state = ProviderState.PRIMARY;
     private int currentIndex = 0;
     private long cooldownUntil = 0;
+    private long fallbackSince = 0;
+
+    // How long the chain may stay on a fallback before re-trying the primary.
+    // FALLBACK used to be sticky forever (only a cooldown or a manual reset ever
+    // returned to primary) — on 2026-07-17 one transient 429 from openrouter parked
+    // the chain on a fallback with expired credentials for ~10 hours. Non-final and
+    // package-visible for tests.
+    static long fallbackRetryPrimaryMs = 15 * 60 * 1000;
 
     public AiProviderManager(RuntimeConfig runtimeConfig, AiMetrics metrics) {
         this.runtimeConfig = runtimeConfig;
@@ -130,10 +138,11 @@ public class AiProviderManager {
             String currentName = getCurrentProviderName();
             currentIndex++;
             String nextName = getCurrentProviderName();
-            log.warn("Провайдер {} rate limited (429). Переключаемся на {}.", currentName, nextName);
+            log.warn("Провайдер {} недоступен. Переключаемся на {}.", currentName, nextName);
             metrics.recordRateLimit(currentName);
             metrics.recordProviderSwitch(currentName, nextName);
             state = ProviderState.FALLBACK;
+            fallbackSince = System.currentTimeMillis();
         } else {
             String currentName = getCurrentProviderName();
             log.warn("Последний провайдер {} (429), fallback недоступен. Входим в cooldown.", currentName);
@@ -199,6 +208,7 @@ public class AiProviderManager {
         if (hasFallback()) {
             currentIndex++;
             state = ProviderState.FALLBACK;
+            fallbackSince = System.currentTimeMillis();
             log.info("AI провайдер принудительно переключён на fallback: {}", getCurrentProviderName());
         }
     }
@@ -259,6 +269,13 @@ public class AiProviderManager {
             currentIndex = 0;
             state = ProviderState.PRIMARY;
             log.info("Cooldown истёк. Переключаемся на первый провайдер: {}", providers.get(0).getName());
+        }
+        // A fallback is a detour, not a destination: after the window, try primary again.
+        if (state == ProviderState.FALLBACK
+                && System.currentTimeMillis() - fallbackSince >= fallbackRetryPrimaryMs) {
+            currentIndex = 0;
+            state = ProviderState.PRIMARY;
+            log.info("Возвращаемся с fallback на первый провайдер: {}", providers.get(0).getName());
         }
         // Fix out-of-bounds index
         if (currentIndex >= providers.size()) {
