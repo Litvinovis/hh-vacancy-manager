@@ -58,16 +58,18 @@ public class PipelineScheduler implements SchedulingConfigurer {
     private final VacancyAiAnalyzer aiAnalyzer;
     private final SearchRepository searchRepo;
     private final FreeModelUpdater freeModelUpdater;
+    private final LegacyImportService legacyImportService;
 
     public PipelineScheduler(VacancyPipelineService pipelineService, SearchProfileFactory profileFactory,
                               RuntimeConfig runtimeConfig, VacancyAiAnalyzer aiAnalyzer, SearchRepository searchRepo,
-                              FreeModelUpdater freeModelUpdater) {
+                              FreeModelUpdater freeModelUpdater, LegacyImportService legacyImportService) {
         this.pipelineService = pipelineService;
         this.profileFactory = profileFactory;
         this.runtimeConfig = runtimeConfig;
         this.aiAnalyzer = aiAnalyzer;
         this.searchRepo = searchRepo;
         this.freeModelUpdater = freeModelUpdater;
+        this.legacyImportService = legacyImportService;
     }
 
     @Override
@@ -83,6 +85,19 @@ public class PipelineScheduler implements SchedulingConfigurer {
         PeriodicTrigger freshnessTrigger = new PeriodicTrigger(Duration.ofMinutes(10));
         freshnessTrigger.setInitialDelay(Duration.ofMinutes(5));
         registrar.addTriggerTask(this::runFreshnessCheck, freshnessTrigger);
+        // Slow-drip re-processing of the v1 archive — one modest batch per night
+        // (~200 rows) until vacancies_legacy runs dry, then a permanent no-op.
+        registrar.addTriggerTask(this::runLegacyImport, new CronTrigger("0 15 4 * * *"));
+    }
+
+    private void runLegacyImport() {
+        if (!runtimeConfig.isPipelineEnabled()) return;
+        try {
+            if (!legacyImportService.hasUnmigrated()) return;
+            legacyImportService.importBatch(LegacyImportService.DAILY_BATCH, false);
+        } catch (Exception e) {
+            log.error("Ночной импорт legacy-архива завершился ошибкой: {}", e.getMessage(), e);
+        }
     }
 
     private void runFreshnessCheck() {

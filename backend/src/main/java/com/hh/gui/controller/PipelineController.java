@@ -4,6 +4,7 @@ import com.hh.gui.ai.AiProviderManager;
 import com.hh.gui.config.RuntimeConfig;
 import com.hh.gui.model.SearchJob;
 import com.hh.gui.model.User;
+import com.hh.gui.service.LegacyImportService;
 import com.hh.gui.service.PipelineJobRunner;
 import com.hh.gui.service.SearchProfileFactory;
 import com.hh.gui.service.VacancyPipelineService;
@@ -33,6 +34,7 @@ public class PipelineController {
     private final RuntimeConfig runtimeConfig;
     private final AiProviderManager aiProvider;
     private final PipelineJobRunner jobRunner;
+    private final LegacyImportService legacyImportService;
 
     @Autowired
     public PipelineController(VacancyPipelineService pipelineService,
@@ -40,13 +42,15 @@ public class PipelineController {
                                SearchProfileFactory profileFactory,
                                RuntimeConfig runtimeConfig,
                                AiProviderManager aiProvider,
-                               PipelineJobRunner jobRunner) {
+                               PipelineJobRunner jobRunner,
+                               LegacyImportService legacyImportService) {
         this.pipelineService = pipelineService;
         this.vacancyRepo = vacancyRepo;
         this.profileFactory = profileFactory;
         this.runtimeConfig = runtimeConfig;
         this.aiProvider = aiProvider;
         this.jobRunner = jobRunner;
+        this.legacyImportService = legacyImportService;
     }
 
     /**
@@ -311,6 +315,33 @@ public class PipelineController {
         resp.put("alive", r.alive);
         resp.put("closed", r.closed);
         resp.put("inconclusive", r.inconclusive);
+        return ResponseEntity.ok(resp);
+    }
+
+    /**
+     * POST /api/pipeline/import-legacy — manually run one v1-archive import batch
+     * (the same pass the nightly schedule runs; see LegacyImportService).
+     * Body: {"limit": N, "onlyYes": true|false}
+     */
+    @PostMapping("/pipeline/import-legacy")
+    public ResponseEntity<Map<String, Object>> importLegacy(
+            @RequestBody(required = false) Map<String, Object> body,
+            @RequestAttribute("currentUser") User currentUser) {
+        if (!currentUser.isAdmin()) return ResponseEntity.status(403).body(Map.of("error", "Требуются права администратора"));
+        int limit = LegacyImportService.DAILY_BATCH;
+        boolean onlyYes = false;
+        if (body != null) {
+            if (body.get("limit") instanceof Number n) limit = Math.max(1, Math.min(2000, n.intValue()));
+            if (body.get("onlyYes") instanceof Boolean b) onlyYes = b;
+        }
+        LegacyImportService.ImportResult r = legacyImportService.importBatch(limit, onlyYes);
+        Map<String, Object> resp = new LinkedHashMap<>();
+        if (r.error != null) resp.put("error", r.error);
+        resp.put("considered", r.considered);
+        resp.put("alreadyPresent", r.alreadyPresent);
+        resp.put("excluded", r.excluded);
+        resp.put("prescreenRejected", r.prescreenRejected);
+        resp.put("imported", r.imported);
         return ResponseEntity.ok(resp);
     }
 

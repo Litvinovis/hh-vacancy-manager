@@ -49,6 +49,12 @@ public class SchemaMigrator implements ApplicationRunner {
         addColumnIfMissing("vacancies", "ai_attempts", "INTEGER DEFAULT 0");
         addColumnIfMissing("vacancies", "last_checked_at", "TEXT DEFAULT NULL");
         addColumnIfMissing("vacancies", "closed_at", "TEXT DEFAULT NULL");
+        // vacancies_legacy exists only on installations upgraded from v1 (created by
+        // the one-off archive migration) — fresh installs never have it, and an ALTER
+        // against a missing table would just log a scary error on every boot.
+        if (tableExists("vacancies_legacy")) {
+            addColumnIfMissing("vacancies_legacy", "migrated_at", "TEXT DEFAULT NULL");
+        }
 
         // Not in schema.sql: an index on a just-added column would fail schema.sql's own
         // unconditional run on the next boot after a fresh install (see schema.sql's
@@ -106,6 +112,21 @@ public class SchemaMigrator implements ApplicationRunner {
             log.info("Миграция схемы: добавлена колонка {}.{}", table, column);
         } catch (Exception e) {
             log.error("Миграция схемы: не удалось добавить {}.{}: {}", table, column, e.getMessage());
+        }
+    }
+
+    private boolean tableExists(String table) {
+        try (Connection con = jdbc.getDataSource().getConnection()) {
+            DatabaseMetaData meta = con.getMetaData();
+            try (ResultSet rs = meta.getTables(null, null, table, null)) {
+                if (rs.next()) return true;
+            }
+            try (ResultSet rs = meta.getTables(null, null, table.toUpperCase(), null)) {
+                return rs.next();
+            }
+        } catch (SQLException e) {
+            log.error("Миграция схемы: не удалось проверить наличие таблицы {}: {}", table, e.getMessage());
+            return false;
         }
     }
 
