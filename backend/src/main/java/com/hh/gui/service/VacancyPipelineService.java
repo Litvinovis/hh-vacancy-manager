@@ -539,6 +539,12 @@ public class VacancyPipelineService {
     // goes through the sidecar's human-paced queue. No bursts an anti-bot could latch onto.
     static final int FRESHNESS_RECHECK_DAYS = 7;
     public static final int FRESHNESS_BATCH_PER_TICK = 5;
+    // "Yield to new content" used to mean "run only when the scrape queue is EXACTLY
+    // empty" — but with continuous discovery, nightly legacy imports and failed-row
+    // retries the queue almost never hits zero, and the freshness pass starved for
+    // days. A small remainder is fine to share the tick with: the sidecar clears it
+    // in minutes, and new rows still get scraped first within scrapePending itself.
+    static final int FRESHNESS_MAX_SCRAPE_BACKLOG = 10;
 
     /**
      * Re-verifies that approved ('yes') postings are still live on hh.ru — they get
@@ -554,7 +560,7 @@ public class VacancyPipelineService {
     public FreshnessResult checkVacancyFreshness(int limit) {
         FreshnessResult result = new FreshnessResult();
         if (isScrapeCoolingDown()) return result;
-        if (vacancyRepo.countScrapeBacklog(MAX_SCRAPE_ATTEMPTS) > 0) return result;
+        if (vacancyRepo.countUnscrapedNew() > FRESHNESS_MAX_SCRAPE_BACKLOG) return result;
 
         List<Vacancy> due = vacancyRepo.findDueFreshnessCheck(FRESHNESS_RECHECK_DAYS, limit);
         for (Vacancy v : due) {

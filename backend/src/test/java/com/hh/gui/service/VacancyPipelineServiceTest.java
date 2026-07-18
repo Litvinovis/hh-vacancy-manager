@@ -420,7 +420,7 @@ class VacancyPipelineServiceTest {
         final List<Long> closed = new ArrayList<>();
         FakeFreshnessRepo() { super(null); }
         @Override
-        public int countScrapeBacklog(int maxAttempts) { return backlog; }
+        public int countUnscrapedNew() { return backlog; }
         @Override
         public List<Vacancy> findDueFreshnessCheck(int days, int limit) { return due; }
         @Override
@@ -471,10 +471,10 @@ class VacancyPipelineServiceTest {
     }
 
     @Test
-    void checkVacancyFreshness_newContentBacklog_alwaysWins() {
+    void checkVacancyFreshness_largeNewContentBacklog_yields() {
         RuntimeConfig config = new RuntimeConfig();
         FakeFreshnessRepo repo = new FakeFreshnessRepo();
-        repo.backlog = 3; // очередь скрейпа новых вакансий не пуста
+        repo.backlog = VacancyPipelineService.FRESHNESS_MAX_SCRAPE_BACKLOG + 1;
         repo.due = List.of(pendingVacancy("11", null));
         FreshnessScraper scraper = new FreshnessScraper(config);
         VacancyPipelineService svc = new VacancyPipelineService(
@@ -483,6 +483,24 @@ class VacancyPipelineServiceTest {
         VacancyPipelineService.FreshnessResult r = svc.checkVacancyFreshness(5);
 
         assertEquals(0, r.alive + r.closed + r.inconclusive);
-        assertEquals(0, scraper.calls, "актуализация не должна конкурировать со скрейпом новых вакансий");
+        assertEquals(0, scraper.calls, "большая очередь новых вакансий — актуализация уступает");
+    }
+
+    @Test
+    void checkVacancyFreshness_smallResidualBacklog_stillRuns() {
+        // Регрессия: «только при строго пустой очереди» на живых данных означало
+        // «никогда» — очередь не бывала нулевой сутками, и актуализация голодала.
+        RuntimeConfig config = new RuntimeConfig();
+        FakeFreshnessRepo repo = new FakeFreshnessRepo();
+        repo.backlog = VacancyPipelineService.FRESHNESS_MAX_SCRAPE_BACKLOG; // мелкий остаток — не блокирует
+        repo.due = List.of(pendingVacancy("11", null));
+        FreshnessScraper scraper = new FreshnessScraper(config);
+        scraper.byId.put("11", failResult("archived"));
+        VacancyPipelineService svc = new VacancyPipelineService(
+            null, scraper, new FakeAnalyzer(config), repo, null, config, null);
+
+        VacancyPipelineService.FreshnessResult r = svc.checkVacancyFreshness(5);
+
+        assertEquals(1, r.closed, "при мелком остатке очереди актуализация должна работать");
     }
 }

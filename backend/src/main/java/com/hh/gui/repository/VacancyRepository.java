@@ -496,11 +496,16 @@ public class VacancyRepository {
         jdbc.update("UPDATE vacancies SET closed_at=?, last_checked_at=?, updated_at=? WHERE id=?", now, now, now, id);
     }
 
-    /** Total scrape backlog across all jobs — new content always outranks freshness re-checks. */
-    public int countScrapeBacklog(int maxAttempts) {
+    /**
+     * Never-scraped new content across all jobs — what freshness re-checks yield to.
+     * Deliberately excludes 'failed' retry rows: a handful of per-vacancy 403s
+     * grinding through their attempt budget kept the backlog permanently non-zero
+     * and starved the freshness pass for days (observed live: 24h+, zero batches).
+     */
+    public int countUnscrapedNew() {
         Integer count = jdbc.queryForObject(
-            "SELECT COUNT(*) FROM vacancies WHERE scrape_status IN ('pending','failed') AND scrape_attempts < ?",
-            Integer.class, maxAttempts);
+            "SELECT COUNT(*) FROM vacancies WHERE scrape_status = 'pending'",
+            Integer.class);
         return count != null ? count : 0;
     }
 
