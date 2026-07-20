@@ -57,7 +57,7 @@ management:
 
 logging:
   level:
-    com.hh.gui: DEBUG
+    com.hh.gui: INFO
     # JdbcTemplate DEBUG печатал каждый SQL-стейтмент без параметров — тонны шума,
     # по которому всё равно нельзя восстановить, что именно запрашивалось.
     # Доменные DEBUG-строки в com.hh.gui дают ту же информацию читаемо.
