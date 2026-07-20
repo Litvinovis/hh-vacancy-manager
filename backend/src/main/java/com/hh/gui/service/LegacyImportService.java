@@ -47,10 +47,12 @@ public class LegacyImportService {
 
     private static final Logger log = LoggerFactory.getLogger(LegacyImportService.class);
 
-    // ~200/day keeps the extra scrape load well inside the sidecar's idle capacity
-    // (observed throughput ~1900/day; fresh discoveries ~500/day; freshness
-    // re-checks cap at ~720/day but always yield to a non-empty scrape queue).
-    public static final int DAILY_BATCH = 200;
+    // Raised from the initial cautious 200 after a week of live data: the sidecar
+    // sustains ~1900 scrapes/day with fresh discoveries at ~500/day, so a 500-row
+    // nightly batch (~5-6h of morning scraper time) still leaves headroom — it does
+    // push freshness re-checks (which yield to the scrape queue) later into the day,
+    // a deliberate trade to drain the archive in ~2 weeks instead of a month.
+    public static final int DAILY_BATCH = 500;
     // The v1 archive belongs to these two seeded searches (see class javadoc).
     static final long REMOTE_SEARCH_ID = 1;
     static final long LOCAL_SEARCH_ID = 2;
