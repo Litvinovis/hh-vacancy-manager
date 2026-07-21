@@ -1,12 +1,11 @@
 package com.hh.gui.service;
 
+import com.hh.gui.util.HttpUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -60,12 +59,7 @@ public class TelegramNotifier {
                 log.info("Сообщение Telegram успешно отправлено");
                 return true;
             } else {
-                try (BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getErrorStream()))) {
-                    StringBuilder sb = new StringBuilder();
-                    String line;
-                    while ((line = reader.readLine()) != null) sb.append(line);
-                    log.error("Ошибка Telegram API {}: {}", code, sb);
-                }
+                log.error("Ошибка Telegram API {}: {}", code, HttpUtil.readBody(conn, code));
                 return false;
             }
         } catch (Exception e) {

@@ -5,13 +5,13 @@ import com.hh.gui.config.RuntimeConfig;
 import com.hh.gui.model.SearchJob;
 import com.hh.gui.model.Vacancy;
 import com.hh.gui.util.DedupKeys;
+import com.hh.gui.util.HttpUtil;
+import com.hh.gui.util.SalaryFormatter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -283,19 +283,12 @@ public class VacancyAiAnalyzer {
     }
 
     /**
-     * Analyze with exponential backoff retry.
-     *
-     * 429 no longer abandons the provider on first sight — with OpenRouter's free
-     * pool a top-level 429 is usually a moment of upstream congestion that clears in
-     * seconds (the "models" fallback array already absorbs per-model limits), and the
-     * 2026-07-17 incident showed what instant switching costs: one transient 429
-     * flipped the chain onto a fallback whose key had silently expired, and analysis
-     * hung there for ~10 hours. Now: 429 → backoff-retry the SAME provider up to
-     * maxRetries, and only then advance down the chain (cooldown when it runs out).
-     *
-     * 401/403 is the opposite case — dead credentials never heal by retrying, so the
-     * chain advances immediately (same incident: three 30-second retry cycles against
-     * "Bad credentials" per batch, 1559 wasted requests).
+     * Analyze with exponential backoff retry. 429 retries the SAME provider first
+     * (OpenRouter's free-pool 429 is usually seconds-long congestion, not a dead
+     * provider — the "models" array already absorbs per-model limits) and only
+     * advances the chain once maxRetries is exhausted. 401/403 advances immediately —
+     * dead credentials don't heal by retrying (incident 2026-07-17: instant-switch-on-
+     * 429 parked the chain on an expired fallback key for ~10h before this fix).
      */
     private List<AiResult> analyzeWithRetry(List<Vacancy> vacancies, SearchJob job, int maxRetries)
             throws Exception {
@@ -399,7 +392,7 @@ public class VacancyAiAnalyzer {
             sb.append("Название: ").append(v.getTitle()).append("\n");
             sb.append("Работодатель: ").append(v.getCompany());
             sb.append(v.isTrustedEmployer() ? " (доверенный работодатель по hh.ru)\n" : "\n");
-            sb.append("Зарплата: ").append(formatSalary(v)).append("\n");
+            sb.append("Зарплата: ").append(SalaryFormatter.forPrompt(v)).append("\n");
             if (v.getExperience() != null && !v.getExperience().isBlank()) {
                 sb.append("Опыт: ").append(v.getExperience()).append("\n");
             }
@@ -502,18 +495,6 @@ public class VacancyAiAnalyzer {
         return result.substring(0, Math.min(MAX_DESCRIPTION_CHARS, result.length()));
     }
 
-    private String formatSalary(Vacancy v) {
-        boolean hasFrom = v.getSalaryFrom() != null && v.getSalaryFrom() > 0;
-        boolean hasTo = v.getSalaryTo() != null && v.getSalaryTo() > 0;
-        if (!hasFrom && !hasTo) return "не указана";
-        StringBuilder sb = new StringBuilder();
-        if (hasFrom) sb.append("от ").append(v.getSalaryFrom());
-        if (hasTo) sb.append(" до ").append(v.getSalaryTo());
-        if (v.getCurrency() != null) sb.append(" ").append(v.getCurrency());
-        if (v.isSalaryGross()) sb.append(" (до вычета налогов)");
-        return sb.toString();
-    }
-
     // Package-private: FreeModelUpdater reuses the same call path (rate limiting,
     // provider chain, model-list fallback, token metrics) for its ranking request.
     String callLlm(String prompt, int maxTokens) throws Exception {
@@ -551,14 +532,10 @@ public class VacancyAiAnalyzer {
         requestBody.put("temperature", 0.3);
         requestBody.put("max_tokens", maxTokens);
         if (model.contains(",")) {
-            // Comma-separated model list = OpenRouter's server-side fallback routing
-            // ("models" array): each is tried in order until one isn't upstream-rate-limited.
-            // Chosen over the "openrouter/free" router after live logs showed the router
-            // regularly landing on a content-safety guard model (whose entire answer is
-            // "User Safety: safe") and on reasoning models that burn the whole completion
-            // budget thinking — a pinned list of instruct models eliminates both, and
-            // reasoning is explicitly disabled for any hybrid models on the list.
-            // OpenRouter rejects arrays longer than 3, hence the cap.
+            // Comma-separated model list = OpenRouter's server-side fallback ("models"
+            // array, max 3) — chosen over the "openrouter/free" router after live logs
+            // showed it landing on a content-safety guard model ("User Safety: safe")
+            // and reasoning models burning the whole completion budget thinking.
             List<String> models = java.util.Arrays.stream(model.split(","))
                 .map(String::trim).filter(s -> !s.isEmpty()).limit(3).toList();
             requestBody.put("model", models.get(0));
@@ -582,22 +559,13 @@ public class VacancyAiAnalyzer {
             metrics.recordError(provider, code);
         }
 
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(
-                    code >= 400 ? conn.getErrorStream() : conn.getInputStream(),
-                    StandardCharsets.UTF_8))) {
-            StringBuilder sb = new StringBuilder();
-            String line;
-            while ((line = reader.readLine()) != null) {
-                sb.append(line);
-            }
-            if (code >= 400) {
-                log.error("Ошибка LLM API {} ({}): {}", code, provider, sb);
-                throw new RuntimeException("LLM API returned " + code);
-            }
-            recordTokenUsage(provider, sb.toString());
-            return sb.toString();
+        String body = HttpUtil.readBody(conn, code);
+        if (code >= 400) {
+            log.error("Ошибка LLM API {} ({}): {}", code, provider, body);
+            throw new RuntimeException("LLM API returned " + code);
         }
+        recordTokenUsage(provider, body);
+        return body;
     }
 
     /** Best-effort token accounting from the response's OpenAI-compatible "usage" object — a malformed or missing field must never break analysis. */

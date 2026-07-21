@@ -54,13 +54,11 @@ public class PipelineController {
     }
 
     /**
-     * All jobs the current user is allowed to trigger — every job for an admin, their own
-     * plus every global (shared) job for a regular user — optionally narrowed to one
-     * (person, search). Global jobs are included for everyone since triggering their
-     * pipeline only affects a shared search's own results, not another user's personal
-     * data — but see viewableJobsFor for read-only listing, which is not the same set
-     * for a subtler reason: a regular user manually re-running a global search still
-     * affects what every other user sees, so that's intentionally admin-only below.
+     * All jobs the current user may VIEW — every job for an admin, their own plus every
+     * global (shared) job for a regular user — optionally narrowed to one (person, search).
+     * Read-only listing is safe to include global jobs for everyone; actually TRIGGERING
+     * one is a stricter set (see triggerableJobsFor below) since a regular user manually
+     * re-running a global search would affect what every other user sees.
      */
     private List<SearchJob> jobsFor(String person, String searchName, User currentUser) {
         List<SearchJob> jobs = profileFactory.build();

@@ -14,21 +14,14 @@ import java.util.function.ToDoubleFunction;
 /**
  * Micrometer metrics for AI provider calls.
  *
- * Every counter is looked up by name+tags on each record*() call —
- * MeterRegistry.counter(name, tags) is idempotent, same name+tags always
- * resolves to the same underlying Counter — instead of being pinned to a
- * fixed set of providers/statuses decided at startup. Providers are
- * configured through Settings and can be renamed/added/removed at runtime
- * without a restart; a hardcoded provider list here previously went stale
- * (it assumed "openrouter"/"grok" while production actually runs
- * "openrouter"/"github-models", so github-models activity was silently
- * folded into the "grok" counter) and error counters were pre-registered
- * with a fixed status="429" tag regardless of the real HTTP status passed
- * to recordError, so non-429 errors were mislabeled as rate limits too.
- *
- * Providers configured at startup are still eagerly pre-registered at 0 so
- * they show up in /actuator/prometheus immediately rather than only after
- * their first request.
+ * Every counter is looked up by name+tags on each record*() call
+ * (MeterRegistry.counter is idempotent — same name+tags always resolves to
+ * the same Counter) instead of being pinned to a fixed provider/status set at
+ * startup: providers are renamed/added/removed at runtime via Settings, and a
+ * hardcoded list previously went stale and silently mislabeled activity under
+ * the wrong provider name. Providers configured at startup are still eagerly
+ * pre-registered at 0 so they show up in /actuator/prometheus immediately
+ * rather than only after their first request.
  */
 @Component
 public class AiMetrics {
