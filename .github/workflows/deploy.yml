@@ -48,7 +48,7 @@ jobs:
       - name: Deploy scraper sidecar
         run: |
           DEPLOY_DIR=/opt/hh-gui/scraper
-          NPM_BIN=/home/clawd/.nvm/versions/node/v22.22.0/bin/npm
+          NPM_BIN=/home/clawd/.nvm/versions/node/v24.18.0/bin/npm
 
           sudo mkdir -p ${DEPLOY_DIR}
           sudo cp scraper/package.json scraper/package-lock.json scraper/server.js ${DEPLOY_DIR}/
