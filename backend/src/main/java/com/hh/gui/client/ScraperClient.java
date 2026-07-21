@@ -2,13 +2,12 @@ package com.hh.gui.client;
 
 import tools.jackson.databind.ObjectMapper;
 import com.hh.gui.config.RuntimeConfig;
+import com.hh.gui.util.HttpUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
@@ -66,14 +65,7 @@ public class ScraperClient {
             conn.setReadTimeout(scraperReadTimeoutMs());
 
             int code = conn.getResponseCode();
-            String body;
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(
-                    code >= 400 ? conn.getErrorStream() : conn.getInputStream(), StandardCharsets.UTF_8))) {
-                StringBuilder sb = new StringBuilder();
-                String line;
-                while ((line = reader.readLine()) != null) sb.append(line);
-                body = sb.toString();
-            }
+            String body = HttpUtil.readBody(conn, code);
 
             @SuppressWarnings("unchecked")
             Map<String, Object> json = mapper.readValue(body, Map.class);
@@ -144,14 +136,7 @@ public class ScraperClient {
             conn.setReadTimeout(scraperReadTimeoutMs());
 
             int code = conn.getResponseCode();
-            String body;
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(
-                    code >= 400 ? conn.getErrorStream() : conn.getInputStream(), StandardCharsets.UTF_8))) {
-                StringBuilder sb = new StringBuilder();
-                String line;
-                while ((line = reader.readLine()) != null) sb.append(line);
-                body = sb.toString();
-            }
+            String body = HttpUtil.readBody(conn, code);
 
             @SuppressWarnings("unchecked")
             Map<String, Object> json = mapper.readValue(body, Map.class);

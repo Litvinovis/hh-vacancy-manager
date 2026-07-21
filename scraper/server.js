@@ -213,12 +213,12 @@ function salaryFromLd(ld) {
 const ALLOWED_SEARCH_HOST = /(^|\.)hh\.ru$/i;
 
 /**
- * EXPERIMENTAL — wired into the Java pipeline only via the explicit
- * "discover from URL" trigger (VacancyPipelineService.discoverFromUrl), never
- * the scheduled/automatic run. RSS discovery (HhApiClient.fetchRss) caps out
- * at 20 results per query with no pagination; this drives a real search on
- * hh.ru like a person typing a query (or pasting a URL they built themselves
- * with hh.ru's own filter UI), which returns ~50 results per page with
+ * Wired into the Java pipeline via VacancyPipelineService.discoverFromUrl — both
+ * the manual "discover from URL" trigger and PipelineScheduler's own-cadence
+ * scheduled runs for searches with a saved source_url. RSS discovery
+ * (HhApiClient.fetchRss) caps out at 20 results per query with no pagination;
+ * this drives a real search on hh.ru like a person typing a query (or pasting a
+ * URL built with hh.ru's own filter UI), which returns ~50 results per page with
  * pagination (dozens of pages for a broad query).
  */
 async function searchVacancies({ url: rawUrl, text, area, page: pageNum, schedule, salary }) {

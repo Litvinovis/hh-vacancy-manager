@@ -182,10 +182,9 @@ public class PipelineScheduler implements SchedulingConfigurer {
     }
 
     /**
-     * Checks every search with a saved source_url + run_interval_hours (personal or
-     * global — see the "область изменений" decision) and runs the ones whose interval
-     * has elapsed since last_run_at. Independent of the RSS pipeline's single global
-     * pipelineIntervalMs, since each such search picks its own cadence.
+     * Checks every search (personal or global) with a saved source_url + run_interval_hours
+     * and runs the ones whose interval has elapsed since last_run_at. Independent of the
+     * RSS pipeline's single global pipelineIntervalMs — each such search picks its own cadence.
      */
     private void runDueUrlSearches() {
         if (!runtimeConfig.isPipelineEnabled()) {
