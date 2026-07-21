@@ -2,15 +2,13 @@ package com.hh.gui.ai;
 
 import com.hh.gui.config.AiProviderConfig;
 import com.hh.gui.config.RuntimeConfig;
+import com.hh.gui.util.HttpUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -219,13 +217,7 @@ public class FreeModelUpdater {
         conn.setReadTimeout(30000);
         int code = conn.getResponseCode();
         if (code != 200) throw new IllegalStateException("HTTP " + code + " от каталога моделей");
-        String body;
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
-            StringBuilder sb = new StringBuilder();
-            String line;
-            while ((line = reader.readLine()) != null) sb.append(line);
-            body = sb.toString();
-        }
+        String body = HttpUtil.readBody(conn, code);
         Map<?, ?> parsed = mapper.readValue(body, Map.class);
         List<Map<String, Object>> data = (List<Map<String, Object>>) parsed.get("data");
         if (data == null) throw new IllegalStateException("каталог моделей без поля data");

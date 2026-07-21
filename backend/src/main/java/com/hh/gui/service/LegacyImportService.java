@@ -22,25 +22,21 @@ import java.util.stream.Collectors;
 /**
  * Re-processes the v1 archive (vacancies_legacy) through the current pipeline.
  *
- * Why it exists: v1 analyzed vacancies "blindly" — RSS carried no real posting
- * text (the archived rows average ~130 chars of description), so none of the
- * old verdicts can be trusted. A liveness probe over a random sample showed
- * ~95% of the archived postings are still live on hh.ru (long-running mass
- * postings), so they're worth a real scrape + analysis.
+ * Why it exists: v1 analyzed vacancies "blindly" (RSS had no real posting text —
+ * archived rows average ~130 chars of description), so none of its verdicts can
+ * be trusted. A liveness probe over a random sample showed ~95% still live on
+ * hh.ru, so re-scraping and honestly re-analyzing is worth it.
  *
- * Each batch: picks unmigrated legacy rows, maps them onto today's search jobs
- * (is_remote=1 → "Удалёнка по России", 0 → "Рядом с домом" — the v1 profile was
- * exactly these two searches, see FirstBootSeeder), applies the same pre-scrape
- * filters new discoveries get (exclude words, salary floor, AI card prescreen
- * with clone collapsing), and inserts survivors as scrape-pending stubs with
- * created_at=now — deliberately NOT the legacy date, since the scrape queue is
- * created_at-ordered and old dates would put the whole archive AHEAD of fresh
- * discoveries. From there the normal pipeline takes over: dead postings die at
- * the scrape step (404/архив), live ones get scraped and honestly analyzed.
- *
- * Every considered legacy row is stamped migrated_at (imported, prescreen-
- * rejected and filter-excluded alike) so batches never revisit rows. Rows
- * without an hh_id are unrecoverable and simply never selected.
+ * Each batch maps unmigrated rows onto search ids REMOTE_SEARCH_ID/LOCAL_SEARCH_ID
+ * by is_remote — this installation's two searches at the time the archive was
+ * built, not a structural guarantee — applies the same pre-scrape filters fresh
+ * discoveries get (exclude words, salary floor, AI prescreen with clone
+ * collapsing), and inserts survivors as scrape-pending stubs with created_at=now
+ * (not the legacy date — the scrape queue is created_at-ordered, so an old date
+ * would put the whole archive ahead of fresh finds). From there the normal
+ * pipeline takes over. Every considered row is stamped migrated_at — imported,
+ * prescreen-rejected, or filter-excluded alike — so batches never revisit it.
+ * Rows without an hh_id are unrecoverable and never selected.
  */
 @Service
 public class LegacyImportService {
