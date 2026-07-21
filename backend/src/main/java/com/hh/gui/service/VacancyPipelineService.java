@@ -10,6 +10,7 @@ import com.hh.gui.model.SearchJob;
 import com.hh.gui.model.Vacancy;
 import com.hh.gui.repository.VacancyRepository;
 import com.hh.gui.util.DedupKeys;
+import com.hh.gui.util.SalaryFormatter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -201,25 +202,13 @@ public class VacancyPipelineService {
     }
 
     /**
-     * Walks search-result pages of a caller-supplied hh.ru URL (via the scraper
-     * sidecar's browser session, see ScraperClient.searchByUrl), filters out excluded
-     * titles the same way discoverNew does, then for genuinely new hits:
-     *   1. cheap AI prescreen on the card alone (title/employer/salary/address — see
-     *      VacancyAiAnalyzer.prescreenHits) to decide whether it's worth a full scrape;
-     *   2. hits that pass are saved as scrape-pending stubs (reusing scraped content/AI
-     *      verdict from another city's posting of the same real vacancy, if dedup_key
-     *      matches — see computeDedupKey);
-     *   3. hits that don't pass are still saved, just marked scrape_status='skipped' so
-     *      they count as "already seen" on future runs instead of being re-prescreened
-     *      forever.
-     * Always walks every page up to maxPages (capped at MAX_URL_SEARCH_PAGES) — an
-     * earlier per-page "stop once mostly known" heuristic was removed after live data
-     * showed it doesn't hold for this kind of listing: pages don't get monotonically
-     * older (mass-reposted/bumped clone blocks mean known and new hits interleave
-     * unpredictably not just within a page but across pages too), so a single
-     * "saturated" page could gate off substantial new content on the very next one.
-     * Scanning a bounded, fixed number of pages every run is simpler and correct;
-     * MAX_URL_SEARCH_PAGES is the only cost control needed.
+     * Walks search-result pages of a caller-supplied hh.ru URL (see
+     * ScraperClient.searchByUrl), filters excluded titles, prescreens genuinely new
+     * hits (VacancyAiAnalyzer.prescreenHits), and saves each as a scrape-pending stub
+     * (or scrape_status='skipped' if prescreen rejected it, so it still counts as
+     * "seen"). Always walks every requested page up to MAX_URL_SEARCH_PAGES — no
+     * early stop: this listing's known/new hits interleave unpredictably across
+     * pages (mass-reposted clones), so a "saturated" page can't predict the next one.
      */
     @Transactional
     protected int discoverFromUrl(SearchJob job, String url, int maxPages) {
@@ -389,26 +378,18 @@ public class VacancyPipelineService {
         return result;
     }
 
-    // Failure reasons that say nothing about the OTHER pending vacancies in this batch —
-    // "not_found" is that one posting genuinely archived/removed, "no_job_posting_data" is
-    // that one page not rendering the expected structure, "http_403" is hh.ru's own
-    // per-vacancy access restriction (hidden/removed posting): a production run showed
-    // specific hh_ids returning 403 consistently while 20 neighbours in the same session
-    // scraped fine minutes before and after. A DDoS-Guard session block is different — the
-    // sidecar now sniffs the 403 body for the challenge page and reports it as "blocked",
-    // which stays site-wide. Everything else — ScraperClient's own "client_error: ..."
-    // (sidecar down/refused/timed out), "blocked", or any other http_4xx/5xx status — is a
-    // site-wide signal where every next attempt in this run is just as likely to fail too.
-    // As a backstop against a 403 rate-limit that doesn't carry the DDoS-Guard signature,
-    // scrapePending still bails out when too many 403s pile up in one run — but only
-    // counting 'hh' (freshly discovered) rows toward that trip wire (see
-    // LEGACY_SOURCE / the counter's use below). A live incident (2026-07-20/21) showed
-    // why: the v1 archive re-import (source='hh-legacy') routinely surfaces clusters of
-    // genuinely dead postings months old, all still legitimately per-vacancy 403s — not
-    // a rate limit — and counting them tripped this backstop 7 times in one morning,
-    // each freezing ALL scraping (fresh discovery included) for 30-120 minutes for no
-    // real reason. A true rate limit would show up on fresh postings too, which this
-    // still catches at full sensitivity.
+    // Failure reasons about just THAT one vacancy, not the rest of the batch: "not_found"/
+    // "archived" (posting gone), "no_job_posting_data" (page didn't render as expected),
+    // "http_403" (hh.ru's per-vacancy access restriction — verified live: some hh_ids 403
+    // consistently while neighbours in the same session scraped fine). A DDoS-Guard session
+    // block is reported separately as "blocked" (site-wide). Everything else is site-wide —
+    // the next attempt is just as likely to fail. Backstop: too many 403s in one run still
+    // bails out (guards against a rate-limit that doesn't carry the DDoS-Guard signature) —
+    // but only 'hh' (freshly discovered) rows count toward that trip wire (see LEGACY_SOURCE
+    // below): a live incident (2026-07-20/21) showed the v1 archive re-import routinely
+    // surfaces clusters of genuinely dead, months-old postings that tripped this backstop
+    // 7 times in one morning for no real reason. A true rate limit still shows up on fresh
+    // postings, which this catches at full sensitivity.
     private static final Set<String> PER_VACANCY_FAILURE_REASONS = Set.of("not_found", "no_job_posting_data", "http_403", "archived");
     private static final String LEGACY_SOURCE = "hh-legacy";
     private static final int MAX_HTTP_403_PER_RUN = 8;
@@ -967,7 +948,7 @@ public class VacancyPipelineService {
     private String formatVacancyEntry(Vacancy v) {
         int score = v.getAiScore() != null ? v.getAiScore() : 0;
         String emoji = score >= 80 ? "🟢" : score >= 60 ? "🟡" : "🟠";
-        String salary = formatSalary(v);
+        String salary = SalaryFormatter.forReport(v);
         String company = v.getCompany() != null && !v.getCompany().isEmpty() ? escapeHtml(v.getCompany()) : "компания не указана";
         // Title/reason are scraped/AI-generated text with no hard length cap upstream —
         // truncate defensively so one unusually long entry can't alone blow past Telegram's
@@ -991,17 +972,6 @@ public class VacancyPipelineService {
     private String escapeHtml(String text) {
         if (text == null) return "";
         return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;");
-    }
-
-    private String formatSalary(Vacancy v) {
-        boolean hasFrom = v.getSalaryFrom() != null && v.getSalaryFrom() > 0;
-        boolean hasTo = v.getSalaryTo() != null && v.getSalaryTo() > 0;
-        if (!hasFrom && !hasTo) return "з/п не указана";
-        StringBuilder sb = new StringBuilder();
-        if (hasFrom) sb.append("от ").append(v.getSalaryFrom());
-        if (hasTo) sb.append(" до ").append(v.getSalaryTo());
-        if (v.getCurrency() != null) sb.append(" ").append(v.getCurrency());
-        return sb.toString();
     }
 
     public static class PipelineResult {

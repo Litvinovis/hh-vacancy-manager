@@ -2,6 +2,7 @@ package com.hh.gui.client;
 
 import com.hh.gui.config.RuntimeConfig;
 import com.hh.gui.model.Vacancy;
+import com.hh.gui.util.HttpUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -10,8 +11,6 @@ import org.w3c.dom.Element;
 import org.w3c.dom.NodeList;
 
 import javax.xml.parsers.DocumentBuilderFactory;
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
@@ -122,14 +121,7 @@ public class HhApiClient {
             return null;
         }
 
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
-            StringBuilder sb = new StringBuilder();
-            String line;
-            while ((line = reader.readLine()) != null) {
-                sb.append(line).append("\n");
-            }
-            return sb.toString();
-        }
+        return HttpUtil.readBody(conn, code);
     }
 
     /** Extract just the hh_id, title, link and publish date — the real content comes from ScraperClient. */
