@@ -384,8 +384,14 @@ public class VacancyPipelineService {
     // consistently while neighbours in the same session scraped fine). A DDoS-Guard session
     // block is reported separately as "blocked" (site-wide). Everything else is site-wide —
     // the next attempt is just as likely to fail. Backstop: too many 403s in one run still
-    // bails out (guards against a rate-limit that doesn't carry the DDoS-Guard signature).
+    // bails out (guards against a rate-limit that doesn't carry the DDoS-Guard signature) —
+    // but only 'hh' (freshly discovered) rows count toward that trip wire (see LEGACY_SOURCE
+    // below): a live incident (2026-07-20/21) showed the v1 archive re-import routinely
+    // surfaces clusters of genuinely dead, months-old postings that tripped this backstop
+    // 7 times in one morning for no real reason. A true rate limit still shows up on fresh
+    // postings, which this catches at full sensitivity.
     private static final Set<String> PER_VACANCY_FAILURE_REASONS = Set.of("not_found", "no_job_posting_data", "http_403", "archived");
+    private static final String LEGACY_SOURCE = "hh-legacy";
     private static final int MAX_HTTP_403_PER_RUN = 8;
     private static final int MAX_CONSECUTIVE_SCRAPE_FAILURES = 3;
     // Per-vacancy failed attempts (page loads with no JobPosting data) before a row
@@ -494,8 +500,11 @@ public class VacancyPipelineService {
                 }
                 // Backstop (see PER_VACANCY_FAILURE_REASONS): individually a 403 is that
                 // one posting restricted, but a pile of them in one run smells like a
-                // rate-limit the sidecar couldn't attribute to DDoS-Guard.
-                if ("http_403".equals(r.reason()) && ++http403InRun >= MAX_HTTP_403_PER_RUN) {
+                // rate-limit the sidecar couldn't attribute to DDoS-Guard. Legacy-sourced
+                // rows are exempt from counting toward the trip (see LEGACY_SOURCE) —
+                // months-old archived postings are expected to 403 in clusters.
+                boolean countsTowardBurst = "http_403".equals(r.reason()) && !LEGACY_SOURCE.equals(v.getSource());
+                if (countsTowardBurst && ++http403InRun >= MAX_HTTP_403_PER_RUN) {
                     vacancyRepo.updateScraped(v);
                     count++;
                     enterScrapeCooldown();
