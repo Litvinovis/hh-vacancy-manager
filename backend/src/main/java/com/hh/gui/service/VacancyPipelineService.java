@@ -400,8 +400,17 @@ public class VacancyPipelineService {
     // (sidecar down/refused/timed out), "blocked", or any other http_4xx/5xx status — is a
     // site-wide signal where every next attempt in this run is just as likely to fail too.
     // As a backstop against a 403 rate-limit that doesn't carry the DDoS-Guard signature,
-    // scrapePending still bails out when too many 403s pile up in one run.
+    // scrapePending still bails out when too many 403s pile up in one run — but only
+    // counting 'hh' (freshly discovered) rows toward that trip wire (see
+    // LEGACY_SOURCE / the counter's use below). A live incident (2026-07-20/21) showed
+    // why: the v1 archive re-import (source='hh-legacy') routinely surfaces clusters of
+    // genuinely dead postings months old, all still legitimately per-vacancy 403s — not
+    // a rate limit — and counting them tripped this backstop 7 times in one morning,
+    // each freezing ALL scraping (fresh discovery included) for 30-120 minutes for no
+    // real reason. A true rate limit would show up on fresh postings too, which this
+    // still catches at full sensitivity.
     private static final Set<String> PER_VACANCY_FAILURE_REASONS = Set.of("not_found", "no_job_posting_data", "http_403", "archived");
+    private static final String LEGACY_SOURCE = "hh-legacy";
     private static final int MAX_HTTP_403_PER_RUN = 8;
     private static final int MAX_CONSECUTIVE_SCRAPE_FAILURES = 3;
     // Per-vacancy failed attempts (page loads with no JobPosting data) before a row
@@ -510,8 +519,11 @@ public class VacancyPipelineService {
                 }
                 // Backstop (see PER_VACANCY_FAILURE_REASONS): individually a 403 is that
                 // one posting restricted, but a pile of them in one run smells like a
-                // rate-limit the sidecar couldn't attribute to DDoS-Guard.
-                if ("http_403".equals(r.reason()) && ++http403InRun >= MAX_HTTP_403_PER_RUN) {
+                // rate-limit the sidecar couldn't attribute to DDoS-Guard. Legacy-sourced
+                // rows are exempt from counting toward the trip (see LEGACY_SOURCE) —
+                // months-old archived postings are expected to 403 in clusters.
+                boolean countsTowardBurst = "http_403".equals(r.reason()) && !LEGACY_SOURCE.equals(v.getSource());
+                if (countsTowardBurst && ++http403InRun >= MAX_HTTP_403_PER_RUN) {
                     vacancyRepo.updateScraped(v);
                     count++;
                     enterScrapeCooldown();

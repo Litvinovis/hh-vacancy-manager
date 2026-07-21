@@ -447,6 +447,80 @@ class VacancyPipelineServiceTest {
             null, null, null, null, null, List.of(), false, null, null);
     }
 
+    // ── scrapePending: http_403-burst backstop должен игнорировать legacy-строки ──
+
+    private static class FakePendingRepo extends VacancyRepository {
+        List<Vacancy> pending = new ArrayList<>();
+        int updateScrapedCalls = 0;
+        FakePendingRepo() { super(null); }
+        @Override
+        public List<Vacancy> findScrapePending(String person, String searchName, int limit, int maxAttempts) { return pending; }
+        @Override
+        public java.util.Optional<Vacancy> findFirstScrapedByHhId(String hhId) { return java.util.Optional.empty(); }
+        @Override
+        public java.util.Optional<Vacancy> findFirstScrapedByDedupKey(String dedupKey) { return java.util.Optional.empty(); }
+        @Override
+        public void updateScraped(Vacancy v) { updateScrapedCalls++; }
+        @Override
+        public void incrementScrapeAttempts(Long id) {}
+    }
+
+    private static Vacancy scrapeStub(String hhId, String source) {
+        Vacancy v = new Vacancy();
+        v.setId(Long.parseLong(hhId));
+        v.setHhId(hhId);
+        v.setSource(source);
+        v.setDedupKey("");
+        return v;
+    }
+
+    private int scrapePending(VacancyPipelineService svc, SearchJob job) throws Exception {
+        Method m = VacancyPipelineService.class.getDeclaredMethod("scrapePending", SearchJob.class);
+        m.setAccessible(true);
+        return (int) m.invoke(svc, job);
+    }
+
+    @Test
+    void scrapePending_legacy403Cluster_doesNotTripBurstCooldown() throws Exception {
+        // Регрессия (инцидент 2026-07-20/21): переработка архива v1 регулярно
+        // приносит пачки месяцами скрытых вакансий (http_403 на каждую) — раньше
+        // это 7 раз за одно утро замораживало ВЕСЬ скрейпинг на 30-120 минут,
+        // хотя ни одна свежая вакансия не блокировалась.
+        RuntimeConfig config = new RuntimeConfig();
+        FakePendingRepo repo = new FakePendingRepo();
+        for (int i = 0; i < 10; i++) {
+            repo.pending.add(scrapeStub("100" + i, "hh-legacy"));
+        }
+        FreshnessScraper scraper = new FreshnessScraper(config);
+        repo.pending.forEach(v -> scraper.byId.put(v.getHhId(), failResult("http_403")));
+        VacancyPipelineService svc = new VacancyPipelineService(
+            null, scraper, new FakeAnalyzer(config), repo, null, config, null);
+
+        int count = scrapePending(svc, urlJob());
+
+        assertEquals(10, count, "все 10 legacy-403 должны быть обработаны без остановки по бёрсту");
+        assertFalse(svc.isScrapeCoolingDown(), "legacy-403 не должны замораживать скрейпинг");
+    }
+
+    @Test
+    void scrapePending_fresh403Cluster_stillTripsBurstCooldown() throws Exception {
+        // Свежие (не legacy) 403 — по-прежнему полноценный сигнал возможного
+        // рейт-лимита, защита должна сработать как раньше.
+        RuntimeConfig config = new RuntimeConfig();
+        FakePendingRepo repo = new FakePendingRepo();
+        for (int i = 0; i < 10; i++) {
+            repo.pending.add(scrapeStub("200" + i, "hh"));
+        }
+        FreshnessScraper scraper = new FreshnessScraper(config);
+        repo.pending.forEach(v -> scraper.byId.put(v.getHhId(), failResult("http_403")));
+        VacancyPipelineService svc = new VacancyPipelineService(
+            null, scraper, new FakeAnalyzer(config), repo, null, config, null);
+
+        scrapePending(svc, urlJob());
+
+        assertTrue(svc.isScrapeCoolingDown(), "бёрст свежих 403 должен по-прежнему замораживать скрейпинг");
+    }
+
     @Test
     void checkVacancyFreshness_aliveArchivedAndInconclusive_handledDistinctly() {
         RuntimeConfig config = new RuntimeConfig();
