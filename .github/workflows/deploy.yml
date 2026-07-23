@@ -57,6 +57,9 @@ jobs:
           cd ${DEPLOY_DIR}
           ${NPM_BIN} ci --omit=dev
           ${NPM_BIN} exec playwright install chromium
+          # Note: playwright install --with-deps intentionally NOT used — apt is brittle
+          # on this server (dpkg can be broken by other packages like grafana). All
+          # system library deps are pre-installed.
 
           # Install/refresh the systemd unit
           sudo cp "$GITHUB_WORKSPACE/scripts/hh-scraper.service" /etc/systemd/system/hh-scraper.service
