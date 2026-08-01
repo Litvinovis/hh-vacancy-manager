@@ -614,13 +614,24 @@ public class VacancyAiAnalyzer {
             throw new RuntimeException("JSON-массив не найден в ответе AI: "
                 + content.substring(0, Math.min(200, content.length())));
         }
-        List<Map<String, Object>> items = mapper.readValue(jsonArray, List.class);
+        List<?> items = mapper.readValue(jsonArray, List.class);
 
-        for (Map<String, Object> item : items) {
+        for (Object rawItem : items) {
+            if (!(rawItem instanceof Map<?, ?> item)) {
+                // Model occasionally returns a bare array of ID strings instead of
+                // objects (observed live: ["134846192", ...]) — skip just that
+                // element instead of failing the whole batch with a ClassCastException.
+                log.warn("AI вернул элемент массива неожиданного типа ({}), пропускаем: {}",
+                    rawItem == null ? "null" : rawItem.getClass().getSimpleName(), rawItem);
+                continue;
+            }
             String id = (String) item.get("id");
-            int score = ((Number) item.getOrDefault("score", 0)).intValue();
-            String verdict = (String) item.getOrDefault("verdict", "no");
-            String reason = (String) item.getOrDefault("reason", "");
+            Object scoreVal = item.get("score");
+            int score = scoreVal instanceof Number n ? n.intValue() : 0;
+            Object verdictVal = item.get("verdict");
+            String verdict = verdictVal instanceof String s ? s : "no";
+            Object reasonVal = item.get("reason");
+            String reason = reasonVal instanceof String s ? s : "";
 
             if (!VALID_VERDICTS.contains(verdict)) {
                 log.warn("AI вернул неожиданный verdict '{}' для вакансии {}, приводим к 'no'", verdict, id);
