@@ -20,7 +20,7 @@
 
     <properties>
         <java.version>25</java.version>
-        <sqlite-jdbc.version>3.53.2.0</sqlite-jdbc.version>
+        <sqlite-jdbc.version>3.53.2.1</sqlite-jdbc.version>
         <snakeyaml.version>2.6</snakeyaml.version>
     </properties>
 
