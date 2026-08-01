@@ -272,6 +272,24 @@ class VacancyAiAnalyzerTest {
         assertNull(extractJsonArray("User Safety: safe"));
     }
 
+    @SuppressWarnings("unchecked")
+    private List<VacancyAiAnalyzer.AiResult> parseResponseOk(String json) throws Exception {
+        var method = VacancyAiAnalyzer.class.getDeclaredMethod("parseResponse", String.class, List.class);
+        method.setAccessible(true);
+        return (List<VacancyAiAnalyzer.AiResult>) method.invoke(analyzer, json, List.of());
+    }
+
+    @Test
+    void parseResponse_arrayWithNonObjectItem_skipsItInsteadOfThrowing() throws Exception {
+        // Observed live: model returned a bare array of ID strings instead of
+        // objects — must not blow up the whole batch with a ClassCastException.
+        String json = "{\"choices\":[{\"message\":{\"content\":"
+            + "\"[\\\"134846192\\\",{\\\"id\\\":\\\"2\\\",\\\"score\\\":80,\\\"verdict\\\":\\\"yes\\\",\\\"reason\\\":\\\"ok\\\"}]\"}}]}";
+        List<VacancyAiAnalyzer.AiResult> results = parseResponseOk(json);
+        assertEquals(1, results.size());
+        assertEquals("2", results.get(0).hhId());
+    }
+
     @Test
     void extractJsonArray_nestedArraysInsideObjects() throws Exception {
         String content = "[{\"id\":\"1\",\"tags\":[\"a\",\"b\"]},{\"id\":\"2\",\"tags\":[]}]";
