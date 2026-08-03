@@ -100,16 +100,6 @@ jobs:
             sqlite3 "$DB_PATH" "ALTER TABLE vacancies ADD COLUMN search_id INTEGER DEFAULT NULL;" 2>/dev/null || true
             sqlite3 "$DB_PATH" "ALTER TABLE vacancies ADD COLUMN criteria_hash TEXT DEFAULT '';" 2>/dev/null || true
 
-            # One-time: archive the pre-browser-scraper data instead of mixing it with
-            # real (full-description) analysis. Only runs once — no-op if already renamed,
-            # and skipped entirely if a fresh `vacancies` table (created by the app's own
-            # schema.sql on next boot) hasn't appeared yet.
-            HAS_LEGACY=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='vacancies_legacy';")
-            HAS_PERSON_COL=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM pragma_table_info('vacancies') WHERE name='person';")
-            if [ "$HAS_LEGACY" = "0" ] && [ "$HAS_PERSON_COL" = "0" ]; then
-              echo "Archiving pre-scraper vacancies table to vacancies_legacy..."
-              sqlite3 "$DB_PATH" "ALTER TABLE vacancies RENAME TO vacancies_legacy;"
-            fi
             echo "DB migration done"
           fi
 
