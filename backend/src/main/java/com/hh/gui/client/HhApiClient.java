@@ -33,6 +33,11 @@ public class HhApiClient {
 
     private static final Logger log = LoggerFactory.getLogger(HhApiClient.class);
     private static final String RSS_BASE = "https://hh.ru/search/vacancy/rss";
+    // A 2026-08-04..07 incident showed ~73% of RSS fetches failing (DNS/connection-level,
+    // no HTTP response ever received) while other RSS calls in between succeeded fine —
+    // a transient blip, not a real block. One retry recovers most of those.
+    private static final int RSS_MAX_ATTEMPTS = 2;
+    private static final long RSS_RETRY_DELAY_MS = 3000;
 
     private final RuntimeConfig runtimeConfig;
 
@@ -46,42 +51,56 @@ public class HhApiClient {
      */
     public List<Vacancy> fetchRss(String query, int area, String schedule, int salaryMin) {
         List<Vacancy> results = new ArrayList<>();
-        try {
-            StringBuilder url = new StringBuilder(RSS_BASE);
-            url.append("?text=").append(URLEncoder.encode(query, StandardCharsets.UTF_8));
-            url.append("&area=").append(area);
-            url.append("&per_page=20");
-            if (schedule != null && !schedule.isEmpty()) {
-                url.append("&schedule=").append(schedule);
-            }
-            if (salaryMin > 0) {
-                url.append("&salary=").append(salaryMin);
-            }
+        StringBuilder url = new StringBuilder(RSS_BASE);
+        url.append("?text=").append(URLEncoder.encode(query, StandardCharsets.UTF_8));
+        url.append("&area=").append(area);
+        url.append("&per_page=20");
+        if (schedule != null && !schedule.isEmpty()) {
+            url.append("&schedule=").append(schedule);
+        }
+        if (salaryMin > 0) {
+            url.append("&salary=").append(salaryMin);
+        }
 
-            log.debug("HH RSS: {}", url);
+        log.debug("HH RSS: {}", url);
 
-            String xml = httpGet(url.toString());
-            if (xml == null) return results;
+        for (int attempt = 1; attempt <= RSS_MAX_ATTEMPTS; attempt++) {
+            try {
+                String xml = httpGet(url.toString());
+                if (xml == null) return results;
 
-            Document doc = DocumentBuilderFactory.newInstance()
-                .newDocumentBuilder()
-                .parse(new java.io.ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8)));
+                Document doc = DocumentBuilderFactory.newInstance()
+                    .newDocumentBuilder()
+                    .parse(new java.io.ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8)));
 
-            NodeList items = doc.getElementsByTagName("item");
-            for (int i = 0; i < items.getLength(); i++) {
-                Element item = (Element) items.item(i);
-                Vacancy v = parseRssItem(item);
-                if (v != null) {
-                    v.setSource("hh");
-                    v.setSourceQuery(query);
-                    v.setRemote("remote".equals(schedule));
-                    results.add(v);
+                NodeList items = doc.getElementsByTagName("item");
+                for (int i = 0; i < items.getLength(); i++) {
+                    Element item = (Element) items.item(i);
+                    Vacancy v = parseRssItem(item);
+                    if (v != null) {
+                        v.setSource("hh");
+                        v.setSourceQuery(query);
+                        v.setRemote("remote".equals(schedule));
+                        results.add(v);
+                    }
+                }
+
+                log.info("HH RSS: получено {} ID для '{}' (area={}, schedule={})", results.size(), query, area, schedule);
+                return results;
+            } catch (Exception e) {
+                if (attempt == RSS_MAX_ATTEMPTS) {
+                    log.error("Ошибка HH RSS для '{}': {}: {}", query, e.getClass().getSimpleName(), e.getMessage());
+                    return results;
+                }
+                log.warn("HH RSS для '{}': попытка {} не удалась ({}: {}), повторяем через {}с...",
+                    query, attempt, e.getClass().getSimpleName(), e.getMessage(), RSS_RETRY_DELAY_MS / 1000);
+                try {
+                    Thread.sleep(RSS_RETRY_DELAY_MS);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    return results;
                 }
             }
-
-            log.info("HH RSS: получено {} ID для '{}' (area={}, schedule={})", results.size(), query, area, schedule);
-        } catch (Exception e) {
-            log.error("Ошибка HH RSS для '{}': {}", query, e.getMessage());
         }
         return results;
     }
