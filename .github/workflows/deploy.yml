@@ -55,7 +55,11 @@ jobs:
           sudo chown -R clawd:clawd ${DEPLOY_DIR}
 
           cd ${DEPLOY_DIR}
-          ${NPM_BIN} ci --omit=dev
+          # --ignore-scripts: package.json's own postinstall runs "playwright install
+          # --with-deps", which apt-get updates for — and a broken/unrelated third-party
+          # apt repo (e.g. packages.cloudflare.com returning 530) then fails the whole
+          # npm ci. The explicit install below (no --with-deps) is what we actually want.
+          ${NPM_BIN} ci --omit=dev --ignore-scripts
           ${NPM_BIN} exec playwright install chromium
           # Note: playwright install --with-deps intentionally NOT used — apt is brittle
           # on this server (dpkg can be broken by other packages like grafana). All
