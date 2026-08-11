@@ -625,7 +625,18 @@ public class VacancyAiAnalyzer {
                     rawItem == null ? "null" : rawItem.getClass().getSimpleName(), rawItem);
                 continue;
             }
-            String id = (String) item.get("id");
+            Object idVal = item.get("id");
+            String id = idVal instanceof String s ? s
+                : idVal instanceof Number n ? String.valueOf(n.longValue()) : null;
+            if (id == null) {
+                // Model occasionally returns "id" as a JSON number instead of a
+                // string, which used to throw ClassCastException and fail the
+                // whole batch (observed live 2026-08-11). Coerce numbers, skip
+                // anything else, same as the bare-array-element case above.
+                log.warn("AI вернул элемент без id ({}), пропускаем: {}",
+                    idVal == null ? "null" : idVal.getClass().getSimpleName(), item);
+                continue;
+            }
             Object scoreVal = item.get("score");
             int score = scoreVal instanceof Number n ? n.intValue() : 0;
             Object verdictVal = item.get("verdict");
