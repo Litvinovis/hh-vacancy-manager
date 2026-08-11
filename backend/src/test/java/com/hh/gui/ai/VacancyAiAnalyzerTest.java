@@ -291,6 +291,28 @@ class VacancyAiAnalyzerTest {
     }
 
     @Test
+    void parseResponse_numericId_coercedToStringInsteadOfThrowing() throws Exception {
+        // Observed live 2026-08-11: model returned "id" as a JSON number instead
+        // of a string, which used to throw ClassCastException and fail the whole
+        // batch (all 3 retries) instead of just that item.
+        String json = "{\"choices\":[{\"message\":{\"content\":"
+            + "\"[{\\\"id\\\":134846192,\\\"score\\\":80,\\\"verdict\\\":\\\"yes\\\",\\\"reason\\\":\\\"ok\\\"}]\"}}]}";
+        List<VacancyAiAnalyzer.AiResult> results = parseResponseOk(json);
+        assertEquals(1, results.size());
+        assertEquals("134846192", results.get(0).hhId());
+    }
+
+    @Test
+    void parseResponse_missingId_skipsItInsteadOfThrowing() throws Exception {
+        String json = "{\"choices\":[{\"message\":{\"content\":"
+            + "\"[{\\\"score\\\":80,\\\"verdict\\\":\\\"yes\\\",\\\"reason\\\":\\\"ok\\\"},"
+            + "{\\\"id\\\":\\\"2\\\",\\\"score\\\":50,\\\"verdict\\\":\\\"no\\\",\\\"reason\\\":\\\"ok\\\"}]\"}}]}";
+        List<VacancyAiAnalyzer.AiResult> results = parseResponseOk(json);
+        assertEquals(1, results.size());
+        assertEquals("2", results.get(0).hhId());
+    }
+
+    @Test
     void extractJsonArray_nestedArraysInsideObjects() throws Exception {
         String content = "[{\"id\":\"1\",\"tags\":[\"a\",\"b\"]},{\"id\":\"2\",\"tags\":[]}]";
         assertEquals(content, extractJsonArray(content));
