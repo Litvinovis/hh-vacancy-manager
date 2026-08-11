@@ -45,6 +45,7 @@ public class SearchRepository {
         int runIntervalHours = rs.getInt("run_interval_hours");
         s.setRunIntervalHours(rs.wasNull() ? null : runIntervalHours);
         s.setLastRunAt(rs.getString("last_run_at"));
+        s.setChatId(rs.getString("chat_id"));
         return s;
     };
 
@@ -87,8 +88,8 @@ public class SearchRepository {
         String sql = """
             INSERT INTO searches (user_id, name, queries, area, schedule, salary_min,
                 priority_districts, skills, not_suitable, exclude_words, ai_notes, enabled,
-                created_at, updated_at, is_global, source_url, run_interval_hours, last_run_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                created_at, updated_at, is_global, source_url, run_interval_hours, last_run_at, chat_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """;
 
         KeyHolder keyHolder = new GeneratedKeyHolder();
@@ -112,7 +113,8 @@ public class SearchRepository {
             ps.setInt(i++, s.isGlobal() ? 1 : 0);
             ps.setString(i++, s.getSourceUrl());
             ps.setObject(i++, s.getRunIntervalHours(), Types.INTEGER);
-            ps.setString(i, s.getLastRunAt());
+            ps.setString(i++, s.getLastRunAt());
+            ps.setString(i, s.getChatId());
             return ps;
         }, keyHolder);
 
@@ -127,12 +129,12 @@ public class SearchRepository {
         jdbc.update(
             "UPDATE searches SET name=?, queries=?, area=?, schedule=?, salary_min=?, " +
             "priority_districts=?, skills=?, not_suitable=?, exclude_words=?, ai_notes=?, enabled=?, updated_at=?, " +
-            "source_url=?, run_interval_hours=? " +
+            "source_url=?, run_interval_hours=?, chat_id=? " +
             "WHERE id=?",
             s.getName(), writeList(s.getQueries()), s.getArea(), s.getSchedule(), s.getSalaryMin(),
             writeList(s.getPriorityDistricts()), writeList(s.getSkills()), writeList(s.getNotSuitable()),
             writeList(s.getExcludeWords()), s.getAiNotes(), s.isEnabled() ? 1 : 0, s.getUpdatedAt(),
-            s.getSourceUrl(), s.getRunIntervalHours(), s.getId());
+            s.getSourceUrl(), s.getRunIntervalHours(), s.getChatId(), s.getId());
     }
 
     /** Stamps the last automatic/manual run time for a search, used by the per-search interval scheduler. */

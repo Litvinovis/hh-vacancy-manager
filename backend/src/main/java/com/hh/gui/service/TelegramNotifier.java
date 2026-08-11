@@ -28,11 +28,20 @@ public class TelegramNotifier {
     private String chatId;
 
     public boolean send(String message) {
+        return send(message, null);
+    }
+
+    /**
+     * @param targetChatId overrides the configured default chat (e.g. a search's own
+     *                      Telegram channel) — null or blank falls back to app.telegram.chat-id.
+     */
+    public boolean send(String message, String targetChatId) {
+        String resolvedChatId = targetChatId != null && !targetChatId.isBlank() ? targetChatId : chatId;
         if (botToken == null || botToken.isEmpty()) {
             log.warn("Токен Telegram-бота не настроен");
             return false;
         }
-        if (chatId == null || chatId.isEmpty()) {
+        if (resolvedChatId == null || resolvedChatId.isEmpty()) {
             log.warn("ID чата Telegram не настроен");
             return false;
         }
@@ -46,7 +55,7 @@ public class TelegramNotifier {
             conn.setReadTimeout(30000);
             conn.setDoOutput(true);
 
-            String body = "chat_id=" + URLEncoder.encode(chatId, StandardCharsets.UTF_8)
+            String body = "chat_id=" + URLEncoder.encode(resolvedChatId, StandardCharsets.UTF_8)
                 + "&text=" + URLEncoder.encode(message, StandardCharsets.UTF_8)
                 + "&parse_mode=HTML&disable_web_page_preview=true";
 

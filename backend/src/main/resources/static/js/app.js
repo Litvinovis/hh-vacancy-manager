@@ -1343,6 +1343,10 @@ function urlDiscoverySectionHtml(s, id) {
       <div class="provider-field">
         <label>Автозапуск раз в, часов (пусто = только вручную)</label>
         <input class="provider-inp cab-run-interval" type="number" min="1" value="${s.runIntervalHours != null ? s.runIntervalHours : ''}">
+      </div>
+      <div class="provider-field">
+        <label>Telegram chat_id для отчётов (пусто = общий чат по умолчанию)</label>
+        <input class="provider-inp cab-chat-id" value="${escHtml(s.chatId || '')}" placeholder="@my_channel или -1001234567890">
       </div>${runNow}
     </div>`;
 }
@@ -1406,6 +1410,7 @@ function readCabinetSearchCard(card) {
     enabled: card.querySelector('.cab-enabled')?.checked !== false,
     sourceUrl: card.querySelector('.cab-source-url')?.value?.trim() || '',
     runIntervalHours: runIntervalRaw ? parseInt(runIntervalRaw) : null,
+    chatId: card.querySelector('.cab-chat-id')?.value?.trim() || '',
   };
 }
 

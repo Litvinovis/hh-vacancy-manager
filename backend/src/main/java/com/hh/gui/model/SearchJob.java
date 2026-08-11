@@ -29,6 +29,7 @@ public class SearchJob {
     public String sourceUrl;
     public Integer runIntervalHours;
     public String lastRunAt;
+    public String chatId;
 
     public boolean isRemote() {
         return "remote".equalsIgnoreCase(schedule) || area == 113;

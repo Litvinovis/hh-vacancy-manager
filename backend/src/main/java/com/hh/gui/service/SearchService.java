@@ -28,8 +28,9 @@ public class SearchService {
     /**
      * @param isAdmin gates search.isGlobal(): a non-admin's request is always forced
      *                to a personal (non-global) search regardless of what it asked for.
-     *                Also gates URL-based discovery (sourceUrl/runIntervalHours) — an
-     *                admin-only feature, a non-admin's values are silently dropped.
+     *                Also gates URL-based discovery (sourceUrl/runIntervalHours) and the
+     *                Telegram chat_id override — admin-only features, a non-admin's
+     *                values are silently dropped.
      *                Global searches are exempt from MAX_SEARCHES_PER_USER — they're
      *                shared, admin-managed resources, not part of anyone's personal quota.
      */
@@ -44,6 +45,7 @@ public class SearchService {
         if (!isAdmin) {
             search.setSourceUrl(null);
             search.setRunIntervalHours(null);
+            search.setChatId(null);
         }
         requireDiscoverySource(search, isAdmin);
         SearchConfig saved = searchRepo.save(search);
@@ -73,10 +75,11 @@ public class SearchService {
         existing.setExcludeWords(updates.getExcludeWords());
         existing.setAiNotes(updates.getAiNotes());
         if (isAdmin) {
-            // URL-based discovery is admin-only: a non-admin's update keeps whatever
-            // is already stored instead of accepting (or wiping) the fields.
+            // URL-based discovery and the chat_id override are admin-only: a non-admin's
+            // update keeps whatever is already stored instead of accepting (or wiping) them.
             existing.setSourceUrl(updates.getSourceUrl());
             existing.setRunIntervalHours(updates.getRunIntervalHours());
+            existing.setChatId(updates.getChatId());
         }
         if (updates.isEnabled() != existing.isEnabled()) {
             existing.setEnabled(updates.isEnabled());

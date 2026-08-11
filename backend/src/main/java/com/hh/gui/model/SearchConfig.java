@@ -29,6 +29,7 @@ public class SearchConfig {
     private String sourceUrl;
     private Integer runIntervalHours;
     private String lastRunAt;
+    private String chatId;
 
     public SearchConfig() {}
 
@@ -95,6 +96,9 @@ public class SearchConfig {
 
     public String getLastRunAt() { return lastRunAt; }
     public void setLastRunAt(String lastRunAt) { this.lastRunAt = lastRunAt; }
+
+    public String getChatId() { return chatId; }
+    public void setChatId(String chatId) { this.chatId = chatId; }
 
     public boolean isRemote() {
         return "remote".equalsIgnoreCase(schedule) || area == 113;
