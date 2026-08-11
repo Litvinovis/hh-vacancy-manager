@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS searches (
     source_url VARCHAR(1024) DEFAULT '',
     run_interval_hours INTEGER DEFAULT NULL,
     last_run_at VARCHAR(64) DEFAULT NULL,
+    chat_id VARCHAR(64) DEFAULT NULL,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
     UNIQUE(user_id, name)
 );
