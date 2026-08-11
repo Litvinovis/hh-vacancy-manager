@@ -29,8 +29,9 @@ public class SearchService {
      * @param isAdmin gates search.isGlobal(): a non-admin's request is always forced
      *                to a personal (non-global) search regardless of what it asked for.
      *                Also gates URL-based discovery (sourceUrl/runIntervalHours) and the
-     *                Telegram chat_id override — admin-only features, a non-admin's
-     *                values are silently dropped.
+     *                Telegram publishing overrides (chatId/publicFormat/delayedChatId/
+     *                delayedPublishMinutes/subscriberFeed) — admin-only features, a
+     *                non-admin's values are silently dropped.
      *                Global searches are exempt from MAX_SEARCHES_PER_USER — they're
      *                shared, admin-managed resources, not part of anyone's personal quota.
      */
@@ -46,6 +47,10 @@ public class SearchService {
             search.setSourceUrl(null);
             search.setRunIntervalHours(null);
             search.setChatId(null);
+            search.setPublicFormat(false);
+            search.setDelayedChatId(null);
+            search.setDelayedPublishMinutes(null);
+            search.setSubscriberFeed(false);
         }
         requireDiscoverySource(search, isAdmin);
         SearchConfig saved = searchRepo.save(search);
@@ -75,11 +80,16 @@ public class SearchService {
         existing.setExcludeWords(updates.getExcludeWords());
         existing.setAiNotes(updates.getAiNotes());
         if (isAdmin) {
-            // URL-based discovery and the chat_id override are admin-only: a non-admin's
-            // update keeps whatever is already stored instead of accepting (or wiping) them.
+            // URL-based discovery and the Telegram publishing overrides are admin-only:
+            // a non-admin's update keeps whatever is already stored instead of accepting
+            // (or wiping) them.
             existing.setSourceUrl(updates.getSourceUrl());
             existing.setRunIntervalHours(updates.getRunIntervalHours());
             existing.setChatId(updates.getChatId());
+            existing.setPublicFormat(updates.isPublicFormat());
+            existing.setDelayedChatId(updates.getDelayedChatId());
+            existing.setDelayedPublishMinutes(updates.getDelayedPublishMinutes());
+            existing.setSubscriberFeed(updates.isSubscriberFeed());
         }
         if (updates.isEnabled() != existing.isEnabled()) {
             existing.setEnabled(updates.isEnabled());

@@ -45,11 +45,17 @@ public class SchemaMigrator implements ApplicationRunner {
         addColumnIfMissing("searches", "run_interval_hours", "INTEGER DEFAULT NULL");
         addColumnIfMissing("searches", "last_run_at", "TEXT DEFAULT NULL");
         addColumnIfMissing("searches", "chat_id", "TEXT DEFAULT NULL");
+        addColumnIfMissing("searches", "public_format", "INTEGER NOT NULL DEFAULT 0");
+        addColumnIfMissing("searches", "delayed_chat_id", "TEXT DEFAULT NULL");
+        addColumnIfMissing("searches", "delayed_publish_minutes", "INTEGER DEFAULT NULL");
+        addColumnIfMissing("searches", "subscriber_feed", "INTEGER NOT NULL DEFAULT 0");
         addColumnIfMissing("vacancies", "dedup_key", "TEXT DEFAULT ''");
         addColumnIfMissing("vacancies", "scrape_attempts", "INTEGER DEFAULT 0");
         addColumnIfMissing("vacancies", "ai_attempts", "INTEGER DEFAULT 0");
         addColumnIfMissing("vacancies", "last_checked_at", "TEXT DEFAULT NULL");
         addColumnIfMissing("vacancies", "closed_at", "TEXT DEFAULT NULL");
+        addColumnIfMissing("vacancies", "delayed_publish_at", "TEXT DEFAULT NULL");
+        addColumnIfMissing("vacancies", "delayed_notified", "INTEGER DEFAULT 0");
 
         // Not in schema.sql: an index on a just-added column would fail schema.sql's own
         // unconditional run on the next boot after a fresh install (see schema.sql's
@@ -59,6 +65,7 @@ public class SchemaMigrator implements ApplicationRunner {
         runIgnoringErrors("CREATE INDEX IF NOT EXISTS idx_searches_is_global ON searches(is_global)");
         runIgnoringErrors("CREATE INDEX IF NOT EXISTS idx_uvs_user_id ON user_vacancy_status(user_id)");
         runIgnoringErrors("CREATE INDEX IF NOT EXISTS idx_uvs_vacancy_id ON user_vacancy_status(vacancy_id)");
+        runIgnoringErrors("CREATE INDEX IF NOT EXISTS idx_vac_delayed_publish_at ON vacancies(delayed_publish_at)");
 
         backfillDedupKeys();
     }

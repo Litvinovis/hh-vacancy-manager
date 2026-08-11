@@ -5,9 +5,12 @@ import com.hh.gui.ai.VacancyAiAnalyzer;
 import com.hh.gui.client.HhApiClient;
 import com.hh.gui.client.ScraperClient;
 import com.hh.gui.client.ScraperClient.ScrapeResult;
+import com.hh.gui.config.FeatureFlags;
 import com.hh.gui.config.RuntimeConfig;
+import com.hh.gui.model.SearchConfig;
 import com.hh.gui.model.SearchJob;
 import com.hh.gui.model.Vacancy;
+import com.hh.gui.repository.SearchRepository;
 import com.hh.gui.repository.VacancyRepository;
 import com.hh.gui.util.DedupKeys;
 import com.hh.gui.util.SalaryFormatter;
@@ -50,6 +53,9 @@ public class VacancyPipelineService {
     private final TelegramNotifier telegramNotifier;
     private final RuntimeConfig runtimeConfig;
     private final AiMetrics metrics;
+    private final FeatureFlags featureFlags;
+    private final SearchRepository searchRepo;
+    private final SubscriptionService subscriptionService;
 
     @Value("${app.pipeline.batch-size:10}")
     private int batchSizeDefault;
@@ -59,7 +65,8 @@ public class VacancyPipelineService {
 
     public VacancyPipelineService(HhApiClient hhApiClient, ScraperClient scraperClient, VacancyAiAnalyzer aiAnalyzer,
                                    VacancyRepository vacancyRepo, TelegramNotifier telegramNotifier,
-                                   RuntimeConfig runtimeConfig, AiMetrics metrics) {
+                                   RuntimeConfig runtimeConfig, AiMetrics metrics, FeatureFlags featureFlags,
+                                   SearchRepository searchRepo, SubscriptionService subscriptionService) {
         this.hhApiClient = hhApiClient;
         this.scraperClient = scraperClient;
         this.aiAnalyzer = aiAnalyzer;
@@ -67,6 +74,9 @@ public class VacancyPipelineService {
         this.telegramNotifier = telegramNotifier;
         this.runtimeConfig = runtimeConfig;
         this.metrics = metrics;
+        this.subscriptionService = subscriptionService;
+        this.featureFlags = featureFlags;
+        this.searchRepo = searchRepo;
         runtimeConfig.setPipelineBatchSize(runtimeConfig.getPipelineBatchSize() > 0 ? runtimeConfig.getPipelineBatchSize() : batchSizeDefault);
         runtimeConfig.setNotificationsEnabled(notificationsEnabledDefault);
     }
@@ -891,6 +901,10 @@ public class VacancyPipelineService {
     // each chunk's vacancies notified independently avoids that stuck state.
     private static final int TELEGRAM_MAX_MESSAGE_CHARS = 4000;
 
+    // Default delay for a search that has delayed_chat_id set but no explicit
+    // delayed_publish_minutes — matches the "5 minutes earlier" pitch this was built for.
+    private static final int DEFAULT_DELAYED_PUBLISH_MINUTES = 5;
+
     private void sendReport(List<Vacancy> approved, SearchJob job) {
         if (!runtimeConfig.isNotificationsEnabled()) {
             log.info("Уведомления отключены — отчёт ({} · {}, {} одобренных) не отправлен",
@@ -898,6 +912,47 @@ public class VacancyPipelineService {
             return;
         }
 
+        boolean usePublicFormat = featureFlags.isPublicFormatEnabled() && job.publicFormat;
+        if (usePublicFormat) {
+            sendPublicPosts(approved, job);
+        } else {
+            sendPersonalReport(approved, job);
+        }
+
+        // Same AI evaluation, deferred second destination — never re-analyzed, just
+        // scheduled here and picked up later by publishDueDelayed(). Independent of
+        // whether the primary send above (chatId) succeeded, ran at all, or used the
+        // personal template: the free channel is its own delivery, not a retry of it.
+        if (featureFlags.isDelayedPublishEnabled() && job.delayedChatId != null && !job.delayedChatId.isBlank()) {
+            int minutes = job.delayedPublishMinutes != null ? job.delayedPublishMinutes : DEFAULT_DELAYED_PUBLISH_MINUTES;
+            String publishAt = Instant.now().plusSeconds(minutes * 60L).toString();
+            vacancyRepo.scheduleDelayedPublish(approved.stream().map(Vacancy::getId).toList(), publishAt);
+            log.info("Отложенная публикация запланирована ({} · {}, {} вакансий, через {} мин)",
+                job.personName, job.searchName, approved.size(), minutes);
+        }
+
+        // Instant paid-subscriber broadcast — the "early access" half of the delayed
+        // dual-publish: same approvals, no separate AI pass, sent right now instead of
+        // waiting for the scheduler. Independent of chatId/delayedChatId above.
+        if (featureFlags.isSubscriptionsEnabled() && job.subscriberFeed) {
+            broadcastToSubscribers(approved, job);
+        }
+    }
+
+    private void broadcastToSubscribers(List<Vacancy> approved, SearchJob job) {
+        List<Long> chatIds = subscriptionService.listActiveChatIds();
+        if (chatIds.isEmpty()) return;
+        for (Vacancy v : approved) {
+            String post = formatPublicPost(v);
+            for (Long chatId : chatIds) {
+                telegramNotifier.send(post, String.valueOf(chatId));
+            }
+        }
+        log.info("Рассылка подписчикам ({} · {}, {} вакансий × {} подписчиков)",
+            job.personName, job.searchName, approved.size(), chatIds.size());
+    }
+
+    private void sendPersonalReport(List<Vacancy> approved, SearchJob job) {
         String header = "🔍 <b>" + escapeHtml(job.personName) + " · " + escapeHtml(job.searchName) + "</b>\n\n";
         List<List<Vacancy>> chunks = chunkReport(approved, header);
 
@@ -915,6 +970,77 @@ public class VacancyPipelineService {
         log.info("Отчёт отправлен ({} · {}, {}/{} вакансий, {} сообщени{})",
             job.personName, job.searchName, notifiedCount, approved.size(), chunks.size(),
             chunks.size() == 1 ? "е" : "я");
+    }
+
+    /**
+     * Public-channel path: one Telegram message per vacancy (reposts/forwards better
+     * than a batch, and each one stands alone without a "🔍 person · search" header
+     * that only makes sense for a personal report) using the public template.
+     */
+    private void sendPublicPosts(List<Vacancy> approved, SearchJob job) {
+        int notifiedCount = 0;
+        for (Vacancy v : approved) {
+            if (telegramNotifier.send(formatPublicPost(v), job.chatId)) {
+                vacancyRepo.markNotified(List.of(v.getId()));
+                notifiedCount++;
+            } else {
+                log.warn("Не удалось опубликовать вакансию id={} ({} · {}) — останется неуведомлённой",
+                    v.getId(), job.personName, job.searchName);
+            }
+        }
+        log.info("Публичные посты отправлены ({} · {}, {}/{})",
+            job.personName, job.searchName, notifiedCount, approved.size());
+    }
+
+    /**
+     * Fired on the delayed-publish scheduler tick (see PipelineScheduler). Groups due
+     * rows by search_id to look up each search's delayed_chat_id, sends each vacancy
+     * as a public post, and marks it delayed_notified — independent of the primary
+     * notified flag, which this never touches.
+     */
+    public void publishDueDelayed(int limit) {
+        List<Vacancy> due = vacancyRepo.findDueDelayedPublications(Instant.now().toString(), limit);
+        if (due.isEmpty()) return;
+
+        Map<Long, List<Vacancy>> bySearchId = due.stream()
+            .filter(v -> v.getSearchId() != null)
+            .collect(Collectors.groupingBy(Vacancy::getSearchId));
+
+        for (var entry : bySearchId.entrySet()) {
+            Optional<SearchConfig> searchOpt = searchRepo.findById(entry.getKey());
+            if (searchOpt.isEmpty() || searchOpt.get().getDelayedChatId() == null
+                    || searchOpt.get().getDelayedChatId().isBlank()) {
+                // Search deleted or its delayed_chat_id was cleared since scheduling —
+                // nothing sane to do with these; leave delayed_notified=0 forever rather
+                // than guess a destination (matches the fail-open style used elsewhere).
+                continue;
+            }
+            String delayedChatId = searchOpt.get().getDelayedChatId();
+            for (Vacancy v : entry.getValue()) {
+                if (telegramNotifier.send(formatPublicPost(v), delayedChatId)) {
+                    vacancyRepo.markDelayedNotified(List.of(v.getId()));
+                } else {
+                    log.warn("Отложенная публикация не удалась для id={} (search_id={})", v.getId(), entry.getKey());
+                }
+            }
+        }
+    }
+
+    /** Single-vacancy public post: no internal scoring/routing info, just what a subscriber needs. */
+    private String formatPublicPost(Vacancy v) {
+        String salary = SalaryFormatter.forReport(v);
+        String company = v.getCompany() != null && !v.getCompany().isEmpty() ? escapeHtml(v.getCompany()) : "компания не указана";
+        String title = truncate(v.getTitle(), 150);
+        String reason = truncate(v.getAiReason(), 300);
+
+        StringBuilder sb = new StringBuilder();
+        sb.append(String.format("📌 <b>%s</b>\n", escapeHtml(title)));
+        sb.append(String.format("🏢 %s · 💰 %s\n", company, salary));
+        if (reason != null && !reason.isBlank()) {
+            sb.append(String.format("💡 %s\n", escapeHtml(reason)));
+        }
+        sb.append(String.format("👉 %s\n", v.getUrl()));
+        return sb.toString();
     }
 
     /** Splits vacancies into groups that each fit under TELEGRAM_MAX_MESSAGE_CHARS once formatted. */

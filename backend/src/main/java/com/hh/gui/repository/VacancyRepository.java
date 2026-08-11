@@ -470,6 +470,37 @@ public class VacancyRepository {
     }
 
     /**
+     * Stamps the delayed public-channel publish time for a batch of vacancies (see
+     * searches.delayed_chat_id / FeatureFlags.delayedPublishEnabled) — the free channel's
+     * copy of the same AI evaluation already sent instantly elsewhere, just deferred.
+     * Guarded by "delayed_publish_at IS NULL" so a vacancy already scheduled (still
+     * waiting on the scheduler tick) never gets its due time pushed forward by a
+     * later, unrelated call with the same id.
+     */
+    public void scheduleDelayedPublish(List<Long> ids, String publishAt) {
+        for (Long id : ids) {
+            jdbc.update(
+                "UPDATE vacancies SET delayed_publish_at=? WHERE id=? AND delayed_publish_at IS NULL",
+                publishAt, id);
+        }
+    }
+
+    /** Approved vacancies whose delayed-publish time has arrived and haven't been sent yet. */
+    public List<Vacancy> findDueDelayedPublications(String nowIso, int limit) {
+        return jdbc.query(
+            "SELECT * FROM vacancies WHERE delayed_publish_at IS NOT NULL AND delayed_publish_at <= ? " +
+            "AND delayed_notified = 0 AND closed_at IS NULL ORDER BY delayed_publish_at LIMIT ?",
+            rowMapper, nowIso, limit);
+    }
+
+    /** Mark vacancies as sent to their delayed (free-channel) destination. */
+    public void markDelayedNotified(List<Long> ids) {
+        for (Long id : ids) {
+            jdbc.update("UPDATE vacancies SET delayed_notified=1 WHERE id=?", id);
+        }
+    }
+
+    /**
      * Approved postings due for a liveness re-check on hh.ru (see
      * VacancyPipelineService.checkVacancyFreshness): only 'yes' verdicts anyone
      * actually sees, not yet known closed, last confirmed (or first saved) more

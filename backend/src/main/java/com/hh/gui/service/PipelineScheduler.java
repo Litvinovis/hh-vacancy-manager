@@ -2,6 +2,7 @@ package com.hh.gui.service;
 
 import com.hh.gui.ai.FreeModelUpdater;
 import com.hh.gui.ai.VacancyAiAnalyzer;
+import com.hh.gui.config.FeatureFlags;
 import com.hh.gui.config.RuntimeConfig;
 import com.hh.gui.model.SearchConfig;
 import com.hh.gui.model.SearchJob;
@@ -58,16 +59,24 @@ public class PipelineScheduler implements SchedulingConfigurer {
     private final VacancyAiAnalyzer aiAnalyzer;
     private final SearchRepository searchRepo;
     private final FreeModelUpdater freeModelUpdater;
+    private final FeatureFlags featureFlags;
+
+    // How often to check for approved vacancies whose delayed_publish_at has arrived
+    // (see VacancyPipelineService.publishDueDelayed). A 5-minute delay needs a check
+    // interval well under that to actually land close to on time.
+    private static final Duration DELAYED_PUBLISH_CHECK_INTERVAL = Duration.ofMinutes(1);
+    private static final int DELAYED_PUBLISH_BATCH_PER_TICK = 50;
 
     public PipelineScheduler(VacancyPipelineService pipelineService, SearchProfileFactory profileFactory,
                               RuntimeConfig runtimeConfig, VacancyAiAnalyzer aiAnalyzer, SearchRepository searchRepo,
-                              FreeModelUpdater freeModelUpdater) {
+                              FreeModelUpdater freeModelUpdater, FeatureFlags featureFlags) {
         this.pipelineService = pipelineService;
         this.profileFactory = profileFactory;
         this.runtimeConfig = runtimeConfig;
         this.aiAnalyzer = aiAnalyzer;
         this.searchRepo = searchRepo;
         this.freeModelUpdater = freeModelUpdater;
+        this.featureFlags = featureFlags;
     }
 
     @Override
@@ -83,6 +92,16 @@ public class PipelineScheduler implements SchedulingConfigurer {
         PeriodicTrigger freshnessTrigger = new PeriodicTrigger(Duration.ofMinutes(10));
         freshnessTrigger.setInitialDelay(Duration.ofMinutes(5));
         registrar.addTriggerTask(this::runFreshnessCheck, freshnessTrigger);
+        registrar.addTriggerTask(this::runDueDelayedPublications, new PeriodicTrigger(DELAYED_PUBLISH_CHECK_INTERVAL));
+    }
+
+    private void runDueDelayedPublications() {
+        if (!featureFlags.isDelayedPublishEnabled()) return;
+        try {
+            pipelineService.publishDueDelayed(DELAYED_PUBLISH_BATCH_PER_TICK);
+        } catch (Exception e) {
+            log.error("Отложенная публикация завершилась ошибкой: {}", e.getMessage(), e);
+        }
     }
 
     private void runFreshnessCheck() {

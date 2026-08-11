@@ -30,6 +30,10 @@ public class SearchJob {
     public Integer runIntervalHours;
     public String lastRunAt;
     public String chatId;
+    public boolean publicFormat;
+    public String delayedChatId;
+    public Integer delayedPublishMinutes;
+    public boolean subscriberFeed;
 
     public boolean isRemote() {
         return "remote".equalsIgnoreCase(schedule) || area == 113;
