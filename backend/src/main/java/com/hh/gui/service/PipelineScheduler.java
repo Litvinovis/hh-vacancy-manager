@@ -4,6 +4,7 @@ import com.hh.gui.ai.FreeModelUpdater;
 import com.hh.gui.ai.VacancyAiAnalyzer;
 import com.hh.gui.config.FeatureFlags;
 import com.hh.gui.config.RuntimeConfig;
+import com.hh.gui.config.SchemaMigrator;
 import com.hh.gui.model.SearchConfig;
 import com.hh.gui.model.SearchJob;
 import com.hh.gui.repository.SearchRepository;
@@ -60,6 +61,7 @@ public class PipelineScheduler implements SchedulingConfigurer {
     private final SearchRepository searchRepo;
     private final FreeModelUpdater freeModelUpdater;
     private final FeatureFlags featureFlags;
+    private final SchemaMigrator schemaMigrator;
 
     // How often to check for approved vacancies whose delayed_publish_at has arrived
     // (see VacancyPipelineService.publishDueDelayed). A 5-minute delay needs a check
@@ -69,7 +71,7 @@ public class PipelineScheduler implements SchedulingConfigurer {
 
     public PipelineScheduler(VacancyPipelineService pipelineService, SearchProfileFactory profileFactory,
                               RuntimeConfig runtimeConfig, VacancyAiAnalyzer aiAnalyzer, SearchRepository searchRepo,
-                              FreeModelUpdater freeModelUpdater, FeatureFlags featureFlags) {
+                              FreeModelUpdater freeModelUpdater, FeatureFlags featureFlags, SchemaMigrator schemaMigrator) {
         this.pipelineService = pipelineService;
         this.profileFactory = profileFactory;
         this.runtimeConfig = runtimeConfig;
@@ -77,6 +79,7 @@ public class PipelineScheduler implements SchedulingConfigurer {
         this.searchRepo = searchRepo;
         this.freeModelUpdater = freeModelUpdater;
         this.featureFlags = featureFlags;
+        this.schemaMigrator = schemaMigrator;
     }
 
     @Override
@@ -95,8 +98,17 @@ public class PipelineScheduler implements SchedulingConfigurer {
         registrar.addTriggerTask(this::runDueDelayedPublications, new PeriodicTrigger(DELAYED_PUBLISH_CHECK_INTERVAL));
     }
 
+    /**
+     * True right after boot, until SchemaMigrator finishes — see its javadoc for the
+     * race this guards: @Scheduled triggers can fire before a just-added column exists.
+     * Skipping one tick here is free; every trigger re-fires on its own next interval.
+     */
+    private boolean schemaNotReady() {
+        return !schemaMigrator.isReady();
+    }
+
     private void runDueDelayedPublications() {
-        if (!featureFlags.isDelayedPublishEnabled()) return;
+        if (schemaNotReady() || !featureFlags.isDelayedPublishEnabled()) return;
         try {
             pipelineService.publishDueDelayed(DELAYED_PUBLISH_BATCH_PER_TICK);
         } catch (Exception e) {
@@ -105,7 +117,7 @@ public class PipelineScheduler implements SchedulingConfigurer {
     }
 
     private void runFreshnessCheck() {
-        if (!runtimeConfig.isPipelineEnabled()) return;
+        if (schemaNotReady() || !runtimeConfig.isPipelineEnabled()) return;
         try {
             pipelineService.checkVacancyFreshness(VacancyPipelineService.FRESHNESS_BATCH_PER_TICK);
         } catch (Exception e) {
@@ -133,6 +145,7 @@ public class PipelineScheduler implements SchedulingConfigurer {
     }
 
     private void runPipeline() {
+        if (schemaNotReady()) return;
         if (!runtimeConfig.isPipelineEnabled()) {
             log.debug("Автозапуск пайплайна отключён в настройках");
             return;
@@ -165,6 +178,7 @@ public class PipelineScheduler implements SchedulingConfigurer {
     }
 
     private void runDailyAnalysis() {
+        if (schemaNotReady()) return;
         if (!runtimeConfig.isPipelineEnabled()) {
             log.debug("Ежедневный анализ пропущен — пайплайн отключён в настройках");
             return;
@@ -191,6 +205,7 @@ public class PipelineScheduler implements SchedulingConfigurer {
      * RSS pipeline's single global pipelineIntervalMs — each such search picks its own cadence.
      */
     private void runDueUrlSearches() {
+        if (schemaNotReady()) return;
         if (!runtimeConfig.isPipelineEnabled()) {
             log.debug("Автозапуск поисков по ссылке пропущен — пайплайн отключён в настройках");
             return;
