@@ -98,6 +98,10 @@ public class SearchProfileFactory {
         job.runIntervalHours = search.getRunIntervalHours();
         job.lastRunAt = search.getLastRunAt();
         job.chatId = search.getChatId();
+        job.publicFormat = search.isPublicFormat();
+        job.delayedChatId = search.getDelayedChatId();
+        job.delayedPublishMinutes = search.getDelayedPublishMinutes();
+        job.subscriberFeed = search.isSubscriberFeed();
         return job;
     }
 }

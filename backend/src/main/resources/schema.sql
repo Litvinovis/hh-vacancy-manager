@@ -41,6 +41,18 @@ CREATE TABLE IF NOT EXISTS searches (
     -- public channel search posting separately from personal notifications).
     -- NULL = use the default chat.
     chat_id TEXT DEFAULT NULL,
+    -- Public-channel posting (all admin-only, gated by FeatureFlags — inert while their
+    -- toggle is off): public_format switches chat_id's own send from the personal-report
+    -- template to the public one-vacancy-per-message template. delayed_chat_id/
+    -- delayed_publish_minutes add a SECOND destination fed by the same AI evaluation
+    -- (no duplicate analysis), always in the public template, sent N minutes later —
+    -- the "free channel gets it after paid subscribers" mechanic. subscriber_feed marks
+    -- this search's approvals for the instant paid-subscriber broadcast (see subscriptions
+    -- table) — independent of chat_id/delayed_chat_id.
+    public_format INTEGER NOT NULL DEFAULT 0,
+    delayed_chat_id TEXT DEFAULT NULL,
+    delayed_publish_minutes INTEGER DEFAULT NULL,
+    subscriber_feed INTEGER NOT NULL DEFAULT 0,
     UNIQUE(user_id, name)
 );
 
@@ -99,6 +111,11 @@ CREATE TABLE IF NOT EXISTS vacancies (
     -- and when it was found closed/archived (NULL = considered active).
     last_checked_at TEXT DEFAULT NULL,
     closed_at TEXT DEFAULT NULL,
+    -- Delayed dual-publish (see searches.delayed_chat_id): set once, when this row's
+    -- primary notification fires, to now + delayed_publish_minutes. delayed_notified
+    -- flips to 1 once the scheduler has actually sent it to the delayed destination.
+    delayed_publish_at TEXT DEFAULT NULL,
+    delayed_notified INTEGER DEFAULT 0,
     UNIQUE(hh_id, person, search_name)
 );
 
@@ -131,6 +148,30 @@ CREATE TABLE IF NOT EXISTS history (
     details TEXT DEFAULT '',
     created_at TEXT NOT NULL DEFAULT ''
 );
+
+-- Paid early-access subscribers of the Telegram bot (see FeatureFlags.subscriptionsEnabled
+-- and TelegramBotPoller). One row per Telegram user; telegram_chat_id is their private
+-- chat with the bot, used to broadcast approved vacancies instantly (searches.subscriber_feed).
+CREATE TABLE IF NOT EXISTS subscriptions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_user_id INTEGER NOT NULL,
+    telegram_chat_id INTEGER NOT NULL,
+    -- pending: /subscribe seen, no confirmed payment yet. active: paid, current.
+    -- expired: past expires_at. cancelled: user asked to stop.
+    status TEXT NOT NULL DEFAULT 'pending',
+    plan_price_rub INTEGER NOT NULL DEFAULT 200,
+    started_at TEXT DEFAULT NULL,
+    expires_at TEXT DEFAULT NULL,
+    payment_provider TEXT DEFAULT 'stub',
+    external_payment_id TEXT DEFAULT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(telegram_user_id)
+);
+-- subscriptions is a new table (unlike the columns above, added via CREATE TABLE IF NOT
+-- EXISTS on every boot) so an index on it is safe directly here — no risk of referencing
+-- a column that doesn't exist yet on an existing DB.
+CREATE INDEX IF NOT EXISTS idx_sub_status ON subscriptions(status);
 
 CREATE INDEX IF NOT EXISTS idx_vac_hh_id ON vacancies(hh_id);
 CREATE INDEX IF NOT EXISTS idx_vac_status ON vacancies(status);

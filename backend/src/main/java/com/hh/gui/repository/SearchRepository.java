@@ -46,6 +46,11 @@ public class SearchRepository {
         s.setRunIntervalHours(rs.wasNull() ? null : runIntervalHours);
         s.setLastRunAt(rs.getString("last_run_at"));
         s.setChatId(rs.getString("chat_id"));
+        s.setPublicFormat(rs.getInt("public_format") == 1);
+        s.setDelayedChatId(rs.getString("delayed_chat_id"));
+        int delayedPublishMinutes = rs.getInt("delayed_publish_minutes");
+        s.setDelayedPublishMinutes(rs.wasNull() ? null : delayedPublishMinutes);
+        s.setSubscriberFeed(rs.getInt("subscriber_feed") == 1);
         return s;
     };
 
@@ -88,8 +93,9 @@ public class SearchRepository {
         String sql = """
             INSERT INTO searches (user_id, name, queries, area, schedule, salary_min,
                 priority_districts, skills, not_suitable, exclude_words, ai_notes, enabled,
-                created_at, updated_at, is_global, source_url, run_interval_hours, last_run_at, chat_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                created_at, updated_at, is_global, source_url, run_interval_hours, last_run_at, chat_id,
+                public_format, delayed_chat_id, delayed_publish_minutes, subscriber_feed)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """;
 
         KeyHolder keyHolder = new GeneratedKeyHolder();
@@ -114,7 +120,11 @@ public class SearchRepository {
             ps.setString(i++, s.getSourceUrl());
             ps.setObject(i++, s.getRunIntervalHours(), Types.INTEGER);
             ps.setString(i++, s.getLastRunAt());
-            ps.setString(i, s.getChatId());
+            ps.setString(i++, s.getChatId());
+            ps.setInt(i++, s.isPublicFormat() ? 1 : 0);
+            ps.setString(i++, s.getDelayedChatId());
+            ps.setObject(i++, s.getDelayedPublishMinutes(), Types.INTEGER);
+            ps.setInt(i, s.isSubscriberFeed() ? 1 : 0);
             return ps;
         }, keyHolder);
 
@@ -129,12 +139,15 @@ public class SearchRepository {
         jdbc.update(
             "UPDATE searches SET name=?, queries=?, area=?, schedule=?, salary_min=?, " +
             "priority_districts=?, skills=?, not_suitable=?, exclude_words=?, ai_notes=?, enabled=?, updated_at=?, " +
-            "source_url=?, run_interval_hours=?, chat_id=? " +
+            "source_url=?, run_interval_hours=?, chat_id=?, " +
+            "public_format=?, delayed_chat_id=?, delayed_publish_minutes=?, subscriber_feed=? " +
             "WHERE id=?",
             s.getName(), writeList(s.getQueries()), s.getArea(), s.getSchedule(), s.getSalaryMin(),
             writeList(s.getPriorityDistricts()), writeList(s.getSkills()), writeList(s.getNotSuitable()),
             writeList(s.getExcludeWords()), s.getAiNotes(), s.isEnabled() ? 1 : 0, s.getUpdatedAt(),
-            s.getSourceUrl(), s.getRunIntervalHours(), s.getChatId(), s.getId());
+            s.getSourceUrl(), s.getRunIntervalHours(), s.getChatId(),
+            s.isPublicFormat() ? 1 : 0, s.getDelayedChatId(), s.getDelayedPublishMinutes(), s.isSubscriberFeed() ? 1 : 0,
+            s.getId());
     }
 
     /** Stamps the last automatic/manual run time for a search, used by the per-search interval scheduler. */

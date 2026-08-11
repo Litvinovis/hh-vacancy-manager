@@ -2,6 +2,7 @@ package com.hh.gui.service;
 
 import com.hh.gui.ai.VacancyAiAnalyzer;
 import com.hh.gui.client.ScraperClient;
+import com.hh.gui.config.FeatureFlags;
 import com.hh.gui.config.RuntimeConfig;
 import com.hh.gui.model.SearchJob;
 import com.hh.gui.model.Vacancy;
@@ -35,7 +36,7 @@ class VacancyPipelineServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new VacancyPipelineService(null, null, null, null, null, new RuntimeConfig(), null);
+        service = new VacancyPipelineService(null, null, null, null, null, new RuntimeConfig(), null, new FeatureFlags(), null, null);
     }
 
     private List<List<Vacancy>> chunkReport(List<Vacancy> vacancies, String header) throws Exception {
@@ -327,7 +328,7 @@ class VacancyPipelineServiceTest {
             new ScraperClient.SearchPageResult(true, null, page2, null));
         FakeRepo repo = new FakeRepo(Set.of("901", "902", "903", "904", "905", "906", "907"));
         VacancyPipelineService svc = new VacancyPipelineService(
-            null, scraper, new FakeAnalyzer(config), repo, null, config, null);
+            null, scraper, new FakeAnalyzer(config), repo, null, config, null, new FeatureFlags(), null, null);
 
         int saved = svc.discoverFromUrl(urlJob(), "https://hh.ru/search/vacancy?text=x", 3);
 
@@ -393,7 +394,8 @@ class VacancyPipelineServiceTest {
         FakeBatchAnalyzer analyzer = new FakeBatchAnalyzer(config);
         VacancyPipelineService svc = new VacancyPipelineService(
             null, null, analyzer, repo, null, config,
-            new com.hh.gui.ai.AiMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry(), config));
+            new com.hh.gui.ai.AiMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry(), config),
+            new FeatureFlags(), null, null);
 
         List<Vacancy> batch = List.of(
             pendingVacancy("1", "поддержка|т банк"),
@@ -494,7 +496,7 @@ class VacancyPipelineServiceTest {
         FreshnessScraper scraper = new FreshnessScraper(config);
         repo.pending.forEach(v -> scraper.byId.put(v.getHhId(), failResult("http_403")));
         VacancyPipelineService svc = new VacancyPipelineService(
-            null, scraper, new FakeAnalyzer(config), repo, null, config, null);
+            null, scraper, new FakeAnalyzer(config), repo, null, config, null, new FeatureFlags(), null, null);
 
         int count = scrapePending(svc, urlJob());
 
@@ -514,7 +516,7 @@ class VacancyPipelineServiceTest {
         FreshnessScraper scraper = new FreshnessScraper(config);
         repo.pending.forEach(v -> scraper.byId.put(v.getHhId(), failResult("http_403")));
         VacancyPipelineService svc = new VacancyPipelineService(
-            null, scraper, new FakeAnalyzer(config), repo, null, config, null);
+            null, scraper, new FakeAnalyzer(config), repo, null, config, null, new FeatureFlags(), null, null);
 
         scrapePending(svc, urlJob());
 
@@ -532,7 +534,7 @@ class VacancyPipelineServiceTest {
         scraper.byId.put("12", failResult("archived"));
         scraper.byId.put("13", failResult("http_403"));
         VacancyPipelineService svc = new VacancyPipelineService(
-            null, scraper, new FakeAnalyzer(config), repo, null, config, null);
+            null, scraper, new FakeAnalyzer(config), repo, null, config, null, new FeatureFlags(), null, null);
 
         VacancyPipelineService.FreshnessResult r = svc.checkVacancyFreshness(5);
 
@@ -552,7 +554,7 @@ class VacancyPipelineServiceTest {
         repo.due = List.of(pendingVacancy("11", null));
         FreshnessScraper scraper = new FreshnessScraper(config);
         VacancyPipelineService svc = new VacancyPipelineService(
-            null, scraper, new FakeAnalyzer(config), repo, null, config, null);
+            null, scraper, new FakeAnalyzer(config), repo, null, config, null, new FeatureFlags(), null, null);
 
         VacancyPipelineService.FreshnessResult r = svc.checkVacancyFreshness(5);
 
@@ -571,7 +573,7 @@ class VacancyPipelineServiceTest {
         FreshnessScraper scraper = new FreshnessScraper(config);
         scraper.byId.put("11", failResult("archived"));
         VacancyPipelineService svc = new VacancyPipelineService(
-            null, scraper, new FakeAnalyzer(config), repo, null, config, null);
+            null, scraper, new FakeAnalyzer(config), repo, null, config, null, new FeatureFlags(), null, null);
 
         VacancyPipelineService.FreshnessResult r = svc.checkVacancyFreshness(5);
 

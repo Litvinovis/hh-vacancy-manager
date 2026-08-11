@@ -30,6 +30,10 @@ public class SearchConfig {
     private Integer runIntervalHours;
     private String lastRunAt;
     private String chatId;
+    private boolean publicFormat;
+    private String delayedChatId;
+    private Integer delayedPublishMinutes;
+    private boolean subscriberFeed;
 
     public SearchConfig() {}
 
@@ -99,6 +103,18 @@ public class SearchConfig {
 
     public String getChatId() { return chatId; }
     public void setChatId(String chatId) { this.chatId = chatId; }
+
+    public boolean isPublicFormat() { return publicFormat; }
+    public void setPublicFormat(boolean publicFormat) { this.publicFormat = publicFormat; }
+
+    public String getDelayedChatId() { return delayedChatId; }
+    public void setDelayedChatId(String delayedChatId) { this.delayedChatId = delayedChatId; }
+
+    public Integer getDelayedPublishMinutes() { return delayedPublishMinutes; }
+    public void setDelayedPublishMinutes(Integer delayedPublishMinutes) { this.delayedPublishMinutes = delayedPublishMinutes; }
+
+    public boolean isSubscriberFeed() { return subscriberFeed; }
+    public void setSubscriberFeed(boolean subscriberFeed) { this.subscriberFeed = subscriberFeed; }
 
     public boolean isRemote() {
         return "remote".equalsIgnoreCase(schedule) || area == 113;
