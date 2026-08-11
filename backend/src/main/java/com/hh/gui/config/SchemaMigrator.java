@@ -25,6 +25,15 @@ import java.util.List;
  *
  * Runs before FirstBootSeeder (see @Order) so the seeded admin/searches always
  * see the final column set, though seeding itself doesn't depend on it.
+ *
+ * ApplicationRunners (this class included) run in SpringApplication.callRunners(),
+ * which happens AFTER the context has fully refreshed — and @Scheduled/trigger tasks
+ * (see PipelineScheduler) activate on ContextRefreshedEvent, which fires as part of
+ * that refresh, strictly BEFORE callRunners(). So a deploy that adds a column has a
+ * real window where the first scheduler tick queries searches/vacancies before this
+ * has added it (observed 2026-08-11: "no such column: chat_id" / "public_format" —
+ * self-healing, one error log per boot, no data loss, but worth closing). isReady()
+ * lets PipelineScheduler's DB-touching tasks wait it out instead of racing it.
  */
 @Component
 @Order(0)
@@ -33,9 +42,14 @@ public class SchemaMigrator implements ApplicationRunner {
     private static final Logger log = LoggerFactory.getLogger(SchemaMigrator.class);
 
     private final JdbcTemplate jdbc;
+    private volatile boolean ready = false;
 
     public SchemaMigrator(JdbcTemplate jdbc) {
         this.jdbc = jdbc;
+    }
+
+    public boolean isReady() {
+        return ready;
     }
 
     @Override
@@ -68,6 +82,7 @@ public class SchemaMigrator implements ApplicationRunner {
         runIgnoringErrors("CREATE INDEX IF NOT EXISTS idx_vac_delayed_publish_at ON vacancies(delayed_publish_at)");
 
         backfillDedupKeys();
+        ready = true;
     }
 
     /**
