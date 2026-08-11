@@ -44,6 +44,7 @@ public class SchemaMigrator implements ApplicationRunner {
         addColumnIfMissing("searches", "source_url", "TEXT DEFAULT ''");
         addColumnIfMissing("searches", "run_interval_hours", "INTEGER DEFAULT NULL");
         addColumnIfMissing("searches", "last_run_at", "TEXT DEFAULT NULL");
+        addColumnIfMissing("searches", "chat_id", "TEXT DEFAULT NULL");
         addColumnIfMissing("vacancies", "dedup_key", "TEXT DEFAULT ''");
         addColumnIfMissing("vacancies", "scrape_attempts", "INTEGER DEFAULT 0");
         addColumnIfMissing("vacancies", "ai_attempts", "INTEGER DEFAULT 0");

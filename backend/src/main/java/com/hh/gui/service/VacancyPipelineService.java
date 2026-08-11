@@ -904,7 +904,7 @@ public class VacancyPipelineService {
         int notifiedCount = 0;
         for (List<Vacancy> chunk : chunks) {
             String message = formatReport(chunk, header);
-            if (telegramNotifier.send(message)) {
+            if (telegramNotifier.send(message, job.chatId)) {
                 vacancyRepo.markNotified(chunk.stream().map(Vacancy::getId).collect(Collectors.toList()));
                 notifiedCount += chunk.size();
             } else {

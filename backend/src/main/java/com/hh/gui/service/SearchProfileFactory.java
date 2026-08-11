@@ -97,6 +97,7 @@ public class SearchProfileFactory {
         job.sourceUrl = search.getSourceUrl();
         job.runIntervalHours = search.getRunIntervalHours();
         job.lastRunAt = search.getLastRunAt();
+        job.chatId = search.getChatId();
         return job;
     }
 }
