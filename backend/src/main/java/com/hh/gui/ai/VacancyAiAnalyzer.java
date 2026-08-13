@@ -577,6 +577,20 @@ public class VacancyAiAnalyzer {
                 .map(String::trim).filter(s -> !s.isEmpty()).limit(3).toList();
             requestBody.put("model", models.get(0));
             requestBody.put("models", models);
+        }
+        // Reasoning off for every OpenRouter call, not just multi-model ones. This app
+        // never wants the thinking, only the JSON, and a reasoning model left to think
+        // spends the whole completion budget before emitting any.
+        //
+        // Tying this to "the list has commas" made a single-model call behave differently
+        // from the configured chain, which broke FreeModelUpdater's probe: it evaluates one
+        // model at a time, so it was measuring every candidate WITH reasoning enabled while
+        // production runs them without. Live consequence on 2026-08-13 —
+        // nemotron-3-super-120b, which had been serving all day, scored 0/8 (budget gone to
+        // reasoning, empty content) and was evicted from its own chain by a test that did
+        // not reproduce the conditions it actually runs under. A probe has to ask the
+        // question the same way production does.
+        if (url != null && url.contains("openrouter")) {
             requestBody.put("reasoning", Map.of("enabled", false));
         }
         byte[] payload = mapper.writeValueAsBytes(requestBody);
