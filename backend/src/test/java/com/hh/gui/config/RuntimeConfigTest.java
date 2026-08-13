@@ -30,7 +30,6 @@ class RuntimeConfigTest {
         assertEquals(120000, config.getHttpReadTimeoutMs());
         assertEquals(50, config.getMinScore());
         assertEquals(10, config.getMaxApproved());
-        assertEquals(40000, config.getSalaryMinRemote());
         assertEquals(0, config.getCooldownHours());
         assertEquals(10, config.getPipelineBatchSize());
         assertFalse(config.isNotificationsEnabled());
@@ -55,7 +54,6 @@ class RuntimeConfigTest {
         assertTrue(m.containsKey("scraperReadTimeoutMs"));
         assertTrue(m.containsKey("minScore"));
         assertTrue(m.containsKey("maxApproved"));
-        assertTrue(m.containsKey("salaryMinRemote"));
         assertTrue(m.containsKey("cooldownHours"));
         assertTrue(m.containsKey("pipelineBatchSize"));
         assertTrue(m.containsKey("notificationsEnabled"));
@@ -63,7 +61,7 @@ class RuntimeConfigTest {
         assertTrue(m.containsKey("aiBatchSize"));
         assertTrue(m.containsKey("pipelineEnabled"));
         assertTrue(m.containsKey("cardPrescreenBatchSize"));
-        assertEquals(20, m.size());
+        assertEquals(19, m.size());
     }
 
     // ═══════ Descriptors ═══════
@@ -71,7 +69,7 @@ class RuntimeConfigTest {
     @Test
     void descriptorsCoversAllKeys() {
         List<RuntimeConfig.SettingDescriptor> descs = config.getDescriptors();
-        assertEquals(19, descs.size());
+        assertEquals(18, descs.size());
         Set<String> keys = new HashSet<>();
         for (var d : descs) {
             assertNotNull(d.key);
@@ -119,7 +117,6 @@ class RuntimeConfigTest {
             "requestDelayMs", 2000,
             "minScore", 70,
             "maxApproved", 20,
-            "salaryMinRemote", 60000,
             "cooldownHours", 2
         );
         Map<String, String> errors = config.apply(updates);
@@ -129,7 +126,6 @@ class RuntimeConfigTest {
         assertEquals(2000, config.getRequestDelayMs());
         assertEquals(70, config.getMinScore());
         assertEquals(20, config.getMaxApproved());
-        assertEquals(60000, config.getSalaryMinRemote());
         assertEquals(2, config.getCooldownHours());
     }
 
@@ -279,8 +275,7 @@ class RuntimeConfigTest {
         Map<String, Object> updates = Map.of(
             "maxPerRun", 1,
             "maxRetries", 1,
-            "minScore", 0,
-            "salaryMinRemote", 0
+            "minScore", 0
         );
         Map<String, String> errors = config.apply(updates);
         assertTrue(errors.isEmpty());

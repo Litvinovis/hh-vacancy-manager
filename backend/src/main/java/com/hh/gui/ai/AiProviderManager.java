@@ -193,16 +193,6 @@ public class AiProviderManager {
         log.info("AI провайдер сброшен на первый в списке");
     }
 
-    /** Manual force to a specific provider by index. */
-    public synchronized void forceProvider(int index) {
-        List<AiProviderConfig> providers = getActiveProviders();
-        if (index >= 0 && index < providers.size()) {
-            currentIndex = index;
-            state = ProviderState.PRIMARY;
-            log.info("AI провайдер принудительно переключён на: {}", providers.get(index).getName());
-        }
-    }
-
     /** Force fallback to next provider. */
     public synchronized void forceFallback() {
         if (hasFallback()) {
@@ -211,11 +201,6 @@ public class AiProviderManager {
             fallbackSince = System.currentTimeMillis();
             log.info("AI провайдер принудительно переключён на fallback: {}", getCurrentProviderName());
         }
-    }
-
-    public synchronized ProviderState getState() {
-        resolveState();
-        return state;
     }
 
     public synchronized int getCurrentIndex() {
