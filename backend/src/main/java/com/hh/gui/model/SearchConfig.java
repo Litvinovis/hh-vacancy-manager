@@ -35,6 +35,7 @@ public class SearchConfig {
     private Integer delayedPublishMinutes;
     private boolean subscriberFeed;
     private Integer publishPaceMinutes;
+    private int runPriority;
 
     public SearchConfig() {}
 
@@ -119,6 +120,9 @@ public class SearchConfig {
 
     public Integer getPublishPaceMinutes() { return publishPaceMinutes; }
     public void setPublishPaceMinutes(Integer publishPaceMinutes) { this.publishPaceMinutes = publishPaceMinutes; }
+
+    public int getRunPriority() { return runPriority; }
+    public void setRunPriority(int runPriority) { this.runPriority = runPriority; }
 
     public boolean isRemote() {
         return "remote".equalsIgnoreCase(schedule) || area == 113;

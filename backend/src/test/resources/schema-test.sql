@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS searches (
     delayed_publish_minutes INTEGER DEFAULT NULL,
     subscriber_feed INTEGER NOT NULL DEFAULT 0,
     publish_pace_minutes INTEGER DEFAULT NULL,
+    run_priority INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
     UNIQUE(user_id, name)
 );

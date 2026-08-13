@@ -59,6 +59,10 @@ CREATE TABLE IF NOT EXISTS searches (
     -- (first ~immediately, then +N minutes apart) and drained by the scheduler.
     -- NULL/0 = send immediately, as before.
     publish_pace_minutes INTEGER DEFAULT NULL,
+    -- Run order within a pipeline tick (see SearchRepository.findAllEnabled's ORDER BY):
+    -- higher runs first. Admin-only, like the Telegram overrides above. Default 0 means
+    -- "no opinion" — existing behavior (user_id, id order) is the tiebreak among equals.
+    run_priority INTEGER NOT NULL DEFAULT 0,
     UNIQUE(user_id, name)
 );
 
