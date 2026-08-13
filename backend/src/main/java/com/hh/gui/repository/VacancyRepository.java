@@ -460,11 +460,19 @@ public class VacancyRepository {
 
     /**
      * Get unnotified approved vacancies for a specific (person, search) Telegram report.
+     * Excludes a candidate whose dedup_key sibling was already notified in an earlier
+     * run — same real posting, different hh_id (see DedupKeys) — so a clone that shows
+     * up as newly-approved after its twin already went out doesn't get sent again.
+     * Same-batch duplicates (both siblings approved together, neither notified yet)
+     * aren't caught by this SQL guard — see the in-batch dedupeByKey in sendReport.
      */
     public List<Vacancy> findUnnotifiedApproved(String person, String searchName, int minScore, int limit) {
         return jdbc.query(
-            "SELECT * FROM vacancies WHERE person=? AND search_name=? " +
+            "SELECT * FROM vacancies v1 WHERE person=? AND search_name=? " +
             "AND ai_verdict='yes' AND ai_score >= ? AND notified = 0 AND closed_at IS NULL " +
+            "AND NOT EXISTS (SELECT 1 FROM vacancies v2 WHERE v2.dedup_key = v1.dedup_key " +
+            "AND v2.dedup_key != '' AND v2.person = v1.person AND v2.search_name = v1.search_name " +
+            "AND v2.notified = 1) " +
             "ORDER BY ai_score DESC, published_at DESC LIMIT ?",
             rowMapper, person, searchName, minScore, limit);
     }
