@@ -16,6 +16,12 @@ public class Vacancy {
     private Integer aiScore;
     private String aiVerdict;
     private String aiReason;
+    // How routine vs. unusual the work itself is (independent of aiScore, which is
+    // fit-for-this-search) — red/yellow/green, see VacancyAiAnalyzer's prompt for the
+    // criteria. noveltyNote is the short human-readable reason, shown alongside the
+    // color in public posts.
+    private String noveltyColor;
+    private String noveltyNote;
     private String description;
     private String status;
     private String rejectionReason;
@@ -97,6 +103,12 @@ public class Vacancy {
 
     public String getAiReason() { return aiReason; }
     public void setAiReason(String aiReason) { this.aiReason = aiReason; }
+
+    public String getNoveltyColor() { return noveltyColor; }
+    public void setNoveltyColor(String noveltyColor) { this.noveltyColor = noveltyColor; }
+
+    public String getNoveltyNote() { return noveltyNote; }
+    public void setNoveltyNote(String noveltyNote) { this.noveltyNote = noveltyNote; }
 
     public String getDescription() { return description; }
     public void setDescription(String description) { this.description = description; }

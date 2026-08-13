@@ -56,6 +56,8 @@ public class VacancyRepository {
             v.setAiScore(rs.getInt("ai_score"));
             v.setAiVerdict(rs.getString("ai_verdict"));
             v.setAiReason(rs.getString("ai_reason"));
+            v.setNoveltyColor(rs.getString("novelty_color"));
+            v.setNoveltyNote(rs.getString("novelty_note"));
             v.setDescription(rs.getString("description"));
             v.setStatus(rs.getString("status"));
             v.setRejectionReason(rs.getString("rejection_reason"));
@@ -430,11 +432,17 @@ public class VacancyRepository {
      * row per (person, search) that discovered it, each with its own verdict.
      */
     public void updateAiResult(String hhId, String person, String searchName, int score, String verdict, String reason) {
+        updateAiResult(hhId, person, searchName, score, verdict, reason, "", "");
+    }
+
+    /** @param noveltyColor/noveltyNote red/yellow/green + why — see Vacancy's javadoc. Blank when not judged (e.g. auto-rejected before AI). */
+    public void updateAiResult(String hhId, String person, String searchName, int score, String verdict, String reason,
+                                String noveltyColor, String noveltyNote) {
         String now = Instant.now().toString();
         jdbc.update(
-            "UPDATE vacancies SET ai_score=?, ai_verdict=?, ai_reason=?, updated_at=? " +
+            "UPDATE vacancies SET ai_score=?, ai_verdict=?, ai_reason=?, novelty_color=?, novelty_note=?, updated_at=? " +
             "WHERE hh_id=? AND person=? AND search_name=?",
-            score, verdict, reason, now, hhId, person, searchName);
+            score, verdict, reason, noveltyColor, noveltyNote, now, hhId, person, searchName);
     }
 
     /**
@@ -442,7 +450,8 @@ public class VacancyRepository {
      */
     public void resetScore(Long id) {
         String now = Instant.now().toString();
-        jdbc.update("UPDATE vacancies SET ai_verdict='pending', ai_score=0, ai_reason='', ai_attempts=0, updated_at=? WHERE id=?",
+        jdbc.update("UPDATE vacancies SET ai_verdict='pending', ai_score=0, ai_reason='', " +
+            "novelty_color='', novelty_note='', ai_attempts=0, updated_at=? WHERE id=?",
             now, id);
     }
 
@@ -887,7 +896,8 @@ public class VacancyRepository {
     public int resetAiForRescan(String person, String searchName) {
         String now = Instant.now().toString();
         return jdbc.update(
-            "UPDATE vacancies SET ai_verdict='pending', ai_score=0, ai_reason='', ai_attempts=0, updated_at=? " +
+            "UPDATE vacancies SET ai_verdict='pending', ai_score=0, ai_reason='', novelty_color='', novelty_note='', " +
+            "ai_attempts=0, updated_at=? " +
             "WHERE person=? AND search_name=? AND ai_verdict NOT IN ('no', 'fraud') AND (status IS NULL OR status != 'rejected')",
             now, person, searchName);
     }

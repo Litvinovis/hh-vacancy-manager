@@ -330,7 +330,7 @@ class VacancyAiAnalyzerTest {
         protected List<AiResult> prescreenBatchWithRetry(List<com.hh.gui.client.ScraperClient.SearchHit> batch, SearchJob job) {
             llmBatchSizes.add(batch.size());
             return batch.stream()
-                .map(h -> new AiResult(h.hhId(), 50, h.title().contains("поддержк") ? "no" : "yes", "тест"))
+                .map(h -> new AiResult(h.hhId(), 50, h.title().contains("поддержк") ? "no" : "yes", "тест", "", ""))
                 .toList();
         }
     }
@@ -373,7 +373,7 @@ class VacancyAiAnalyzerTest {
 
     @Test
     void aiResult_recordCreation() {
-        var result = new VacancyAiAnalyzer.AiResult("123", 75, "yes", "Good match");
+        var result = new VacancyAiAnalyzer.AiResult("123", 75, "yes", "Good match", "", "");
         assertEquals("123", result.hhId());
         assertEquals(75, result.score());
         assertEquals("yes", result.verdict());
@@ -382,14 +382,14 @@ class VacancyAiAnalyzerTest {
 
     @Test
     void aiResult_recordWithFraud() {
-        var result = new VacancyAiAnalyzer.AiResult("456", 0, "fraud", "Слишком высокая зарплата для продавца");
+        var result = new VacancyAiAnalyzer.AiResult("456", 0, "fraud", "Слишком высокая зарплата для продавца", "", "");
         assertEquals("fraud", result.verdict());
         assertEquals(0, result.score());
     }
 
     @Test
     void aiResult_recordWithNo() {
-        var result = new VacancyAiAnalyzer.AiResult("789", 30, "no", "Не подходит");
+        var result = new VacancyAiAnalyzer.AiResult("789", 30, "no", "Не подходит", "", "");
         assertEquals("no", result.verdict());
         assertEquals(30, result.score());
     }
