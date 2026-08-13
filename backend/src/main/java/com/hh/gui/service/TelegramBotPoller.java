@@ -31,8 +31,13 @@ public class TelegramBotPoller {
     private static final Logger log = LoggerFactory.getLogger(TelegramBotPoller.class);
     private static final String GET_UPDATES_URL = "https://api.telegram.org/bot%s/getUpdates?offset=%d&timeout=30";
 
-    @Value("${app.telegram.bot-token:}")
-    private String botToken;
+    // The CHANNEL bot, not the personal one. Subscribers reach the public bot that
+    // fronts the channel — polling the family-notifications bot instead meant a
+    // /subscribe sent to the public bot was never received by anything, while the
+    // subscriber fan-out (broadcastToSubscribers → sendViaChannelBot) already used
+    // the channel identity. Both halves of the subscription flow belong on one bot.
+    @Value("${app.telegram.channel-bot-token:}")
+    private String channelBotToken;
 
     private final FeatureFlags featureFlags;
     private final SubscriptionService subscriptionService;
@@ -58,8 +63,8 @@ public class TelegramBotPoller {
             log.info("Подписки отключены (app.subscriptions.enabled=false) — поллер Telegram-бота не запущен");
             return;
         }
-        if (botToken == null || botToken.isBlank()) {
-            log.warn("Подписки включены, но TELEGRAM_BOT_TOKEN не задан — поллер не запущен");
+        if (channelBotToken == null || channelBotToken.isBlank()) {
+            log.warn("Подписки включены, но TELEGRAM_CHANNEL_BOT_TOKEN не задан — поллер не запущен");
             return;
         }
         running = true;
@@ -93,7 +98,7 @@ public class TelegramBotPoller {
     }
 
     private void poll() throws Exception {
-        String url = String.format(GET_UPDATES_URL, botToken, offset);
+        String url = String.format(GET_UPDATES_URL, channelBotToken, offset);
         HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
         conn.setRequestMethod("GET");
         conn.setConnectTimeout(10_000);
@@ -114,7 +119,14 @@ public class TelegramBotPoller {
 
         for (Object updateObj : updates) {
             if (!(updateObj instanceof Map<?, ?> update)) continue;
-            long updateId = ((Number) update.get("update_id")).longValue();
+            // Unchecked, this cast used to sit outside the try: an update without a
+            // numeric update_id threw before offset advanced, so getUpdates returned the
+            // same batch forever — a poison-pill loop hammering Telegram every 5s.
+            if (!(update.get("update_id") instanceof Number updateIdNum)) {
+                log.warn("Update без числового update_id, пропускаем: {}", update);
+                continue;
+            }
+            long updateId = updateIdNum.longValue();
             offset = updateId + 1;
             try {
                 handleUpdate(update);
@@ -140,7 +152,7 @@ public class TelegramBotPoller {
             case "/cancel" -> handleCancel(userId);
             default -> "Команды: /subscribe — оформить подписку, /status — статус, /cancel — отменить.";
         };
-        telegramNotifier.send(reply, String.valueOf(chatId));
+        telegramNotifier.sendViaChannelBot(reply, String.valueOf(chatId));
     }
 
     private String handleSubscribe(long userId, long chatId) {
