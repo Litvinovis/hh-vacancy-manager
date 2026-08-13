@@ -58,14 +58,18 @@ public class VacancyPipelineService {
     private final SearchRepository searchRepo;
     private final SubscriptionService subscriptionService;
 
+    // Used by getBatchSize() below, at actual call time — by then this bean is fully
+    // constructed and this field-injected @Value is populated, unlike the constructor
+    // (see the removed pipelineBatchSize/notificationsEnabled/channelNotificationsEnabled
+    // seeding that used to live here: @Value fields aren't injected until AFTER the
+    // constructor runs, so reading them there silently read Java's default (0/false),
+    // clobbering whatever RuntimeConfig.loadFromFile() had already restored from
+    // runtime-config.json moments earlier in the SAME boot — confirmed live: a
+    // channelNotificationsEnabled=true saved via the settings API reverted to false on
+    // every restart. RuntimeConfig's own persistence (load on @PostConstruct, save on
+    // every settings-API update) is the single source of truth for these now.
     @Value("${app.pipeline.batch-size:10}")
     private int batchSizeDefault;
-
-    @Value("${app.notifications.enabled:false}")
-    private boolean notificationsEnabledDefault;
-
-    @Value("${app.channel-notifications.enabled:false}")
-    private boolean channelNotificationsEnabledDefault;
 
     public VacancyPipelineService(HhApiClient hhApiClient, ScraperClient scraperClient, VacancyAiAnalyzer aiAnalyzer,
                                    VacancyRepository vacancyRepo, TelegramNotifier telegramNotifier,
@@ -81,9 +85,6 @@ public class VacancyPipelineService {
         this.subscriptionService = subscriptionService;
         this.featureFlags = featureFlags;
         this.searchRepo = searchRepo;
-        runtimeConfig.setPipelineBatchSize(runtimeConfig.getPipelineBatchSize() > 0 ? runtimeConfig.getPipelineBatchSize() : batchSizeDefault);
-        runtimeConfig.setNotificationsEnabled(notificationsEnabledDefault);
-        runtimeConfig.setChannelNotificationsEnabled(channelNotificationsEnabledDefault);
     }
 
     public boolean isNotificationsEnabled() { return runtimeConfig.isNotificationsEnabled(); }
