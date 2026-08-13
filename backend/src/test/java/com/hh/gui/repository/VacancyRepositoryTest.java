@@ -265,55 +265,6 @@ class VacancyRepositoryTest {
         assertDoesNotThrow(() -> vacancyRepo.updateStatus(99999L, "rejected"));
     }
 
-    // ── findRescanable ──
-
-    @Test
-    void findRescanable_excludesFraud() {
-        saveFraud("fraud-1");
-        saveWithStatus("rescan-1", "new");
-        Vacancy v = saveWithStatus("rescan-2", "new");
-        jdbc.update("UPDATE vacancies SET ai_verdict='yes' WHERE id=?", v.getId());
-
-        List<Vacancy> rescanable = vacancyRepo.findRescanable();
-        assertTrue(rescanable.stream().noneMatch(vac -> "fraud".equals(vac.getAiVerdict())));
-    }
-
-    @Test
-    void findRescanable_excludesRejected() {
-        saveWithStatus("rej-1", "rejected");
-        saveWithStatus("ok-1", "new");
-        Vacancy v = saveWithStatus("ok-2", "new");
-        jdbc.update("UPDATE vacancies SET ai_verdict='yes' WHERE id=?", v.getId());
-
-        List<Vacancy> rescanable = vacancyRepo.findRescanable();
-        assertTrue(rescanable.stream().noneMatch(vac -> "rejected".equals(vac.getStatus())));
-    }
-
-    @Test
-    void findRescanable_includesYesVerdict() {
-        Vacancy v = saveWithStatus("yes-1", "new");
-        jdbc.update("UPDATE vacancies SET ai_verdict='yes' WHERE id=?", v.getId());
-
-        List<Vacancy> rescanable = vacancyRepo.findRescanable();
-        assertTrue(rescanable.stream().anyMatch(vac -> vac.getId().equals(v.getId())));
-    }
-
-    // ── countUnassessed ──
-
-    @Test
-    void countUnassessed_excludesFraud() {
-        saveFraud("fraud-unassessed");  // score=0 but verdict=fraud
-        Vacancy pending = saveWithStatus("pending-1", "new");
-        jdbc.update("UPDATE vacancies SET ai_verdict='pending', ai_score=0 WHERE id=?", pending.getId());
-
-        int count = vacancyRepo.countUnassessed(null);
-        // Should count pending but NOT fraud (which has verdict=fraud, score=0)
-        assertTrue(count >= 1);
-        // Verify fraud is not counted
-        var all = jdbc.queryForObject("SELECT COUNT(*) FROM vacancies WHERE ai_verdict='fraud' AND ai_score=0", Integer.class);
-        assertNotNull(all);
-    }
-
     // ── updateAiResult ──
 
     @Test

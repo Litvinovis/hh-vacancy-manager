@@ -145,7 +145,6 @@ public class RuntimeConfig {
     private volatile int scraperReadTimeoutMs = 240000;
     private volatile int minScore = 50;
     private volatile int maxApproved = 10;
-    private volatile int salaryMinRemote = 40000;
     private volatile int cooldownHours = 0;
     private volatile int pipelineBatchSize = 10;
     private volatile boolean notificationsEnabled = false;
@@ -281,11 +280,6 @@ public class RuntimeConfig {
                 "Ограничивает размер одного сообщения.",
                 "number", 1, 50, maxApproved),
 
-            SettingDescriptor.of("salaryMinRemote", "Мин. зарплата удалёнки",
-                "Минимальная зарплата (в рублях) для удалённых вакансий. " +
-                "Вакансии с зарплатой ниже этого значения не попадают в результаты поиска.",
-                "number", 0, 500000, salaryMinRemote),
-
             SettingDescriptor.of("cooldownHours", "Охлаждение после 429",
                 "Продолжительность блокировки AI-запросов после ошибки 429 (rate limit). " +
                 "0 = до 06:00 следующего дня (по умолчанию). " +
@@ -354,7 +348,6 @@ public class RuntimeConfig {
                     case "scraperReadTimeoutMs" -> setScraperReadTimeoutMs(toInt(value, errors, key, 30000, 600000));
                     case "minScore" -> setMinScore(toInt(value, errors, key, 0, 100));
                     case "maxApproved" -> setMaxApproved(toInt(value, errors, key, 1, 50));
-                    case "salaryMinRemote" -> setSalaryMinRemote(toInt(value, errors, key, 0, 500000));
                     case "cooldownHours" -> setCooldownHours(toInt(value, errors, key, 0, 72));
                     case "pipelineBatchSize" -> setPipelineBatchSize(toInt(value, errors, key, 1, 100));
                     case "notificationsEnabled" -> setNotificationsEnabled(toBool(value, errors, key));
@@ -400,7 +393,6 @@ public class RuntimeConfig {
         m.put("scraperReadTimeoutMs", scraperReadTimeoutMs);
         m.put("minScore", minScore);
         m.put("maxApproved", maxApproved);
-        m.put("salaryMinRemote", salaryMinRemote);
         m.put("cooldownHours", cooldownHours);
         m.put("pipelineBatchSize", pipelineBatchSize);
         m.put("notificationsEnabled", notificationsEnabled);
@@ -497,9 +489,6 @@ public class RuntimeConfig {
 
     public int getMaxApproved() { return maxApproved; }
     public void setMaxApproved(int v) { this.maxApproved = v; }
-
-    public int getSalaryMinRemote() { return salaryMinRemote; }
-    public void setSalaryMinRemote(int v) { this.salaryMinRemote = v; }
 
     public int getCooldownHours() { return cooldownHours; }
     public void setCooldownHours(int v) { this.cooldownHours = v; }

@@ -758,10 +758,6 @@ public class VacancyRepository {
         return results.isEmpty() ? Optional.empty() : Optional.of(results.get(0));
     }
 
-    public void updateCriteriaHash(Long id, String criteriaHash) {
-        jdbc.update("UPDATE vacancies SET criteria_hash=? WHERE id=?", criteriaHash, id);
-    }
-
     /** Same hash for every id — the whole point being one round-trip instead of one UPDATE per vacancy in a batch. */
     public void updateCriteriaHashBatch(List<Long> ids, String criteriaHash) {
         if (ids == null || ids.isEmpty()) return;
@@ -858,30 +854,10 @@ public class VacancyRepository {
     }
 
     /**
-     * Find vacancies eligible for re-analysis:
-     * ai_verdict != 'no' AND status != 'rejected'
-     */
-    public List<Vacancy> findRescanable() {
-        return jdbc.query(
-            "SELECT * FROM vacancies WHERE ai_verdict NOT IN ('no', 'fraud') AND (status IS NULL OR status != 'rejected') " +
-            "ORDER BY published_at DESC",
-            rowMapper);
-    }
-
-    /**
      * Count vacancies eligible for re-analysis.
      */
     public int countRescanable(Long userId) {
         String sql = "SELECT COUNT(*) FROM vacancies WHERE ai_verdict NOT IN ('no', 'fraud') AND (status IS NULL OR status != 'rejected')"
-            + (userId != null ? " AND " + USER_SCOPE_CLAUSE : "");
-        return queryCount(sql, userId);
-    }
-
-    /**
-     * Count unassessed vacancies (ai_score = 0 or no verdict).
-     */
-    public int countUnassessed(Long userId) {
-        String sql = "SELECT COUNT(*) FROM vacancies WHERE (ai_score = 0 OR ai_verdict IS NULL OR ai_verdict = '') AND ai_verdict != 'fraud'"
             + (userId != null ? " AND " + USER_SCOPE_CLAUSE : "");
         return queryCount(sql, userId);
     }

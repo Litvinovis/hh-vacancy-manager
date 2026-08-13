@@ -105,26 +105,6 @@ public class HhApiClient {
         return results;
     }
 
-    /**
-     * Discover vacancy IDs across multiple queries, deduplicating by HH ID.
-     */
-    public List<Vacancy> fetchMultipleRss(List<String> queries, int area, String schedule, int salaryMin) {
-        Map<String, Vacancy> seen = new LinkedHashMap<>();
-        for (String query : queries) {
-            List<Vacancy> batch = fetchRss(query, area, schedule, salaryMin);
-            for (Vacancy v : batch) {
-                seen.putIfAbsent(v.getHhId(), v);
-            }
-            try {
-                Thread.sleep(runtimeConfig.getRequestDelayMs());
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                break;
-            }
-        }
-        return new ArrayList<>(seen.values());
-    }
-
     private String httpGet(String urlStr) throws Exception {
         URL url = new URL(urlStr);
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
