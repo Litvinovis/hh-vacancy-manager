@@ -634,7 +634,7 @@ public class VacancyPipelineService {
         if (to.getPublishedAt() == null || to.getPublishedAt().isBlank()) {
             to.setPublishedAt(from.getPublishedAt());
         }
-        to.setDedupKey(DedupKeys.compute(from.getTitle(), from.getEmployerName()));
+        to.setDedupKey(DedupKeys.compute(from.getTitle(), from.getEmployerName(), from.getDescription()));
         to.setScrapeStatus("ok");
     }
 
@@ -663,8 +663,9 @@ public class VacancyPipelineService {
         // RSS-discovered rows carry a title only at save time, so their dedup key can
         // only be built here, once the scrape reveals the employer — without this the
         // cross-city clone reuse below never fires for the RSS path at all (measured
-        // live: 6.7k of 7.6k rows had no key).
-        v.setDedupKey(DedupKeys.compute(v.getTitle(), v.getEmployerName()));
+        // live: 6.7k of 7.6k rows had no key). Now description-based (see DedupKeys) —
+        // descriptionText was just set on v two lines up.
+        v.setDedupKey(DedupKeys.compute(v.getTitle(), v.getEmployerName(), descriptionText));
     }
 
     private static List<String> nonBlank(String... parts) {
@@ -919,7 +920,13 @@ public class VacancyPipelineService {
      * off). Everything below "public" in nature (delayed publish, subscriber broadcast)
      * follows the channel switch, not the personal one.
      */
-    private void sendReport(List<Vacancy> approved, SearchJob job) {
+    private void sendReport(List<Vacancy> rawApproved, SearchJob job) {
+        List<Vacancy> approved = dedupeByKey(rawApproved);
+        if (approved.size() < rawApproved.size()) {
+            log.info("Дедуп перед отправкой ({} · {}): {} вакансий схлопнуто в {} (клоны той же вакансии в одном пакете)",
+                job.personName, job.searchName, rawApproved.size(), approved.size());
+        }
+
         boolean usePublicFormat = featureFlags.isPublicFormatEnabled() && job.publicFormat;
         if (usePublicFormat) {
             if (!runtimeConfig.isChannelNotificationsEnabled()) {
@@ -970,6 +977,26 @@ public class VacancyPipelineService {
         }
         log.info("Рассылка подписчикам ({} · {}, {} вакансий × {} подписчиков)",
             job.personName, job.searchName, approved.size(), chatIds.size());
+    }
+
+    /**
+     * Keeps the first (highest ai_score, per findUnnotifiedApproved's ORDER BY) vacancy
+     * per dedup_key and drops the rest — a batch can contain multiple hh_ids for the
+     * same real posting (see DedupKeys) that all became "approved and unnotified"
+     * together, before either one had a chance to be marked notified (the SQL guard
+     * in findUnnotifiedApproved only catches this across separate runs, not within one).
+     * Rows with no key (blank) are never collapsed — judged individually, as before.
+     */
+    private List<Vacancy> dedupeByKey(List<Vacancy> vacancies) {
+        Set<String> seenKeys = new HashSet<>();
+        List<Vacancy> result = new ArrayList<>();
+        for (Vacancy v : vacancies) {
+            String key = v.getDedupKey();
+            if (key == null || key.isEmpty() || seenKeys.add(key)) {
+                result.add(v);
+            }
+        }
+        return result;
     }
 
     private void sendPersonalReport(List<Vacancy> approved, SearchJob job) {
