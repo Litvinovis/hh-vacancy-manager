@@ -14,6 +14,7 @@ import com.hh.gui.repository.SearchRepository;
 import com.hh.gui.repository.VacancyRepository;
 import com.hh.gui.util.DedupKeys;
 import com.hh.gui.util.SalaryFormatter;
+import com.hh.gui.util.TextSimilarity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -926,6 +927,12 @@ public class VacancyPipelineService {
             log.info("Дедуп перед отправкой ({} · {}): {} вакансий схлопнуто в {} (клоны той же вакансии в одном пакете)",
                 job.personName, job.searchName, rawApproved.size(), approved.size());
         }
+        int beforeSimilarity = approved.size();
+        approved = dedupeBySimilarity(approved, job);
+        if (approved.size() < beforeSimilarity) {
+            log.info("Дедуп по схожести описания ({} · {}): {} вакансий схлопнуто в {}",
+                job.personName, job.searchName, beforeSimilarity, approved.size());
+        }
 
         boolean usePublicFormat = featureFlags.isPublicFormatEnabled() && job.publicFormat;
         if (usePublicFormat) {
@@ -997,6 +1004,59 @@ public class VacancyPipelineService {
             }
         }
         return result;
+    }
+
+    // Two postings from the same employer whose descriptions overlap this much (by
+    // normalized line) are treated as the same real vacancy re-titled/re-posted, even
+    // with no exact-key match — see TextSimilarity. Calibrated against two live pairs:
+    // a byte-identical one (1.0) and the motivating near-duplicate — same posting,
+    // one extra "полный день" in the schedule line — which scored 0.89. 90% would
+    // have missed exactly the case this exists to catch.
+    private static final double SIMILAR_DESCRIPTION_THRESHOLD = 0.85;
+
+    /**
+     * Catches near-duplicates dedupeByKey's exact hash misses (same employer,
+     * description differs by a phrase or two — e.g. one extra "полный день" in an
+     * otherwise-identical schedule line). Greedy: compares each candidate against
+     * ones already kept from this same batch, then against vacancies already
+     * notified for that employer in earlier runs (findNotifiedByEmployer) — a later,
+     * lower-scoring near-clone is dropped either way. No AI-cost savings here (this
+     * runs after AI analysis, unlike DedupKeys) — purely a publish-time gate.
+     */
+    private List<Vacancy> dedupeBySimilarity(List<Vacancy> vacancies, SearchJob job) {
+        List<Vacancy> kept = new ArrayList<>();
+        Map<String, List<Vacancy>> notifiedByEmployerKey = new HashMap<>();
+
+        for (Vacancy v : vacancies) {
+            String key = employerKey(v);
+            if (key.isEmpty()) {
+                kept.add(v);
+                continue;
+            }
+
+            boolean duplicate = kept.stream().anyMatch(k -> key.equals(employerKey(k))
+                && TextSimilarity.lineSimilarity(v.getDescription(), k.getDescription()) >= SIMILAR_DESCRIPTION_THRESHOLD);
+
+            if (!duplicate) {
+                List<Vacancy> notified = notifiedByEmployerKey.computeIfAbsent(key,
+                    k -> vacancyRepo.findNotifiedByEmployer(job.personName, job.searchName, rawEmployer(v)));
+                duplicate = notified.stream().anyMatch(n ->
+                    TextSimilarity.lineSimilarity(v.getDescription(), n.getDescription()) >= SIMILAR_DESCRIPTION_THRESHOLD);
+            }
+
+            if (!duplicate) kept.add(v);
+        }
+        return kept;
+    }
+
+    private static String rawEmployer(Vacancy v) {
+        String e = v.getEmployerName();
+        if (e == null || e.isBlank()) e = v.getCompany();
+        return e == null ? "" : e;
+    }
+
+    private static String employerKey(Vacancy v) {
+        return DedupKeys.normalize(rawEmployer(v));
     }
 
     private void sendPersonalReport(List<Vacancy> approved, SearchJob job) {

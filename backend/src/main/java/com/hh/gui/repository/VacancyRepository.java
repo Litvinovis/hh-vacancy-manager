@@ -548,6 +548,24 @@ public class VacancyRepository {
     }
 
     /**
+     * Already-notified vacancies for this employer (person/search-scoped) — feeds
+     * VacancyPipelineService.dedupeBySimilarity's cross-run near-duplicate check (same
+     * employer, description differs by only a phrase or two — DedupKeys' exact hash
+     * misses these). LOWER()-matched since employer_name/company casing isn't
+     * normalized in storage; the caller does the real fuzzy comparison in Java, this
+     * just bounds which rows are worth fetching. LIMIT 50: a prolific employer could
+     * otherwise accumulate an unbounded backlog to compare against.
+     */
+    public List<Vacancy> findNotifiedByEmployer(String person, String searchName, String employerName) {
+        if (employerName == null || employerName.isBlank()) return List.of();
+        return jdbc.query(
+            "SELECT * FROM vacancies WHERE person=? AND search_name=? AND notified=1 " +
+            "AND LOWER(COALESCE(NULLIF(employer_name,''), company)) = LOWER(?) " +
+            "ORDER BY updated_at DESC LIMIT 50",
+            rowMapper, person, searchName, employerName);
+    }
+
+    /**
      * Approved postings due for a liveness re-check on hh.ru (see
      * VacancyPipelineService.checkVacancyFreshness): only 'yes' verdicts anyone
      * actually sees, not yet known closed, last confirmed (or first saved) more
