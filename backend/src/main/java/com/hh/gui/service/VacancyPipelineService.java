@@ -795,7 +795,8 @@ public class VacancyPipelineService {
             if (match.isPresent()) {
                 Vacancy m = match.get();
                 vacancyRepo.updateAiResult(v.getHhId(), job.personName, job.searchName,
-                    m.getAiScore() != null ? m.getAiScore() : 0, m.getAiVerdict(), m.getAiReason());
+                    m.getAiScore() != null ? m.getAiScore() : 0, m.getAiVerdict(), m.getAiReason(),
+                    m.getNoveltyColor(), m.getNoveltyNote());
                 deduped++;
             } else {
                 needsAi.add(v);
@@ -839,7 +840,8 @@ public class VacancyPipelineService {
             List<VacancyAiAnalyzer.AiResult> results = aiAnalyzer.analyzeBatch(representatives, job);
             Set<String> returnedIds = new HashSet<>();
             for (var r : results) {
-                vacancyRepo.updateAiResult(r.hhId(), job.personName, job.searchName, r.score(), r.verdict(), r.reason());
+                vacancyRepo.updateAiResult(r.hhId(), job.personName, job.searchName, r.score(), r.verdict(), r.reason(),
+                    r.noveltyColor(), r.noveltyNote());
                 returnedIds.add(r.hhId());
                 aiAnalyzed++;
                 // Fan the verdict out to this representative's clone group members.
@@ -847,7 +849,7 @@ public class VacancyPipelineService {
                 for (Vacancy member : group) {
                     if (member.getHhId().equals(r.hhId())) continue;
                     vacancyRepo.updateAiResult(member.getHhId(), job.personName, job.searchName,
-                        r.score(), r.verdict(), r.reason());
+                        r.score(), r.verdict(), r.reason(), r.noveltyColor(), r.noveltyNote());
                     deduped++;
                     metrics.recordVacanciesDeduped(1);
                 }
@@ -1214,6 +1216,8 @@ public class VacancyPipelineService {
     }
 
     /** Single-vacancy public post: no internal scoring/routing info, just what a subscriber needs. */
+    private static final Map<String, String> NOVELTY_EMOJI = Map.of("red", "🔴", "yellow", "🟡", "green", "🟢");
+
     private String formatPublicPost(Vacancy v) {
         String salary = SalaryFormatter.forReport(v);
         String company = v.getCompany() != null && !v.getCompany().isEmpty() ? escapeHtml(v.getCompany()) : "компания не указана";
@@ -1226,8 +1230,17 @@ public class VacancyPipelineService {
         if (reason != null && !reason.isBlank()) {
             sb.append(String.format("💡 %s\n", escapeHtml(reason)));
         }
+        String noveltyEmoji = v.getNoveltyColor() != null ? NOVELTY_EMOJI.get(v.getNoveltyColor()) : null;
+        if (noveltyEmoji != null && v.getNoveltyNote() != null && !v.getNoveltyNote().isBlank()) {
+            sb.append(String.format("%s %s\n", noveltyEmoji, escapeHtml(capitalize(v.getNoveltyNote()))));
+        }
         sb.append(String.format("👉 %s\n", v.getUrl()));
         return sb.toString();
+    }
+
+    private static String capitalize(String s) {
+        if (s == null || s.isEmpty()) return s;
+        return Character.toUpperCase(s.charAt(0)) + s.substring(1);
     }
 
     /** Splits vacancies into groups that each fit under TELEGRAM_MAX_MESSAGE_CHARS once formatted. */

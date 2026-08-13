@@ -38,6 +38,7 @@ public class VacancyAiAnalyzer {
 
     private static final Logger log = LoggerFactory.getLogger(VacancyAiAnalyzer.class);
     private static final java.util.Set<String> VALID_VERDICTS = java.util.Set.of("yes", "no", "fraud");
+    private static final java.util.Set<String> VALID_NOVELTY_COLORS = java.util.Set.of("red", "yellow", "green");
     private static final int MAX_DESCRIPTION_CHARS = 600;
     private static final int FALLBACK_DESCRIPTION_CHARS = 500;
 
@@ -200,14 +201,14 @@ public class VacancyAiAnalyzer {
                 if (rep == null) continue; // representative omitted from the answer — member stays unfiltered (fail open)
                 results.add(member.hhId().equals(rep.hhId())
                     ? rep
-                    : new AiResult(member.hhId(), rep.score(), rep.verdict(), rep.reason()));
+                    : new AiResult(member.hhId(), rep.score(), rep.verdict(), rep.reason(), rep.noveltyColor(), rep.noveltyNote()));
             }
         }
         return results;
     }
 
     private List<AiResult> passAllOpen(List<ScraperClient.SearchHit> hits, String reason) {
-        return hits.stream().map(h -> new AiResult(h.hhId(), 50, "yes", reason)).toList();
+        return hits.stream().map(h -> new AiResult(h.hhId(), 50, "yes", reason, "", "")).toList();
     }
 
     /**
@@ -370,6 +371,14 @@ public class VacancyAiAnalyzer {
         sb.append("- Интересно: аналитическое мышление, коммуникация, разнообразие задач, непредсказуемый процесс\n");
         sb.append("- Скучно: монотонная обработка однотипных заявок/тикетов, прямые продажи, транскрибация в потоке, жёсткий скрипт\n\n");
 
+        sb.append("ЦВЕТ ПО РУТИННОСТИ/НЕОБЫЧНОСТИ РАБОТЫ (noveltyColor) — отдельная, независимая от score оценка:\n");
+        sb.append("это про саму суть работы саму по себе, а не про то, насколько она подходит под этот конкретный поиск.\n");
+        sb.append("- \"red\": работа строго по сценарию/скрипту/шаблону, минимум самостоятельных решений, процесс изо дня в день предсказуем и однообразен\n");
+        sb.append("- \"yellow\": обычная организационная работа — нужна самостоятельность и коммуникация с людьми, но без творческой составляющей и без ничего нестандартного в самом формате\n");
+        sb.append("- \"green\": редкая по формату или творческая по сути работа, простор для собственных решений, мало жёстких рамок и шаблонов\n");
+        sb.append("Сомневаешься между двумя соседними — выбирай менее крайний (yellow вместо red или green). ")
+          .append("noveltyNote — до 8 слов, что именно так решил, свободной формулировкой (например: \"строгий скрипт разговора\", \"нестандартный формат, полная свобода действий\").\n\n");
+
         sb.append("ЗАМЕТКА ДЛЯ ЭТОГО ПОИСКА (учитывай в первую очередь, она важнее общих ориентиров выше):\n");
         sb.append(job.aiNotes != null && !job.aiNotes.isBlank() ? job.aiNotes.trim() : "Нет особых заметок.").append("\n\n");
 
@@ -382,8 +391,9 @@ public class VacancyAiAnalyzer {
         sb.append("- Вакансии-скам ставь verdict=\"fraud\" и score=0, но не пропускай их — они остаются в базе, чтобы не анализировать повторно\n\n");
 
         sb.append("Проанализируй каждую вакансию и верни JSON-массив с полями:\n");
-        sb.append("[{\"id\": \"...\", \"score\": 0-100, \"verdict\": \"yes\"|\"no\"|\"fraud\", \"reason\": \"обоснование одной короткой фразой, до 12 слов\"}]\n");
-        sb.append("Никакого текста до или после массива. Никаких переносов строк внутри \"reason\".\n\n");
+        sb.append("[{\"id\": \"...\", \"score\": 0-100, \"verdict\": \"yes\"|\"no\"|\"fraud\", \"reason\": \"обоснование одной короткой фразой, до 12 слов\", ")
+          .append("\"noveltyColor\": \"red\"|\"yellow\"|\"green\", \"noveltyNote\": \"до 8 слов\"}]\n");
+        sb.append("Никакого текста до или после массива. Никаких переносов строк внутри \"reason\"/\"noveltyNote\".\n\n");
 
         sb.append("ВАКАНСИИ:\n");
         for (Vacancy v : vacancies) {
@@ -643,13 +653,24 @@ public class VacancyAiAnalyzer {
             String verdict = verdictVal instanceof String s ? s : "no";
             Object reasonVal = item.get("reason");
             String reason = reasonVal instanceof String s ? s : "";
+            // Absent for prescreen responses (different schema, doesn't ask for this) —
+            // "" there is correct, not a parsing failure.
+            Object noveltyColorVal = item.get("noveltyColor");
+            String noveltyColor = noveltyColorVal instanceof String s ? s : "";
+            Object noveltyNoteVal = item.get("noveltyNote");
+            String noveltyNote = noveltyNoteVal instanceof String s ? s : "";
 
             if (!VALID_VERDICTS.contains(verdict)) {
                 log.warn("AI вернул неожиданный verdict '{}' для вакансии {}, приводим к 'no'", verdict, id);
                 verdict = "no";
             }
+            if (!noveltyColor.isEmpty() && !VALID_NOVELTY_COLORS.contains(noveltyColor)) {
+                log.warn("AI вернул неожиданный noveltyColor '{}' для вакансии {}, отбрасываем", noveltyColor, id);
+                noveltyColor = "";
+                noveltyNote = "";
+            }
 
-            results.add(new AiResult(id, Math.max(0, Math.min(100, score)), verdict, reason));
+            results.add(new AiResult(id, Math.max(0, Math.min(100, score)), verdict, reason, noveltyColor, noveltyNote));
         }
         return results;
     }
@@ -694,5 +715,10 @@ public class VacancyAiAnalyzer {
         return null; // never closed — truncated response
     }
 
-    public record AiResult(String hhId, int score, String verdict, String reason) {}
+    /**
+     * @param noveltyColor red/yellow/green — how routine vs. unusual the work itself is
+     *                     (see buildPrompt); "" for prescreen results, which don't judge this.
+     * @param noveltyNote  short human-readable reason for the color, "" if not judged.
+     */
+    public record AiResult(String hhId, int score, String verdict, String reason, String noveltyColor, String noveltyNote) {}
 }

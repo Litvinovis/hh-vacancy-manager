@@ -96,6 +96,11 @@ CREATE TABLE IF NOT EXISTS vacancies (
     ai_score INTEGER DEFAULT 0,
     ai_verdict TEXT DEFAULT 'pending',
     ai_reason TEXT DEFAULT '',
+    -- How routine vs. unusual the work itself is, independent of ai_score (which is
+    -- fit-for-this-search) — 'red'/'yellow'/'green', see VacancyAiAnalyzer's prompt.
+    -- novelty_note is the short human-readable reason, shown with the color in posts.
+    novelty_color TEXT DEFAULT '',
+    novelty_note TEXT DEFAULT '',
     -- ai_attempts: how many times this row was sent to the LLM while staying
     -- 'pending' (model silently omitted it from the answer). Past the cap the
     -- row is marked ai_verdict='error' instead of burning tokens forever.

@@ -68,6 +68,8 @@ CREATE TABLE IF NOT EXISTS vacancies (
     ai_score INTEGER DEFAULT 0,
     ai_verdict VARCHAR(32) DEFAULT 'pending',
     ai_reason VARCHAR(512),
+    novelty_color VARCHAR(16) DEFAULT '',
+    novelty_note VARCHAR(256) DEFAULT '',
     description TEXT,
     status VARCHAR(32) DEFAULT 'new',
     rejection_reason VARCHAR(512),
