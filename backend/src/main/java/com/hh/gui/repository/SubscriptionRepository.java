@@ -43,10 +43,32 @@ public class SubscriptionRepository {
         return results.isEmpty() ? Optional.empty() : Optional.of(results.get(0));
     }
 
-    /** Chat ids of every currently active subscriber — the paid instant-broadcast list. */
+    /**
+     * Chat ids of every currently active subscriber — the paid instant-broadcast list.
+     * The expires_at bound is what actually keeps this list paid-only: filtering on status
+     * alone kept broadcasting to everyone who had ever activated, since no code path ever
+     * moved a row off 'active'. Timestamps are ISO-8601 UTC everywhere in this schema, so
+     * they compare correctly as text.
+     */
     public List<Long> findActiveChatIds() {
         return jdbc.queryForList(
-            "SELECT telegram_chat_id FROM subscriptions WHERE status = ?", Long.class, Subscription.STATUS_ACTIVE);
+            "SELECT telegram_chat_id FROM subscriptions WHERE status = ? AND expires_at IS NOT NULL AND expires_at > ?",
+            Long.class, Subscription.STATUS_ACTIVE, Instant.now().toString());
+    }
+
+    /**
+     * Moves subscriptions whose paid period has elapsed to 'expired'. Belt to
+     * findActiveChatIds' braces: that query already refuses to broadcast to them, but
+     * without this the stored status stays 'active' forever, so /status would report
+     * "активна до &lt;прошедшая дата&gt;" and any future reporting would overcount paying users.
+     * Returns how many rows were moved.
+     */
+    public int expireDue() {
+        String now = Instant.now().toString();
+        return jdbc.update(
+            "UPDATE subscriptions SET status = ?, updated_at = ? " +
+            "WHERE status = ? AND (expires_at IS NULL OR expires_at <= ?)",
+            Subscription.STATUS_EXPIRED, now, Subscription.STATUS_ACTIVE, now);
     }
 
     public Subscription save(Subscription s) {

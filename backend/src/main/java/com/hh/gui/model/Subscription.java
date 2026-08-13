@@ -57,5 +57,25 @@ public class Subscription {
     public String getUpdatedAt() { return updatedAt; }
     public void setUpdatedAt(String updatedAt) { this.updatedAt = updatedAt; }
 
-    public boolean isActive() { return STATUS_ACTIVE.equals(status); }
+    /**
+     * Active means paid AND not past expiresAt. This used to check the status alone, so a
+     * subscription stayed "active" forever once activated: nothing ever moved it off that
+     * status, findActiveChatIds kept broadcasting to it, and subscribe() refused to start
+     * a new checkout because it already looked active. One payment bought permanent access.
+     */
+    public boolean isActive() { return STATUS_ACTIVE.equals(status) && !isExpired(); }
+
+    /**
+     * A missing or unparsable expiresAt counts as expired: activate() always records one,
+     * so its absence means we cannot prove the subscription is still paid for — and access
+     * to a paid feed is the wrong thing to grant on an unreadable value.
+     */
+    public boolean isExpired() {
+        if (expiresAt == null || expiresAt.isBlank()) return true;
+        try {
+            return !java.time.Instant.parse(expiresAt).isAfter(java.time.Instant.now());
+        } catch (java.time.format.DateTimeParseException e) {
+            return true;
+        }
+    }
 }

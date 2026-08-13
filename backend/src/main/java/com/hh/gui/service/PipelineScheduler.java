@@ -62,6 +62,7 @@ public class PipelineScheduler implements SchedulingConfigurer {
     private final FreeModelUpdater freeModelUpdater;
     private final FeatureFlags featureFlags;
     private final SchemaMigrator schemaMigrator;
+    private final SubscriptionService subscriptionService;
 
     // How often to check for approved vacancies whose delayed_publish_at has arrived
     // (see VacancyPipelineService.publishDueDelayed). A 5-minute delay needs a check
@@ -71,12 +72,18 @@ public class PipelineScheduler implements SchedulingConfigurer {
 
     // Same reasoning as DELAYED_PUBLISH_CHECK_INTERVAL — publishPaceMinutes is
     // typically a few minutes, so the check needs to be well under that.
+    // Subscriptions are sold by the month, so an hourly sweep is precise enough — the
+    // paid feed itself is already gated on expires_at at query time (see
+    // SubscriptionRepository.findActiveChatIds); this only keeps the stored status honest.
+    private static final Duration SUBSCRIPTION_EXPIRY_CHECK_INTERVAL = Duration.ofHours(1);
+
     private static final Duration QUEUED_PUBLISH_CHECK_INTERVAL = Duration.ofMinutes(1);
     private static final int QUEUED_PUBLISH_BATCH_PER_TICK = 50;
 
     public PipelineScheduler(VacancyPipelineService pipelineService, SearchProfileFactory profileFactory,
                               RuntimeConfig runtimeConfig, VacancyAiAnalyzer aiAnalyzer, SearchRepository searchRepo,
-                              FreeModelUpdater freeModelUpdater, FeatureFlags featureFlags, SchemaMigrator schemaMigrator) {
+                              FreeModelUpdater freeModelUpdater, FeatureFlags featureFlags, SchemaMigrator schemaMigrator,
+                              SubscriptionService subscriptionService) {
         this.pipelineService = pipelineService;
         this.profileFactory = profileFactory;
         this.runtimeConfig = runtimeConfig;
@@ -85,6 +92,7 @@ public class PipelineScheduler implements SchedulingConfigurer {
         this.freeModelUpdater = freeModelUpdater;
         this.featureFlags = featureFlags;
         this.schemaMigrator = schemaMigrator;
+        this.subscriptionService = subscriptionService;
     }
 
     @Override
@@ -102,6 +110,7 @@ public class PipelineScheduler implements SchedulingConfigurer {
         registrar.addTriggerTask(this::runFreshnessCheck, freshnessTrigger);
         registrar.addTriggerTask(this::runDueDelayedPublications, new PeriodicTrigger(DELAYED_PUBLISH_CHECK_INTERVAL));
         registrar.addTriggerTask(this::runDueQueuedPublications, new PeriodicTrigger(QUEUED_PUBLISH_CHECK_INTERVAL));
+        registrar.addTriggerTask(this::runSubscriptionExpiry, new PeriodicTrigger(SUBSCRIPTION_EXPIRY_CHECK_INTERVAL));
     }
 
     /**
@@ -132,6 +141,15 @@ public class PipelineScheduler implements SchedulingConfigurer {
             pipelineService.publishDueQueued(QUEUED_PUBLISH_BATCH_PER_TICK);
         } catch (Exception e) {
             log.error("Публикация из очереди завершилась ошибкой: {}", e.getMessage(), e);
+        }
+    }
+
+    private void runSubscriptionExpiry() {
+        if (schemaNotReady() || !featureFlags.isSubscriptionsEnabled()) return;
+        try {
+            subscriptionService.expireDue();
+        } catch (Exception e) {
+            log.error("Истечение подписок завершилось ошибкой: {}", e.getMessage(), e);
         }
     }
 
