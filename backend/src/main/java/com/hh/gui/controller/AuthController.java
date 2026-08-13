@@ -3,6 +3,7 @@ package com.hh.gui.controller;
 import com.hh.gui.model.User;
 import com.hh.gui.repository.UserRepository;
 import com.hh.gui.service.AuthService;
+import com.hh.gui.service.LoginThrottle;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpSession;
 import org.slf4j.Logger;
@@ -28,10 +29,12 @@ public class AuthController {
 
     private final AuthService authService;
     private final UserRepository userRepo;
+    private final LoginThrottle loginThrottle;
 
-    public AuthController(AuthService authService, UserRepository userRepo) {
+    public AuthController(AuthService authService, UserRepository userRepo, LoginThrottle loginThrottle) {
         this.authService = authService;
         this.userRepo = userRepo;
+        this.loginThrottle = loginThrottle;
     }
 
     @PostMapping("/login")
@@ -39,12 +42,28 @@ public class AuthController {
         String username = body.get("username");
         String password = body.get("password");
 
-        Optional<User> userOpt = authService.authenticate(username, password);
-        if (userOpt.isEmpty()) {
-            return ResponseEntity.status(401).body(Map.of("error", "Неверный логин или пароль"));
+        if (loginThrottle.isLocked(username)) {
+            long minutes = Math.max(1, loginThrottle.secondsRemaining(username) / 60);
+            log.warn("Вход заблокирован после серии неудачных попыток: {}", username);
+            return ResponseEntity.status(429).body(Map.of(
+                "error", "Слишком много неудачных попыток. Повторите через " + minutes + " мин."));
         }
 
+        Optional<User> userOpt = authService.authenticate(username, password);
+        if (userOpt.isEmpty()) {
+            loginThrottle.recordFailure(username);
+            return ResponseEntity.status(401).body(Map.of("error", "Неверный логин или пароль"));
+        }
+        loginThrottle.recordSuccess(username);
+
         User user = userOpt.get();
+        // Session fixation: a session id that existed BEFORE authentication must never
+        // carry over into the authenticated session — otherwise anyone who managed to
+        // plant a known JSESSIONID in the victim's browser (shared machine, an earlier
+        // XSS, a link with a fixated id) holds a valid admin session the moment the
+        // victim logs in. Dropping the old session forces a fresh id.
+        HttpSession existing = request.getSession(false);
+        if (existing != null) existing.invalidate();
         HttpSession session = request.getSession(true);
         session.setAttribute("userId", user.getId());
         log.info("Вход в систему: {}", user.getUsername());
