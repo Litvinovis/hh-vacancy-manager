@@ -44,6 +44,9 @@ app:
   telegram:
     bot-token: ${TELEGRAM_BOT_TOKEN:}
     chat-id: ${TELEGRAM_CHAT_ID:}
+    # Separate bot for public-channel/subscriber sends — deliberately its own bot
+    # identity, never the personal-notifications one above. See TelegramNotifier.
+    channel-bot-token: ${TELEGRAM_CHANNEL_BOT_TOKEN:}
     # Feature toggles for the public-channel/paid-subscription work — see FeatureFlags.
     # All default off; flip via env var once the corresponding prerequisite is ready.
     public-format-enabled: ${TELEGRAM_PUBLIC_FORMAT_ENABLED:false}

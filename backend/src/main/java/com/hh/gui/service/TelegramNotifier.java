@@ -27,6 +27,12 @@ public class TelegramNotifier {
     @Value("${app.telegram.chat-id:}")
     private String chatId;
 
+    // Separate bot for the public channel/paid-subscriber sends (see sendViaChannelBot) —
+    // deliberately its own credential, not a fallback of botToken above, so the public
+    // channel and personal family notifications never share a bot identity.
+    @Value("${app.telegram.channel-bot-token:}")
+    private String channelBotToken;
+
     public boolean send(String message) {
         return send(message, null);
     }
@@ -37,8 +43,23 @@ public class TelegramNotifier {
      */
     public boolean send(String message, String targetChatId) {
         String resolvedChatId = targetChatId != null && !targetChatId.isBlank() ? targetChatId : chatId;
-        if (botToken == null || botToken.isEmpty()) {
-            log.warn("Токен Telegram-бота не настроен");
+        return doSend(botToken, "Токен Telegram-бота не настроен", message, resolvedChatId);
+    }
+
+    /**
+     * Sends via the dedicated channel bot (app.telegram.channel-bot-token) instead of the
+     * personal one — used for public posts/broadcasts (public-format sends, delayed
+     * publish, subscriber fan-out). No fallback chat id: a channel/subscriber destination
+     * is always explicit, unlike send()'s personal-report default.
+     */
+    public boolean sendViaChannelBot(String message, String targetChatId) {
+        return doSend(channelBotToken, "Токен канального Telegram-бота не настроен (app.telegram.channel-bot-token)",
+            message, targetChatId);
+    }
+
+    private boolean doSend(String token, String missingTokenMessage, String message, String resolvedChatId) {
+        if (token == null || token.isEmpty()) {
+            log.warn(missingTokenMessage);
             return false;
         }
         if (resolvedChatId == null || resolvedChatId.isEmpty()) {
@@ -47,7 +68,7 @@ public class TelegramNotifier {
         }
 
         try {
-            String url = String.format(TG_API, botToken);
+            String url = String.format(TG_API, token);
             HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
             conn.setRequestMethod("POST");
             conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
