@@ -134,6 +134,8 @@ CREATE TABLE IF NOT EXISTS subscriptions (
     expires_at VARCHAR(64) DEFAULT NULL,
     payment_provider VARCHAR(32) DEFAULT 'stub',
     external_payment_id VARCHAR(128) DEFAULT NULL,
+    cancel_requested INTEGER NOT NULL DEFAULT 0,
+    renewal_reminder_sent_at VARCHAR(64) DEFAULT NULL,
     created_at VARCHAR(64) NOT NULL,
     updated_at VARCHAR(64) NOT NULL,
     UNIQUE(telegram_user_id)

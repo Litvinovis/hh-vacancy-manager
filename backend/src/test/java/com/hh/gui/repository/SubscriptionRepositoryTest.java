@@ -33,11 +33,16 @@ class SubscriptionRepositoryTest {
     }
 
     private Subscription save(long userId, String status, String expiresAt) {
+        return save(userId, status, expiresAt, false);
+    }
+
+    private Subscription save(long userId, String status, String expiresAt, boolean cancelRequested) {
         Subscription s = new Subscription();
         s.setTelegramUserId(userId);
         s.setTelegramChatId(userId);
         s.setStatus(status);
         s.setExpiresAt(expiresAt);
+        s.setCancelRequested(cancelRequested);
         return repo.save(s);
     }
 
@@ -87,5 +92,59 @@ class SubscriptionRepositoryTest {
         save(200L, Subscription.STATUS_ACTIVE, inDays(-1));
         assertEquals(1, repo.expireDue());
         assertEquals(0, repo.expireDue(), "повторный прогон не должен ничего находить");
+    }
+
+    @Test
+    void expireDue_splitsCancelledFromExpiredByFlag() {
+        // Доступ в обоих случаях уже закончился в один момент — expireDue не меняет
+        // КОГДА строка перестаёт быть активной, только то, как она называется после:
+        // 'expired' — лапс без предупреждения, 'cancelled' — осознанный отказ.
+        save(100L, Subscription.STATUS_ACTIVE, inDays(-1), false);
+        save(200L, Subscription.STATUS_ACTIVE, inDays(-1), true);
+
+        int moved = repo.expireDue();
+
+        assertEquals(2, moved);
+        assertEquals(Subscription.STATUS_EXPIRED, repo.findByTelegramUserId(100L).orElseThrow().getStatus());
+        assertEquals(Subscription.STATUS_CANCELLED, repo.findByTelegramUserId(200L).orElseThrow().getStatus());
+    }
+
+    // ── findDueRenewalReminders / markRenewalReminderSent ──
+
+    @Test
+    void findDueRenewalReminders_withinWindow() {
+        Subscription due = save(100L, Subscription.STATUS_ACTIVE, inDays(2));       // внутри окна 3 дней
+        save(200L, Subscription.STATUS_ACTIVE, inDays(10));                          // ещё далеко
+        save(300L, Subscription.STATUS_ACTIVE, inDays(-1));                          // уже истекла
+
+        List<Subscription> result = repo.findDueRenewalReminders(3, 50);
+
+        assertEquals(1, result.size());
+        assertEquals(due.getId(), result.get(0).getId());
+    }
+
+    @Test
+    void findDueRenewalReminders_excludesCancelRequested() {
+        save(100L, Subscription.STATUS_ACTIVE, inDays(2), true);
+        assertTrue(repo.findDueRenewalReminders(3, 50).isEmpty(),
+            "не стоит звать продлить того, кто уже попросил остановить");
+    }
+
+    @Test
+    void findDueRenewalReminders_excludesAlreadyReminded() {
+        Subscription s = save(100L, Subscription.STATUS_ACTIVE, inDays(2));
+        repo.markRenewalReminderSent(s.getId());
+        assertTrue(repo.findDueRenewalReminders(3, 50).isEmpty(),
+            "повторный прогон не должен снова находить уже уведомлённого");
+    }
+
+    @Test
+    void markRenewalReminderSent_setsTimestamp() {
+        Subscription s = save(100L, Subscription.STATUS_ACTIVE, inDays(2));
+        assertNull(s.getRenewalReminderSentAt());
+
+        repo.markRenewalReminderSent(s.getId());
+
+        assertNotNull(repo.findByTelegramUserId(100L).orElseThrow().getRenewalReminderSentAt());
     }
 }

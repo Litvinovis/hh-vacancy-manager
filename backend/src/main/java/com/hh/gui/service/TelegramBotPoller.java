@@ -1,6 +1,7 @@
 package com.hh.gui.service;
 
 import com.hh.gui.config.FeatureFlags;
+import com.hh.gui.model.Subscription;
 import com.hh.gui.payment.PaymentGateway;
 import com.hh.gui.util.HttpUtil;
 import jakarta.annotation.PostConstruct;
@@ -150,10 +151,18 @@ public class TelegramBotPoller {
             case "/start", "/subscribe" -> handleSubscribe(userId, chatId);
             case "/status" -> handleStatus(userId);
             case "/cancel" -> handleCancel(userId);
-            default -> "Команды: /subscribe — оформить подписку, /status — статус, /cancel — отменить.";
+            case "/help" -> HELP_TEXT;
+            default -> "Неизвестная команда.\n\n" + HELP_TEXT;
         };
         telegramNotifier.sendViaChannelBot(reply, String.valueOf(chatId));
     }
+
+    private static final String HELP_TEXT = """
+        Команды:
+        /subscribe — оформить подписку или продлить/возобновить автопродление
+        /status — статус подписки
+        /cancel — отключить автопродление (доступ сохранится до конца оплаченного периода)
+        /help — это сообщение""";
 
     private String handleSubscribe(long userId, long chatId) {
         PaymentGateway.CheckoutResult result = subscriptionService.subscribe(userId, chatId);
@@ -162,14 +171,29 @@ public class TelegramBotPoller {
 
     private String handleStatus(long userId) {
         return subscriptionService.find(userId)
-            .map(s -> s.isActive()
-                ? "Подписка активна до " + s.getExpiresAt() + "."
-                : "Подписка неактивна (" + s.getStatus() + ").")
+            .map(this::statusText)
             .orElse("Подписка не оформлена. Отправьте /subscribe.");
     }
 
+    private String statusText(Subscription s) {
+        if (s.isActive()) {
+            return s.isCancelRequested()
+                ? "Активна до " + s.getExpiresAt() + ". Автопродление отключено — /subscribe, чтобы включить обратно."
+                : "Активна до " + s.getExpiresAt() + ".";
+        }
+        return switch (s.getStatus()) {
+            case Subscription.STATUS_PENDING ->
+                "Оформление начато, оплата ещё не подтверждена. Если у вас есть ссылка — оплатите по ней; " +
+                "если потеряли — отправьте /subscribe ещё раз.";
+            case Subscription.STATUS_EXPIRED ->
+                "Не активна: закончилась " + s.getExpiresAt() + ". Продлить: /subscribe";
+            case Subscription.STATUS_CANCELLED ->
+                "Не активна: отменена. Оформить заново: /subscribe";
+            default -> "Не активна.";
+        };
+    }
+
     private String handleCancel(long userId) {
-        subscriptionService.cancel(userId);
-        return "Подписка отменена.";
+        return subscriptionService.cancel(userId);
     }
 }
