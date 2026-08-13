@@ -59,10 +59,11 @@ class RuntimeConfigTest {
         assertTrue(m.containsKey("cooldownHours"));
         assertTrue(m.containsKey("pipelineBatchSize"));
         assertTrue(m.containsKey("notificationsEnabled"));
+        assertTrue(m.containsKey("channelNotificationsEnabled"));
         assertTrue(m.containsKey("aiBatchSize"));
         assertTrue(m.containsKey("pipelineEnabled"));
         assertTrue(m.containsKey("cardPrescreenBatchSize"));
-        assertEquals(19, m.size());
+        assertEquals(20, m.size());
     }
 
     // ═══════ Descriptors ═══════
@@ -70,7 +71,7 @@ class RuntimeConfigTest {
     @Test
     void descriptorsCoversAllKeys() {
         List<RuntimeConfig.SettingDescriptor> descs = config.getDescriptors();
-        assertEquals(18, descs.size());
+        assertEquals(19, descs.size());
         Set<String> keys = new HashSet<>();
         for (var d : descs) {
             assertNotNull(d.key);
