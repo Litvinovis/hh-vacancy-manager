@@ -641,9 +641,14 @@ public class VacancyPipelineService {
 
     private void applyScrapeResult(Vacancy v, ScrapeResult r) {
         String descriptionText = htmlToText(r.descriptionHtml());
-        if (r.title() != null && !r.title().isBlank()) v.setTitle(r.title());
-        v.setCompany(r.employerName());
-        v.setEmployerName(r.employerName());
+        // title/employerName come from the scraper's JSON-LD extraction — JSON.parse
+        // doesn't decode HTML entities embedded as literal text in a string value
+        // (unlike descriptionHtml, run through htmlToText's jsoup unescape below), so
+        // e.g. "Operations &amp; Executive Assistant" arrived un-decoded and then got
+        // double-escaped on the way out to Telegram ("&amp;amp;"). Same decode here.
+        if (r.title() != null && !r.title().isBlank()) v.setTitle(decodeEntities(r.title()));
+        v.setCompany(decodeEntities(r.employerName()));
+        v.setEmployerName(decodeEntities(r.employerName()));
         v.setDescription(descriptionText);
         if (r.salaryFrom() != null) v.setSalaryFrom(r.salaryFrom());
         if (r.salaryTo() != null) v.setSalaryTo(r.salaryTo());
@@ -681,6 +686,12 @@ public class VacancyPipelineService {
             if (text.contains(d)) return d;
         }
         return "";
+    }
+
+    /** Same entity-decoding htmlToText applies, for plain-text fields with no tags to strip. */
+    private static String decodeEntities(String text) {
+        if (text == null) return "";
+        return org.jsoup.parser.Parser.unescapeEntities(text, false);
     }
 
     private static String htmlToText(String html) {
