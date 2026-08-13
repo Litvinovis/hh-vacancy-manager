@@ -945,7 +945,7 @@ public class VacancyPipelineService {
         for (Vacancy v : approved) {
             String post = formatPublicPost(v);
             for (Long chatId : chatIds) {
-                telegramNotifier.send(post, String.valueOf(chatId));
+                telegramNotifier.sendViaChannelBot(post, String.valueOf(chatId));
             }
         }
         log.info("Рассылка подписчикам ({} · {}, {} вакансий × {} подписчиков)",
@@ -980,7 +980,7 @@ public class VacancyPipelineService {
     private void sendPublicPosts(List<Vacancy> approved, SearchJob job) {
         int notifiedCount = 0;
         for (Vacancy v : approved) {
-            if (telegramNotifier.send(formatPublicPost(v), job.chatId)) {
+            if (telegramNotifier.sendViaChannelBot(formatPublicPost(v), job.chatId)) {
                 vacancyRepo.markNotified(List.of(v.getId()));
                 notifiedCount++;
             } else {
@@ -1017,7 +1017,7 @@ public class VacancyPipelineService {
             }
             String delayedChatId = searchOpt.get().getDelayedChatId();
             for (Vacancy v : entry.getValue()) {
-                if (telegramNotifier.send(formatPublicPost(v), delayedChatId)) {
+                if (telegramNotifier.sendViaChannelBot(formatPublicPost(v), delayedChatId)) {
                     vacancyRepo.markDelayedNotified(List.of(v.getId()));
                 } else {
                     log.warn("Отложенная публикация не удалась для id={} (search_id={})", v.getId(), entry.getKey());
