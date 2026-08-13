@@ -52,7 +52,30 @@ jobs:
 
           sudo mkdir -p ${DEPLOY_DIR}
           sudo cp scraper/package.json scraper/package-lock.json scraper/server.js ${DEPLOY_DIR}/
-          sudo chown -R clawd:clawd ${DEPLOY_DIR}
+          # Only the files just copied — NOT -R over ${DEPLOY_DIR}. That recursed into
+          # profile-data/, Chromium's live browser profile, whose HTTP cache had grown to
+          # 1.6 GB of hundreds of thousands of files held open by the running browser.
+          # Walking that on every deploy is what made this step flaky (it failed ~3× in
+          # one day and needed `gh run rerun --failed`). node_modules is created by the
+          # npm ci below, which already runs as clawd.
+          sudo chown clawd:clawd ${DEPLOY_DIR} ${DEPLOY_DIR}/package.json ${DEPLOY_DIR}/package-lock.json ${DEPLOY_DIR}/server.js
+
+          # Chromium never bounds its own disk cache, and this profile is deliberately
+          # long-lived (DDoS-Guard clearance + hh.ru session cookies must survive across
+          # restarts — see PROFILE_DIR in server.js). Left alone it reached 1.6 GB, of
+          # which 1.65 GB was regenerable HTTP/code cache and only ~7 MB was the cookies
+          # and storage worth keeping. Purge the caches only, and only past a threshold,
+          # so a normal deploy keeps its warm cache.
+          PROFILE_DEFAULT="${DEPLOY_DIR}/profile-data/Default"
+          if [ -d "$PROFILE_DEFAULT" ]; then
+            PROFILE_MB=$(sudo du -sm "${DEPLOY_DIR}/profile-data" | cut -f1)
+            if [ "$PROFILE_MB" -gt 500 ]; then
+              echo "Профиль браузера разросся до ${PROFILE_MB} МБ — чистим кэш (куки не трогаем)"
+              sudo systemctl stop hh-scraper || true
+              sudo rm -rf "$PROFILE_DEFAULT/Cache" "$PROFILE_DEFAULT/Code Cache"
+              echo "После чистки: $(sudo du -sh ${DEPLOY_DIR}/profile-data | cut -f1)"
+            fi
+          fi
 
           cd ${DEPLOY_DIR}
           # --ignore-scripts: package.json's own postinstall runs "playwright install
@@ -79,8 +102,12 @@ jobs:
 
           sudo mkdir -p ${DEPLOY_DIR}
 
-          # Backup
+          # Backup the currently-deployed jar (this is the rollback target below)
           sudo cp ${DEPLOY_DIR}/${JAR_NAME} ${DEPLOY_DIR}/${JAR_NAME}.backup.$(date +%Y%m%d_%H%M) 2>/dev/null || true
+
+          # Keep only the newest few. Each jar is ~40 MB and nothing ever removed them:
+          # 19 backups had piled up to 702 MB, and rollback only ever needs the latest.
+          ls -t ${DEPLOY_DIR}/${JAR_NAME}.backup.* 2>/dev/null | tail -n +6 | sudo xargs -r rm -f
 
           # Deploy
           sudo cp backend/target/hh-gui-*.jar ${DEPLOY_DIR}/${JAR_NAME}
@@ -90,22 +117,12 @@ jobs:
             sudo cp -r config ${DEPLOY_DIR}/
           fi
 
-          # Migrate DB schema (add new columns if missing)
-          DB_PATH="${DEPLOY_DIR}/data/vacancies.db"
-          if [ -f "$DB_PATH" ]; then
-            echo "Migrating database schema..."
-            sqlite3 "$DB_PATH" "ALTER TABLE vacancies ADD COLUMN source TEXT DEFAULT 'hh';" 2>/dev/null || true
-            sqlite3 "$DB_PATH" "ALTER TABLE vacancies ADD COLUMN source_query TEXT DEFAULT '';" 2>/dev/null || true
-            sqlite3 "$DB_PATH" "ALTER TABLE vacancies ADD COLUMN is_remote INTEGER DEFAULT 0;" 2>/dev/null || true
-            sqlite3 "$DB_PATH" "ALTER TABLE vacancies ADD COLUMN notified INTEGER DEFAULT 0;" 2>/dev/null || true
-            sqlite3 "$DB_PATH" "ALTER TABLE vacancies ADD COLUMN published_at TEXT DEFAULT '';" 2>/dev/null || true
-            sqlite3 "$DB_PATH" "ALTER TABLE vacancies ADD COLUMN found_by_scan INTEGER DEFAULT 0;" 2>/dev/null || true
-            sqlite3 "$DB_PATH" "ALTER TABLE vacancies ADD COLUMN user_id INTEGER DEFAULT NULL;" 2>/dev/null || true
-            sqlite3 "$DB_PATH" "ALTER TABLE vacancies ADD COLUMN search_id INTEGER DEFAULT NULL;" 2>/dev/null || true
-            sqlite3 "$DB_PATH" "ALTER TABLE vacancies ADD COLUMN criteria_hash TEXT DEFAULT '';" 2>/dev/null || true
-
-            echo "DB migration done"
-          fi
+          # NB: no schema migration here. SchemaMigrator (@PostConstruct, see its javadoc)
+          # owns that now — it checks each column before adding it and covers every column
+          # added since, which this block never did: it was frozen on the 2026-06 set and
+          # knew nothing about dedup_key/novelty_color/queued_publish_at/run_priority etc.
+          # It also wrote to the live WAL database from a second process while the old app
+          # was still running, for no benefit.
 
           # Restart
           sudo systemctl restart ${SERVICE}
@@ -126,7 +143,11 @@ jobs:
           STATUS=$(sudo systemctl is-active hh-gui)
           if [ "$STATUS" != "active" ]; then
             echo "❌ App failed to start, rolling back..."
-            LATEST_BACKUP=$(ls -t /opt/hh-gui/hh-gui.jar.backup.* 2>/dev/null | sed -n '2p')
+            # Newest backup == the jar that was running before this deploy, since the
+            # backup is taken BEFORE the new jar is copied over. This used to read '2p',
+            # which rolled back to the version before that one — skipping a perfectly
+            # good release and reverting two versions on every failed deploy.
+            LATEST_BACKUP=$(ls -t /opt/hh-gui/hh-gui.jar.backup.* 2>/dev/null | sed -n '1p')
             if [ -n "$LATEST_BACKUP" ]; then
               sudo cp "$LATEST_BACKUP" /opt/hh-gui/hh-gui.jar
               sudo systemctl restart hh-gui
