@@ -103,12 +103,6 @@ public class PipelineJobRunner {
         }
     }
 
-    public boolean isRunning() {
-        synchronized (lock) {
-            return running;
-        }
-    }
-
     /** Snapshot for the polling UI: state of the current run, or of the last finished one. */
     public Map<String, Object> status() {
         synchronized (lock) {

@@ -435,10 +435,6 @@ public class VacancyPipelineService {
         return System.currentTimeMillis() < scrapeCooldownUntil;
     }
 
-    public long getScrapeCooldownUntil() {
-        return scrapeCooldownUntil;
-    }
-
     private synchronized void enterScrapeCooldown() {
         scrapeCooldownStrikes++;
         long cooldown = Math.min(SCRAPE_COOLDOWN_BASE_MS << (scrapeCooldownStrikes - 1), SCRAPE_COOLDOWN_MAX_MS);

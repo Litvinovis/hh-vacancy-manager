@@ -93,11 +93,6 @@ public class VacancyAiAnalyzer {
         return providerManager.getCooldownUntil();
     }
 
-    /** Get current AI provider state label for UI banner. */
-    public String getProviderStateLabel() {
-        return providerManager.getStateLabel();
-    }
-
     /** Reset provider to primary (called from settings UI). */
     public void resetProvider() {
         providerManager.reset();
