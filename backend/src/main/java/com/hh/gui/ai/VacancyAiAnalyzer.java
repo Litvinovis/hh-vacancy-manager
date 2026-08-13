@@ -341,7 +341,12 @@ public class VacancyAiAnalyzer {
         // that burn thousands of tokens thinking before emitting the array, so a
         // per-vacancy-only budget (400 + 150*N) got the JSON truncated mid-array on
         // small batches. The cap is headroom, not extra spend (max_tokens only limits).
-        String response = callLlm(prompt, Math.min(6000, 3000 + 150 * vacancies.size()));
+        // Raised per-item budget/cap after adding noveltyColor/noveltyNote (2026-08-13):
+        // Cyrillic text tokenizes far less efficiently than English, and the old 150/
+        // item·6000 cap left large batches (25-30 representatives) too tight to fit six
+        // full fields per item — live symptom was noveltyColor/noveltyNote silently
+        // missing from most items in a batch, not just occasionally.
+        String response = callLlm(prompt, Math.min(10000, 4000 + 220 * vacancies.size()));
         return parseResponse(response, vacancies);
     }
 
