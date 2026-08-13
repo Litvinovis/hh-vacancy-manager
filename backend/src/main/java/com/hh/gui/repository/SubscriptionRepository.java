@@ -28,6 +28,8 @@ public class SubscriptionRepository {
         s.setExpiresAt(rs.getString("expires_at"));
         s.setPaymentProvider(rs.getString("payment_provider"));
         s.setExternalPaymentId(rs.getString("external_payment_id"));
+        s.setCancelRequested(rs.getInt("cancel_requested") != 0);
+        s.setRenewalReminderSentAt(rs.getString("renewal_reminder_sent_at"));
         s.setCreatedAt(rs.getString("created_at"));
         s.setUpdatedAt(rs.getString("updated_at"));
         return s;
@@ -57,18 +59,52 @@ public class SubscriptionRepository {
     }
 
     /**
-     * Moves subscriptions whose paid period has elapsed to 'expired'. Belt to
-     * findActiveChatIds' braces: that query already refuses to broadcast to them, but
+     * Moves subscriptions whose paid period has elapsed to 'expired' or 'cancelled'. Belt
+     * to findActiveChatIds' braces: that query already refuses to broadcast to them, but
      * without this the stored status stays 'active' forever, so /status would report
      * "активна до &lt;прошедшая дата&gt;" and any future reporting would overcount paying users.
+     *
+     * The split matters for what it means later: 'expired' is a lapsed renewal (may not
+     * have noticed), 'cancelled' is someone who told the bot to stop — different audiences
+     * for a future win-back message, and only 'expired' rows are worth ever nudging again.
+     * cancel_requested is what /cancel sets; access already ran until this exact expiry
+     * either way, so this UPDATE doesn't change WHEN a row stops being active, only what
+     * it's called afterward.
+     *
      * Returns how many rows were moved.
      */
     public int expireDue() {
         String now = Instant.now().toString();
-        return jdbc.update(
+        int cancelled = jdbc.update(
             "UPDATE subscriptions SET status = ?, updated_at = ? " +
-            "WHERE status = ? AND (expires_at IS NULL OR expires_at <= ?)",
+            "WHERE status = ? AND cancel_requested = 1 AND (expires_at IS NULL OR expires_at <= ?)",
+            Subscription.STATUS_CANCELLED, now, Subscription.STATUS_ACTIVE, now);
+        int expired = jdbc.update(
+            "UPDATE subscriptions SET status = ?, updated_at = ? " +
+            "WHERE status = ? AND cancel_requested = 0 AND (expires_at IS NULL OR expires_at <= ?)",
             Subscription.STATUS_EXPIRED, now, Subscription.STATUS_ACTIVE, now);
+        return cancelled + expired;
+    }
+
+    /**
+     * Active, not cancel_requested, expiring within the next `daysBefore` days, never
+     * reminded. The reminder_sent_at guard is what makes this safe to call on a frequent
+     * schedule — without it every run in the multi-day window would re-notify the same
+     * person.
+     */
+    public List<Subscription> findDueRenewalReminders(int daysBefore, int limit) {
+        String now = Instant.now().toString();
+        String cutoff = Instant.now().plusSeconds(daysBefore * 86400L).toString();
+        return jdbc.query(
+            "SELECT * FROM subscriptions WHERE status = ? AND cancel_requested = 0 " +
+            "AND renewal_reminder_sent_at IS NULL AND expires_at IS NOT NULL " +
+            "AND expires_at > ? AND expires_at <= ? ORDER BY expires_at LIMIT ?",
+            rowMapper, Subscription.STATUS_ACTIVE, now, cutoff, limit);
+    }
+
+    public void markRenewalReminderSent(long id) {
+        jdbc.update("UPDATE subscriptions SET renewal_reminder_sent_at = ?, updated_at = ? WHERE id = ?",
+            Instant.now().toString(), Instant.now().toString(), id);
     }
 
     public Subscription save(Subscription s) {
@@ -80,8 +116,9 @@ public class SubscriptionRepository {
 
         String sql = """
             INSERT INTO subscriptions (telegram_user_id, telegram_chat_id, status, plan_price_rub,
-                started_at, expires_at, payment_provider, external_payment_id, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                started_at, expires_at, payment_provider, external_payment_id, cancel_requested,
+                renewal_reminder_sent_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """;
         KeyHolder keyHolder = new GeneratedKeyHolder();
         jdbc.update(con -> {
@@ -95,6 +132,8 @@ public class SubscriptionRepository {
             ps.setString(i++, s.getExpiresAt());
             ps.setString(i++, s.getPaymentProvider());
             ps.setString(i++, s.getExternalPaymentId());
+            ps.setInt(i++, s.isCancelRequested() ? 1 : 0);
+            ps.setString(i++, s.getRenewalReminderSentAt());
             ps.setString(i++, s.getCreatedAt());
             ps.setString(i, s.getUpdatedAt());
             return ps;
@@ -107,8 +146,10 @@ public class SubscriptionRepository {
         s.setUpdatedAt(Instant.now().toString());
         jdbc.update(
             "UPDATE subscriptions SET telegram_chat_id=?, status=?, plan_price_rub=?, started_at=?, " +
-            "expires_at=?, payment_provider=?, external_payment_id=?, updated_at=? WHERE id=?",
+            "expires_at=?, payment_provider=?, external_payment_id=?, cancel_requested=?, " +
+            "renewal_reminder_sent_at=?, updated_at=? WHERE id=?",
             s.getTelegramChatId(), s.getStatus(), s.getPlanPriceRub(), s.getStartedAt(),
-            s.getExpiresAt(), s.getPaymentProvider(), s.getExternalPaymentId(), s.getUpdatedAt(), s.getId());
+            s.getExpiresAt(), s.getPaymentProvider(), s.getExternalPaymentId(),
+            s.isCancelRequested() ? 1 : 0, s.getRenewalReminderSentAt(), s.getUpdatedAt(), s.getId());
     }
 }

@@ -176,14 +176,25 @@ CREATE TABLE IF NOT EXISTS subscriptions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     telegram_user_id INTEGER NOT NULL,
     telegram_chat_id INTEGER NOT NULL,
-    -- pending: /subscribe seen, no confirmed payment yet. active: paid, current.
-    -- expired: past expires_at. cancelled: user asked to stop.
+    -- pending: /subscribe seen, no confirmed payment yet. active: paid, current
+    -- (may still be cancel_requested — see below). expired: past expires_at, never
+    -- cancelled. cancelled: past expires_at AND the user had asked to stop.
     status TEXT NOT NULL DEFAULT 'pending',
     plan_price_rub INTEGER NOT NULL DEFAULT 200,
     started_at TEXT DEFAULT NULL,
     expires_at TEXT DEFAULT NULL,
     payment_provider TEXT DEFAULT 'stub',
     external_payment_id TEXT DEFAULT NULL,
+    -- /cancel on an active subscription does NOT cut access early — it sets this
+    -- instead and status stays 'active' until expires_at, same as before. expireDue
+    -- reads it once at expiry to decide expired vs cancelled; the renewal-reminder
+    -- job skips rows with this set, since sending "продлите" to someone who just
+    -- told you to stop would be the wrong message. /subscribe on an active row with
+    -- this set just clears it — resuming needs no new payment, nothing lapsed.
+    cancel_requested INTEGER NOT NULL DEFAULT 0,
+    -- Set once a renewal reminder has actually been sent, so the daily check doesn't
+    -- re-notify the same person every time it runs during the reminder window.
+    renewal_reminder_sent_at TEXT DEFAULT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     UNIQUE(telegram_user_id)

@@ -21,6 +21,8 @@ public class Subscription {
     private String expiresAt;
     private String paymentProvider = "stub";
     private String externalPaymentId;
+    private boolean cancelRequested;
+    private String renewalReminderSentAt;
     private String createdAt;
     private String updatedAt;
 
@@ -50,6 +52,18 @@ public class Subscription {
 
     public String getExternalPaymentId() { return externalPaymentId; }
     public void setExternalPaymentId(String externalPaymentId) { this.externalPaymentId = externalPaymentId; }
+
+    /**
+     * Set by /cancel on an active subscription. Access is NOT cut on cancel — this only
+     * marks intent, so expireDue can record 'cancelled' instead of 'expired' at the
+     * already-scheduled expiry, and the renewal reminder can skip this person. Cleared by
+     * /subscribe on an already-active row: resuming needs no new payment.
+     */
+    public boolean isCancelRequested() { return cancelRequested; }
+    public void setCancelRequested(boolean cancelRequested) { this.cancelRequested = cancelRequested; }
+
+    public String getRenewalReminderSentAt() { return renewalReminderSentAt; }
+    public void setRenewalReminderSentAt(String renewalReminderSentAt) { this.renewalReminderSentAt = renewalReminderSentAt; }
 
     public String getCreatedAt() { return createdAt; }
     public void setCreatedAt(String createdAt) { this.createdAt = createdAt; }
