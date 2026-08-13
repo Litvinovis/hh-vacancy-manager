@@ -403,4 +403,61 @@ class FreeModelUpdaterTest {
         assertEquals(0, FreeModelUpdater.scoreProbeAnswer(null));
         assertEquals(0, FreeModelUpdater.scoreProbeAnswer(List.of("не объект")));
     }
+
+    // ── Устойчивость к плавающим сбоям ──
+
+    @Test
+    void incumbentFailingOnce_isRetriedAndKept() {
+        // Инцидент 2026-08-13: один пустой ответ дал 0/8 модели, работавшей весь день, и
+        // она вылетела из собственной цепочки. Одна выборка — шаткое основание для замены.
+        TestUpdater updater = new TestUpdater(config) {
+            final java.util.Map<String, Integer> attempts = new java.util.HashMap<>();
+            @Override
+            protected int probeModel(String modelId) {
+                probed.add(modelId);
+                int n = attempts.merge(modelId, 1, Integer::sum);
+                // b/two спотыкается на первой попытке и отвечает на второй.
+                if ("b/two:free".equals(modelId)) return n == 1 ? 0 : FreeModelUpdater.PROBE_MAX_SCORE;
+                return FreeModelUpdater.PROBE_MAX_SCORE;
+            }
+        };
+        updater.catalog = List.of(model("a/one:free", 100_000), model("b/two:free", 100_000),
+            model("c/three:free", 100_000), model("d/other:free", 200_000));
+
+        Map<String, Object> summary = updater.refresh();
+
+        assertEquals("unchanged", summary.get("status"));
+        assertEquals(CURRENT_LIST, openrouterModel(), "плавающий сбой не должен стоить модели места");
+    }
+
+    @Test
+    void incumbentFailingTwice_isReplaced() {
+        // Обратная сторона: устойчиво плохая модель всё равно уходит.
+        TestUpdater updater = new TestUpdater(config);
+        updater.catalog = List.of(model("a/one:free", 100_000), model("b/two:free", 100_000),
+            model("c/three:free", 100_000), model("d/other-instruct:free", 200_000));
+        updater.healthy = Set.of("a/one:free", "c/three:free", "d/other-instruct:free");
+
+        Map<String, Object> summary = updater.refresh();
+
+        assertEquals("updated", summary.get("status"));
+        assertFalse(openrouterModel().contains("b/two:free"));
+        assertEquals(2, updater.probed.stream().filter("b/two:free"::equals).count(),
+            "действующая модель получает ровно одну перепроверку");
+    }
+
+    @Test
+    void freshCandidateFailing_isNotRetried() {
+        // У кандидата нет истории работы — тратить на него второй вызов не за что.
+        TestUpdater updater = new TestUpdater(config);
+        updater.catalog = List.of(model("a/one:free", 100_000), model("b/two:free", 100_000),
+            model("c/three:free", 100_000), model("dead/instruct:free", 500_000),
+            model("good/instruct:free", 200_000));
+        updater.healthy = Set.of("a/one:free", "c/three:free", "good/instruct:free");
+
+        updater.refresh();
+
+        assertEquals(1, updater.probed.stream().filter("dead/instruct:free"::equals).count(),
+            "кандидат проверяется один раз");
+    }
 }

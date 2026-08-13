@@ -111,10 +111,11 @@ public class FreeModelUpdater {
      * means the contract itself is unreliable.
      */
     static final int PROBE_MIN_SCORE = 5;
-    // Roomy on purpose: a reasoning model that spends its budget thinking would otherwise
-    // look dead at a tight cap, and we want to reject models for what they answer, not for
-    // being cut off. Still tiny next to a real analysis batch.
-    private static final int PROBE_MAX_TOKENS = 800;
+    // Roomy on purpose: we reject models for what they answer, not for being cut off. Two
+    // items with six fields each fit comfortably; the headroom is margin, and it is still
+    // tiny next to a real analysis batch. (Reasoning is disabled for these calls the same
+    // way it is in production — see VacancyAiAnalyzer.callLlm.)
+    private static final int PROBE_MAX_TOKENS = 1200;
 
     private final RuntimeConfig runtimeConfig;
     private final VacancyAiAnalyzer analyzer;
@@ -194,7 +195,18 @@ public class FreeModelUpdater {
         List<String> unhealthy = new ArrayList<>();
         Map<String, Integer> scores = new LinkedHashMap<>();
         for (String id : stillFree) {
+            // Retried once before condemning, and ONLY for models already in the chain.
+            // A single sample is a shaky basis for eviction: on 2026-08-13 one transient
+            // empty answer scored nemotron-3-super-120b at 0/8 and dropped a model that
+            // had been serving all day, and the replacement search then seated whatever
+            // answered next. Incumbents have a track record; a fresh candidate that fails
+            // has none, so it does not get the extra call.
             int score = probe.score(id);
+            if (score != RATE_LIMITED && score < PROBE_MIN_SCORE && !probe.exhausted()) {
+                log.info("Обновление free-моделей: {} набрала {}/{} — перепроверяем, прежде чем менять",
+                    id, score, PROBE_MAX_SCORE);
+                score = probe.score(id);
+            }
             // A model already in the chain is kept on a rate-limited probe: we learned
             // nothing about it, and churning the chain on no information is worse.
             if (score == RATE_LIMITED || score >= PROBE_MIN_SCORE) {
