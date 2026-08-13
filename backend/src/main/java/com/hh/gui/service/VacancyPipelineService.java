@@ -229,7 +229,12 @@ public class VacancyPipelineService {
      * early stop: this listing's known/new hits interleave unpredictably across
      * pages (mass-reposted clones), so a "saturated" page can't predict the next one.
      */
-    @Transactional
+    // No @Transactional: it used to be here and did nothing. Spring's proxy-based
+    // transaction advice only applies to public methods, and both callers of this one
+    // (runFullPipeline / runFullPipelineFromUrl) are in this same class, so the call
+    // never goes through the proxy anyway. Each vacancyRepo.save below therefore
+    // auto-commits on its own — which is also what the per-save try/catch already
+    // assumes, since it deliberately keeps going after one bad row.
     protected int discoverFromUrl(SearchJob job, String url, int maxPages) {
         if (isScrapeCoolingDown()) {
             log.warn("Поиск по ссылке ({} · {}) пропущен — скрейпинг заморожен после блокировки", job.personName, job.searchName);
@@ -329,7 +334,7 @@ public class VacancyPipelineService {
      * scrape + real AI analysis. Fails OPEN like the URL path: any prescreen
      * problem means everything passes through unfiltered.
      */
-    @Transactional
+    // No @Transactional — see discoverFromUrl above for why it was a no-op here.
     protected int discoverNew(SearchJob job) {
         if (job.queries == null || job.queries.isEmpty()) {
             log.warn("Поисковые запросы не настроены для {} · {}", job.personName, job.searchName);
