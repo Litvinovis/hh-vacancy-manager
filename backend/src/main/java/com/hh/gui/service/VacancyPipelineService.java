@@ -100,6 +100,31 @@ public class VacancyPipelineService {
     }
 
     /**
+     * One lock per (person, search) job, so the same job can never run twice at once.
+     *
+     * PipelineJobRunner already serializes MANUAL runs against each other, but the
+     * scheduler is a separate caller and overlaps them freely — and with virtual threads
+     * enabled the scheduler itself runs its trigger tasks concurrently. Two runs of one
+     * job both call findUnnotifiedApproved, both see the same notified=0 rows (the send
+     * to Telegram happens between that SELECT and markNotified, and takes seconds), and
+     * both publish them: duplicate posts in the channel that no dedup pass can catch,
+     * since dedup works within one batch and these are two independent batches. The
+     * wasted double scrape and double AI spend come free with it.
+     *
+     * The second caller skips rather than waits: a manual trigger blocking for the
+     * minutes a scheduled run takes would look like a hung request, and the work is
+     * about to be redone on the next tick anyway.
+     */
+    private final java.util.concurrent.ConcurrentMap<String, java.util.concurrent.locks.ReentrantLock> jobLocks =
+        new java.util.concurrent.ConcurrentHashMap<>();
+
+    private java.util.concurrent.locks.ReentrantLock lockFor(SearchJob job) {
+        // \u0000 can't occur in a person or search name, so the composite key is unambiguous.
+        String key = job.personName + "\u0000" + job.searchName;
+        return jobLocks.computeIfAbsent(key, k -> new java.util.concurrent.locks.ReentrantLock());
+    }
+
+    /**
      * Full pipeline for one job: discover → scrape → AI-analyze → notify.
      * Manual-trigger entry point — analyzes whatever is pending immediately.
      */
@@ -114,6 +139,20 @@ public class VacancyPipelineService {
      * on every 10-minute tick (see shouldDeferAnalysis).
      */
     public PipelineResult runFullPipeline(SearchJob job, boolean deferSmallAiBatches) {
+        java.util.concurrent.locks.ReentrantLock lock = lockFor(job);
+        if (!lock.tryLock()) {
+            log.info("Пайплайн {} · {} уже выполняется — параллельный запуск пропущен", job.personName, job.searchName);
+            return new PipelineResult();
+        }
+        try {
+            return runFullPipelineLocked(job, deferSmallAiBatches);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /** Protected only as the seam VacancyPipelineServiceTest uses to assert mutual exclusion. */
+    protected PipelineResult runFullPipelineLocked(SearchJob job, boolean deferSmallAiBatches) {
         log.info("=== Пайплайн: {} · {} ===", job.personName, job.searchName);
 
         // URL-only search (sourceUrl set, no RSS queries): the only way to discover
@@ -193,6 +232,20 @@ public class VacancyPipelineService {
      * results with no pagination, this gets ~50/page with real pagination.
      */
     public PipelineResult runFullPipelineFromUrl(SearchJob job, String url, int maxPages) {
+        java.util.concurrent.locks.ReentrantLock lock = lockFor(job);
+        if (!lock.tryLock()) {
+            log.info("Поиск по ссылке {} · {} уже выполняется — параллельный запуск пропущен",
+                job.personName, job.searchName);
+            return new PipelineResult();
+        }
+        try {
+            return runFullPipelineFromUrlLocked(job, url, maxPages);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private PipelineResult runFullPipelineFromUrlLocked(SearchJob job, String url, int maxPages) {
         log.info("=== Пайплайн по ссылке: {} · {} ({}) ===", job.personName, job.searchName, url);
 
         int discovered = discoverFromUrl(job, url, maxPages);
@@ -897,6 +950,22 @@ public class VacancyPipelineService {
      */
     @Transactional
     public ReanalyzeResult reanalyzeJob(SearchJob job) {
+        // Same guard as runFullPipeline: this path also ends in findUnnotifiedApproved →
+        // sendReport, so running it alongside a scheduled pipeline for the same job would
+        // publish the same approvals twice.
+        java.util.concurrent.locks.ReentrantLock lock = lockFor(job);
+        if (!lock.tryLock()) {
+            log.info("Переоценка {} · {} пропущена — по этому поиску уже идёт прогон", job.personName, job.searchName);
+            return new ReanalyzeResult();
+        }
+        try {
+            return reanalyzeJobLocked(job);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private ReanalyzeResult reanalyzeJobLocked(SearchJob job) {
         int resetCount = vacancyRepo.resetAiForRescan(job.personName, job.searchName);
         log.info("Переоценка ({} · {}): сброшено {}", job.personName, job.searchName, resetCount);
 
