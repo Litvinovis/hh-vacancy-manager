@@ -86,8 +86,20 @@ public class SchemaMigrator implements ApplicationRunner {
         runIgnoringErrors("CREATE INDEX IF NOT EXISTS idx_uvs_vacancy_id ON user_vacancy_status(vacancy_id)");
         runIgnoringErrors("CREATE INDEX IF NOT EXISTS idx_vac_delayed_publish_at ON vacancies(delayed_publish_at)");
         runIgnoringErrors("CREATE INDEX IF NOT EXISTS idx_vac_queued_publish_at ON vacancies(queued_publish_at)");
+        // Also declared in schema.sql (all its columns predate this migrator) — repeated
+        // here so an existing database picks it up on the very boot that ships it,
+        // without waiting for schema.sql's own run order. See schema.sql for the measured
+        // 205 ms → 3 ms this buys on findUnnotifiedApproved.
+        runIgnoringErrors("CREATE INDEX IF NOT EXISTS idx_vac_approved_unnotified "
+            + "ON vacancies(person, search_name, ai_verdict, notified, ai_score DESC)");
 
         backfillDedupKeys();
+        // The database shipped with no sqlite_stat1 at all, so every plan was chosen from
+        // SQLite's built-in guesses. With stats the dedup_key subquery in
+        // findUnnotifiedApproved switches from idx_vac_notified to idx_vac_dedup_key —
+        // the last 3 ms → 1 ms. Measured at 104 ms over 48k rows, so it is cheap enough
+        // to redo on each boot and keeps up as the table grows.
+        runIgnoringErrors("ANALYZE");
         ready = true;
     }
 

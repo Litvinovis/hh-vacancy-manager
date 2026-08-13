@@ -152,4 +152,5 @@ CREATE INDEX IF NOT EXISTS idx_uvs_user_id ON user_vacancy_status(user_id);
 CREATE INDEX IF NOT EXISTS idx_uvs_vacancy_id ON user_vacancy_status(vacancy_id);
 CREATE INDEX IF NOT EXISTS idx_vacancies_delayed_publish_at ON vacancies(delayed_publish_at);
 CREATE INDEX IF NOT EXISTS idx_vacancies_queued_publish_at ON vacancies(queued_publish_at);
+CREATE INDEX IF NOT EXISTS idx_vac_approved_unnotified ON vacancies(person, search_name, ai_verdict, notified, ai_score DESC);
 CREATE INDEX IF NOT EXISTS idx_sub_status ON subscriptions(status);

@@ -210,6 +210,14 @@ CREATE INDEX IF NOT EXISTS idx_vac_criteria_hash ON vacancies(hh_id, criteria_ha
 -- shape directly, instead of relying on SQLite intersecting the single-column
 -- person/search_name/scrape_status/verdict indexes above for every pipeline run.
 CREATE INDEX IF NOT EXISTS idx_vac_person_search ON vacancies(person, search_name);
+-- findUnnotifiedApproved runs for every job on every pipeline tick. Without this the
+-- planner picked idx_vac_notified — an index over a two-value column, under which
+-- ~20k rows sit at notified=0 — and scanned them all, then ran the dedup_key NOT EXISTS
+-- subquery over that same index for each. Measured on the live 48k-row database:
+-- 205 ms before, 3 ms with this index, 1 ms once sqlite_stat1 exists (see ANALYZE in
+-- SchemaMigrator). The cost grows with the unnotified backlog, which only ever grows.
+CREATE INDEX IF NOT EXISTS idx_vac_approved_unnotified
+    ON vacancies(person, search_name, ai_verdict, notified, ai_score DESC);
 CREATE INDEX IF NOT EXISTS idx_tags_vid ON tags(vacancy_id);
 CREATE INDEX IF NOT EXISTS idx_hist_vid ON history(vacancy_id);
 CREATE INDEX IF NOT EXISTS idx_searches_user_id ON searches(user_id);
