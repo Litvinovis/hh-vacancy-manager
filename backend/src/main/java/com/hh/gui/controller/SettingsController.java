@@ -45,7 +45,7 @@ public class SettingsController {
         if (!currentUser.isAdmin()) return forbidden();
 
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("values", runtimeConfig.toMap());
+        result.put("values", maskedValues());
         result.put("descriptors", runtimeConfig.getDescriptors());
         return ResponseEntity.ok(result);
     }
@@ -58,11 +58,39 @@ public class SettingsController {
         Map<String, String> errors = runtimeConfig.apply(body);
 
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("values", runtimeConfig.toMap());
+        result.put("values", maskedValues());
         if (!errors.isEmpty()) {
             result.put("errors", errors);
         }
         return ResponseEntity.ok(result);
+    }
+
+    /**
+     * runtimeConfig.toMap() carries full aiProviders API keys — it's also what gets
+     * written verbatim to runtime-config.json, where the real keys must stay. Any
+     * response leaving this process over HTTP needs them masked instead, same as
+     * GET /providers already does.
+     */
+    private Map<String, Object> maskedValues() {
+        Map<String, Object> values = new LinkedHashMap<>(runtimeConfig.toMap());
+        values.put("aiProviders", runtimeConfig.getAiProviders().stream()
+            .map(p -> {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("name", p.getName());
+                m.put("url", p.getUrl());
+                m.put("apiKey", maskKey(p.getApiKey()));
+                m.put("model", p.getModel());
+                m.put("requestDelayMs", p.getRequestDelayMs());
+                return m;
+            })
+            .collect(Collectors.toList()));
+        return values;
+    }
+
+    private static String maskKey(String key) {
+        if (key == null || key.isBlank()) return "";
+        if (key.length() > 8) return key.substring(0, 4) + "..." + key.substring(key.length() - 4);
+        return "****";
     }
 
     @GetMapping("/providers")
@@ -74,16 +102,7 @@ public class SettingsController {
                 Map<String, Object> m = new LinkedHashMap<>();
                 m.put("name", p.getName());
                 m.put("url", p.getUrl());
-                // Маскируем ключ для отображения
-                String key = p.getApiKey();
-                if (key != null && key.length() > 8) {
-                    m.put("apiKey", key.substring(0, 4) + "..." + key.substring(key.length() - 4));
-                } else if (key != null && !key.isBlank()) {
-                    m.put("apiKey", "****");
-                } else {
-                    m.put("apiKey", "");
-                }
-                m.put("apiKeyFull", p.getApiKey()); // полный ключ для редактирования (уйдёт в форму)
+                m.put("apiKey", maskKey(p.getApiKey()));
                 m.put("model", p.getModel());
                 m.put("requestDelayMs", p.getRequestDelayMs());
                 return m;
@@ -100,6 +119,11 @@ public class SettingsController {
                                               @RequestAttribute("currentUser") User currentUser) {
         if (!currentUser.isAdmin()) return forbidden();
 
+        // GET /providers now sends only masked keys, so the edit form round-trips a
+        // masked value for any provider the admin didn't retype a new key for. Compare
+        // positionally against the previously stored list and keep the real key in that
+        // case — otherwise every save would overwrite it with the mask string itself.
+        List<AiProviderConfig> oldProviders = runtimeConfig.getAiProviders();
         List<AiProviderConfig> providers = new ArrayList<>();
         for (Map<String, Object> m : providersList) {
             AiProviderConfig p = new AiProviderConfig();
@@ -108,7 +132,13 @@ public class SettingsController {
             Object url = m.get("url");
             p.setUrl(url != null ? url.toString() : "");
             Object key = m.get("apiKey");
-            p.setApiKey(key != null ? key.toString() : "");
+            String incomingKey = key != null ? key.toString() : "";
+            AiProviderConfig old = providers.size() < oldProviders.size() ? oldProviders.get(providers.size()) : null;
+            if (old != null && incomingKey.equals(maskKey(old.getApiKey()))) {
+                p.setApiKey(old.getApiKey());
+            } else {
+                p.setApiKey(incomingKey);
+            }
             Object model = m.get("model");
             p.setModel(model != null ? model.toString() : "");
             Object delay = m.get("requestDelayMs");
