@@ -102,6 +102,7 @@ public class SearchProfileFactory {
         job.delayedChatId = search.getDelayedChatId();
         job.delayedPublishMinutes = search.getDelayedPublishMinutes();
         job.subscriberFeed = search.isSubscriberFeed();
+        job.publishPaceMinutes = search.getPublishPaceMinutes();
         return job;
     }
 }

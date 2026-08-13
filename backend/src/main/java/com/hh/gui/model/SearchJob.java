@@ -34,6 +34,7 @@ public class SearchJob {
     public String delayedChatId;
     public Integer delayedPublishMinutes;
     public boolean subscriberFeed;
+    public Integer publishPaceMinutes;
 
     public boolean isRemote() {
         return "remote".equalsIgnoreCase(schedule) || area == 113;

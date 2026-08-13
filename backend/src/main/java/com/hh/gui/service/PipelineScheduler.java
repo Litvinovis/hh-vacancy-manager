@@ -69,6 +69,11 @@ public class PipelineScheduler implements SchedulingConfigurer {
     private static final Duration DELAYED_PUBLISH_CHECK_INTERVAL = Duration.ofMinutes(1);
     private static final int DELAYED_PUBLISH_BATCH_PER_TICK = 50;
 
+    // Same reasoning as DELAYED_PUBLISH_CHECK_INTERVAL — publishPaceMinutes is
+    // typically a few minutes, so the check needs to be well under that.
+    private static final Duration QUEUED_PUBLISH_CHECK_INTERVAL = Duration.ofMinutes(1);
+    private static final int QUEUED_PUBLISH_BATCH_PER_TICK = 50;
+
     public PipelineScheduler(VacancyPipelineService pipelineService, SearchProfileFactory profileFactory,
                               RuntimeConfig runtimeConfig, VacancyAiAnalyzer aiAnalyzer, SearchRepository searchRepo,
                               FreeModelUpdater freeModelUpdater, FeatureFlags featureFlags, SchemaMigrator schemaMigrator) {
@@ -96,6 +101,7 @@ public class PipelineScheduler implements SchedulingConfigurer {
         freshnessTrigger.setInitialDelay(Duration.ofMinutes(5));
         registrar.addTriggerTask(this::runFreshnessCheck, freshnessTrigger);
         registrar.addTriggerTask(this::runDueDelayedPublications, new PeriodicTrigger(DELAYED_PUBLISH_CHECK_INTERVAL));
+        registrar.addTriggerTask(this::runDueQueuedPublications, new PeriodicTrigger(QUEUED_PUBLISH_CHECK_INTERVAL));
     }
 
     /**
@@ -113,6 +119,19 @@ public class PipelineScheduler implements SchedulingConfigurer {
             pipelineService.publishDueDelayed(DELAYED_PUBLISH_BATCH_PER_TICK);
         } catch (Exception e) {
             log.error("Отложенная публикация завершилась ошибкой: {}", e.getMessage(), e);
+        }
+    }
+
+    // No FeatureFlags gate here (unlike runDueDelayedPublications): nothing gets
+    // queued in the first place unless publicFormatEnabled was already on when
+    // sendReport ran (see VacancyPipelineService.sendPublicPosts), so this is a
+    // natural no-op otherwise — an extra flag check would just duplicate that.
+    private void runDueQueuedPublications() {
+        if (schemaNotReady()) return;
+        try {
+            pipelineService.publishDueQueued(QUEUED_PUBLISH_BATCH_PER_TICK);
+        } catch (Exception e) {
+            log.error("Публикация из очереди завершилась ошибкой: {}", e.getMessage(), e);
         }
     }
 

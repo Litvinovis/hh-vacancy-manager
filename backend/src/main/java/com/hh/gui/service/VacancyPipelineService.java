@@ -996,8 +996,16 @@ public class VacancyPipelineService {
      * Public-channel path: one Telegram message per vacancy (reposts/forwards better
      * than a batch, and each one stands alone without a "🔍 person · search" header
      * that only makes sense for a personal report) using the public template.
+     *
+     * With publishPaceMinutes set, a whole approved batch (e.g. 10 vacancies from one
+     * pipeline run) would otherwise land in the channel as a burst within seconds —
+     * enqueuePublicPosts staggers them instead; without it, sends immediately as before.
      */
     private void sendPublicPosts(List<Vacancy> approved, SearchJob job) {
+        if (job.publishPaceMinutes != null && job.publishPaceMinutes > 0) {
+            enqueuePublicPosts(approved, job);
+            return;
+        }
         int notifiedCount = 0;
         for (Vacancy v : approved) {
             if (telegramNotifier.sendViaChannelBot(formatPublicPost(v), job.chatId)) {
@@ -1010,6 +1018,65 @@ public class VacancyPipelineService {
         }
         log.info("Публичные посты отправлены ({} · {}, {}/{})",
             job.personName, job.searchName, notifiedCount, approved.size());
+    }
+
+    /**
+     * Stamps a queued_publish_at on each vacancy, chained after whatever's already
+     * queued for this search (findQueueTailTime) so a second approved batch arriving
+     * before the first has drained doesn't overlap it — just extends the line. The
+     * first vacancy in an otherwise-empty queue is due ~immediately (the next
+     * scheduler tick), each subsequent one publishPaceMinutes later.
+     */
+    private void enqueuePublicPosts(List<Vacancy> approved, SearchJob job) {
+        Instant cursor = vacancyRepo.findQueueTailTime(job.searchId)
+            .map(Instant::parse)
+            .filter(t -> t.isAfter(Instant.now()))
+            .orElse(Instant.now());
+
+        List<Long> ids = new ArrayList<>();
+        List<String> publishAts = new ArrayList<>();
+        for (Vacancy v : approved) {
+            ids.add(v.getId());
+            publishAts.add(cursor.toString());
+            cursor = cursor.plusSeconds(job.publishPaceMinutes * 60L);
+        }
+        vacancyRepo.enqueuePublish(ids, publishAts);
+        log.info("В очередь публикации поставлено {} вакансий ({} · {}), интервал {} мин",
+            approved.size(), job.personName, job.searchName, job.publishPaceMinutes);
+    }
+
+    /**
+     * Fired on the queued-publish scheduler tick (see PipelineScheduler). Sends
+     * whatever's due — normally at most ~one per search per tick, since
+     * enqueuePublicPosts already spread the due times publishPaceMinutes apart; a
+     * backlog only piles up after a period the scheduler wasn't running.
+     */
+    public void publishDueQueued(int limit) {
+        if (!runtimeConfig.isChannelNotificationsEnabled()) return;
+        List<Vacancy> due = vacancyRepo.findDueQueuedPublications(Instant.now().toString(), limit);
+        if (due.isEmpty()) return;
+
+        Map<Long, List<Vacancy>> bySearchId = due.stream()
+            .filter(v -> v.getSearchId() != null)
+            .collect(Collectors.groupingBy(Vacancy::getSearchId));
+
+        for (var entry : bySearchId.entrySet()) {
+            Optional<SearchConfig> searchOpt = searchRepo.findById(entry.getKey());
+            if (searchOpt.isEmpty() || searchOpt.get().getChatId() == null || searchOpt.get().getChatId().isBlank()) {
+                // Search deleted or its chat_id was cleared since queuing — leave
+                // notified=0 forever rather than guess a destination (fail-open, same
+                // as publishDueDelayed).
+                continue;
+            }
+            String chatId = searchOpt.get().getChatId();
+            for (Vacancy v : entry.getValue()) {
+                if (telegramNotifier.sendViaChannelBot(formatPublicPost(v), chatId)) {
+                    vacancyRepo.markNotified(List.of(v.getId()));
+                } else {
+                    log.warn("Публикация из очереди не удалась для id={} (search_id={})", v.getId(), entry.getKey());
+                }
+            }
+        }
     }
 
     /**

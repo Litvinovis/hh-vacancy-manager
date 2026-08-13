@@ -34,6 +34,7 @@ public class SearchConfig {
     private String delayedChatId;
     private Integer delayedPublishMinutes;
     private boolean subscriberFeed;
+    private Integer publishPaceMinutes;
 
     public SearchConfig() {}
 
@@ -115,6 +116,9 @@ public class SearchConfig {
 
     public boolean isSubscriberFeed() { return subscriberFeed; }
     public void setSubscriberFeed(boolean subscriberFeed) { this.subscriberFeed = subscriberFeed; }
+
+    public Integer getPublishPaceMinutes() { return publishPaceMinutes; }
+    public void setPublishPaceMinutes(Integer publishPaceMinutes) { this.publishPaceMinutes = publishPaceMinutes; }
 
     public boolean isRemote() {
         return "remote".equalsIgnoreCase(schedule) || area == 113;

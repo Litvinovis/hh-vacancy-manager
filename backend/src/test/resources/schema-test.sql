@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS searches (
     delayed_chat_id VARCHAR(64) DEFAULT NULL,
     delayed_publish_minutes INTEGER DEFAULT NULL,
     subscriber_feed INTEGER NOT NULL DEFAULT 0,
+    publish_pace_minutes INTEGER DEFAULT NULL,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
     UNIQUE(user_id, name)
 );
@@ -86,6 +87,7 @@ CREATE TABLE IF NOT EXISTS vacancies (
     closed_at VARCHAR(64) DEFAULT NULL,
     delayed_publish_at VARCHAR(64) DEFAULT NULL,
     delayed_notified INTEGER DEFAULT 0,
+    queued_publish_at VARCHAR(64) DEFAULT NULL,
     UNIQUE(hh_id, person, search_name)
 );
 
@@ -146,4 +148,5 @@ CREATE INDEX IF NOT EXISTS idx_vacancies_dedup_key ON vacancies(dedup_key);
 CREATE INDEX IF NOT EXISTS idx_uvs_user_id ON user_vacancy_status(user_id);
 CREATE INDEX IF NOT EXISTS idx_uvs_vacancy_id ON user_vacancy_status(vacancy_id);
 CREATE INDEX IF NOT EXISTS idx_vacancies_delayed_publish_at ON vacancies(delayed_publish_at);
+CREATE INDEX IF NOT EXISTS idx_vacancies_queued_publish_at ON vacancies(queued_publish_at);
 CREATE INDEX IF NOT EXISTS idx_sub_status ON subscriptions(status);
