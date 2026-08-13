@@ -390,9 +390,11 @@ public class VacancyAiAnalyzer {
         sb.append("- \"Доверенный работодатель\" ниже — это подтверждение от hh.ru, весомый плюс к доверию\n");
         sb.append("- Вакансии-скам ставь verdict=\"fraud\" и score=0, но не пропускай их — они остаются в базе, чтобы не анализировать повторно\n\n");
 
-        sb.append("Проанализируй каждую вакансию и верни JSON-массив с полями:\n");
-        sb.append("[{\"id\": \"...\", \"score\": 0-100, \"verdict\": \"yes\"|\"no\"|\"fraud\", \"reason\": \"обоснование одной короткой фразой, до 12 слов\", ")
-          .append("\"noveltyColor\": \"red\"|\"yellow\"|\"green\", \"noveltyNote\": \"до 8 слов\"}]\n");
+        sb.append("Проанализируй каждую вакансию и верни JSON-массив. У КАЖДОГО элемента массива должны быть ВСЕ шесть полей ")
+          .append("(id, score, verdict, reason, noveltyColor, noveltyNote) — noveltyColor/noveltyNote нельзя пропускать ")
+          .append("или оставлять пустыми, они обязательны так же, как score и verdict. Пример одного элемента:\n");
+        sb.append("{\"id\": \"12345678\", \"score\": 72, \"verdict\": \"yes\", \"reason\": \"нужна коммуникация с клиентами по телефону\", ")
+          .append("\"noveltyColor\": \"yellow\", \"noveltyNote\": \"стандартная работа с откликами по шаблону\"}\n");
         sb.append("Никакого текста до или после массива. Никаких переносов строк внутри \"reason\"/\"noveltyNote\".\n\n");
 
         sb.append("ВАКАНСИИ:\n");
