@@ -635,4 +635,87 @@ class VacancyPipelineServiceTest {
         assertThrows(Exception.class, () -> sendReport(svc, List.of(v), job),
             "при включённой доставке дедуп должен обращаться к репозиторию");
     }
+
+    // ── Взаимное исключение прогонов одного поиска ──
+
+    /** Считает, сколько прогонов одного поиска выполнялось одновременно. */
+    private static class ConcurrencyProbe extends VacancyPipelineService {
+        final java.util.concurrent.atomic.AtomicInteger inFlight = new java.util.concurrent.atomic.AtomicInteger();
+        final java.util.concurrent.atomic.AtomicInteger maxInFlight = new java.util.concurrent.atomic.AtomicInteger();
+        final java.util.concurrent.atomic.AtomicInteger bodyRuns = new java.util.concurrent.atomic.AtomicInteger();
+        final java.util.concurrent.CountDownLatch bodyEntered = new java.util.concurrent.CountDownLatch(1);
+        final java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+
+        ConcurrencyProbe(RuntimeConfig config) {
+            super(null, null, null, null, null, config, null, new FeatureFlags(), null, null);
+        }
+
+        @Override
+        protected PipelineResult runFullPipelineLocked(SearchJob job, boolean deferSmallAiBatches) {
+            bodyRuns.incrementAndGet();
+            maxInFlight.accumulateAndGet(inFlight.incrementAndGet(), Math::max);
+            bodyEntered.countDown();
+            try {
+                release.await(5, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } finally {
+                inFlight.decrementAndGet();
+            }
+            return new PipelineResult();
+        }
+    }
+
+    @Test
+    void sameJob_cannotRunTwiceConcurrently() throws Exception {
+        // Регрессия: PipelineJobRunner разводит только ручные прогоны между собой, а
+        // планировщик — независимый вызывающий и пересекается с ними свободно. Два
+        // прогона одного поиска выбирали одни и те же строки notified=0 (между SELECT и
+        // markNotified лежит отправка в Telegram, это секунды) и публиковали их дважды —
+        // дубли, которые дедуп поймать не может, потому что пачки независимые.
+        ConcurrencyProbe svc = new ConcurrencyProbe(new RuntimeConfig());
+        SearchJob job = new SearchJob();
+        job.personName = "Мама";
+        job.searchName = "Рядом с домом";
+
+        Thread first = new Thread(() -> svc.runFullPipeline(job, false));
+        first.start();
+        assertTrue(svc.bodyEntered.await(5, java.util.concurrent.TimeUnit.SECONDS), "первый прогон должен стартовать");
+
+        // Второй заходит, пока первый ещё внутри — должен вернуться сразу, не выполнив тело.
+        VacancyPipelineService.PipelineResult skipped = svc.runFullPipeline(job, false);
+
+        svc.release.countDown();
+        first.join(5000);
+
+        assertEquals(1, svc.bodyRuns.get(), "тело пайплайна должно выполниться ровно один раз");
+        assertEquals(1, svc.maxInFlight.get(), "два прогона одного поиска не должны пересекаться");
+        assertEquals(0, skipped.approved, "пропущенный запуск возвращает пустой результат");
+    }
+
+    @Test
+    void differentJobs_runConcurrently() throws Exception {
+        // Блокировка обязана быть per-job: разные поиски по-прежнему идут параллельно.
+        ConcurrencyProbe svc = new ConcurrencyProbe(new RuntimeConfig());
+        SearchJob a = new SearchJob();
+        a.personName = "Мама";
+        a.searchName = "Рядом с домом";
+        SearchJob b = new SearchJob();
+        b.personName = "Мама";
+        b.searchName = "Удалёнка по России";
+
+        Thread t1 = new Thread(() -> svc.runFullPipeline(a, false));
+        Thread t2 = new Thread(() -> svc.runFullPipeline(b, false));
+        t1.start();
+        assertTrue(svc.bodyEntered.await(5, java.util.concurrent.TimeUnit.SECONDS));
+        t2.start();
+        Thread.sleep(200);
+
+        svc.release.countDown();
+        t1.join(5000);
+        t2.join(5000);
+
+        assertEquals(2, svc.bodyRuns.get(), "разные поиски должны выполняться оба");
+        assertEquals(2, svc.maxInFlight.get(), "разные поиски должны идти параллельно");
+    }
 }
