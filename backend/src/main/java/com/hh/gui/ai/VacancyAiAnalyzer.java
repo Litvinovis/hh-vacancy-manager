@@ -287,12 +287,21 @@ public class VacancyAiAnalyzer {
     }
 
     /**
-     * Analyze with exponential backoff retry. 429 retries the SAME provider first
-     * (OpenRouter's free-pool 429 is usually seconds-long congestion, not a dead
-     * provider — the "models" array already absorbs per-model limits) and only
-     * advances the chain once maxRetries is exhausted. 401/403 advances immediately —
-     * dead credentials don't heal by retrying (incident 2026-07-17: instant-switch-on-
-     * 429 parked the chain on an expired fallback key for ~10h before this fix).
+     * Analyze with exponential backoff retry, then provider fallback.
+     *
+     * AUTH advances the chain immediately — dead credentials don't heal by retrying
+     * (incident 2026-07-17: instant-switch-on-429 parked the chain on an expired
+     * fallback key for ~10h, hence the asymmetry). Everything else retries the SAME
+     * provider first (a free-pool 429 is usually seconds-long congestion, and the
+     * "models" array already absorbs per-model limits), and only once that budget is
+     * spent does it advance.
+     *
+     * The key rule: exhausting retries is never the end of the road while another
+     * provider is configured. Classification used to be substring matching on the
+     * exception message, so anything that wasn't literally a 429/401/403 fell through
+     * to "throw and give up" — observed live on 2026-08-13, when the provider answered
+     * HTTP 200 with no "choices", three retries burned, and the configured
+     * github-models fallback was never tried at all. Kinds come from LlmException now.
      */
     private List<AiResult> analyzeWithRetry(List<Vacancy> vacancies, SearchJob job, int maxRetries)
             throws Exception {
@@ -307,32 +316,39 @@ public class VacancyAiAnalyzer {
                 return analyzeChunk(vacancies, job);
             } catch (Exception e) {
                 attempt++;
-                String msg = e.getMessage() != null ? e.getMessage() : "";
-                boolean isRateLimit = msg.contains("429");
-                boolean isAuthError = msg.contains("401") || msg.contains("403");
+                LlmException.Kind kind = e instanceof LlmException le ? le.kind() : LlmException.Kind.TRANSPORT;
+                boolean isAuthError = kind == LlmException.Kind.AUTH;
 
-                if (isAuthError || (isRateLimit && attempt >= maxRetries)) {
+                if (isAuthError || attempt >= maxRetries) {
+                    // Cooldown means "stop asking anyone for hours". That is the right
+                    // response to being rate-limited or locked out everywhere, but not to
+                    // a model that answers promptly with something unusable — punishing
+                    // the whole pipeline until tomorrow morning over one malformed reply
+                    // would be far worse than the failure itself. With no provider left to
+                    // try, those kinds just surrender this batch; the next run retries it.
+                    boolean cooldownWarranted = kind == LlmException.Kind.RATE_LIMIT || isAuthError;
+                    if (!providerManager.hasFallback() && !cooldownWarranted) {
+                        log.error("AI-анализ не удался после {} попыток ({}: {}), резервных провайдеров нет",
+                            maxRetries, kind, e.getMessage());
+                        throw e;
+                    }
                     String currentProvider = providerManager.getCurrentProviderName();
                     providerManager.switchToFallback();
                     if (providerManager.isInCooldown()) {
-                        log.warn("Провайдеры исчерпаны ({}). Cooldown. Последний был: {}", msg, currentProvider);
+                        log.warn("Провайдеры исчерпаны ({}: {}). Cooldown. Последний был: {}",
+                            kind, e.getMessage(), currentProvider);
                         throw new RuntimeException("All providers exhausted, entering cooldown");
                     }
-                    log.warn("{} от {}. Переключаемся на провайдера: {}",
-                        isAuthError ? "Ошибка авторизации" : "Стабильный 429",
-                        currentProvider, providerManager.getCurrentProviderName());
+                    log.warn("{} от {} ({}). Переключаемся на провайдера: {}",
+                        isAuthError ? "Ошибка авторизации" : "Исчерпаны попытки",
+                        currentProvider, kind, providerManager.getCurrentProviderName());
                     attempt = 0; // свежий бюджет попыток для нового провайдера
                     continue;
                 }
 
-                if (!isRateLimit && attempt >= maxRetries) {
-                    log.error("AI-анализ не удался после {} попыток: {}", maxRetries, e.getMessage());
-                    throw e;
-                }
-
                 long backoff = (long) Math.pow(2, attempt) * 7500;
-                log.warn("Попытка AI-анализа {}/{} не удалась ({}), повторяем через {}с...",
-                    attempt, maxRetries, e.getMessage(), backoff / 1000);
+                log.warn("Попытка AI-анализа {}/{} не удалась ({}: {}), повторяем через {}с...",
+                    attempt, maxRetries, kind, e.getMessage(), backoff / 1000);
                 Thread.sleep(backoff);
             }
         }
@@ -583,7 +599,8 @@ public class VacancyAiAnalyzer {
         String body = HttpUtil.readBody(conn, code);
         if (code >= 400) {
             log.error("Ошибка LLM API {} ({}): {}", code, provider, body);
-            throw new RuntimeException("LLM API returned " + code);
+            throw new LlmException(LlmException.kindForStatus(code), code,
+                "LLM API returned " + code + " (" + provider + ")");
         }
         recordTokenUsage(provider, body);
         return body;
@@ -617,7 +634,7 @@ public class VacancyAiAnalyzer {
         Map<?, ?> response = mapper.readValue(json, Map.class);
         List<?> choices = (List<?>) response.get("choices");
         if (choices == null || choices.isEmpty()) {
-            throw new RuntimeException("Ответ AI не содержит choices");
+            throw new LlmException(LlmException.Kind.BAD_RESPONSE, 200, "Ответ AI не содержит choices");
         }
 
         Map<?, ?> choice = (Map<?, ?>) choices.get(0);
@@ -627,12 +644,12 @@ public class VacancyAiAnalyzer {
             // Reasoning models sometimes return content=null having spent the whole
             // budget on the reasoning field; without this check that surfaced as a
             // bare NPE ("String.indexOf ... content is null") in the retry log.
-            throw new RuntimeException("Ответ AI без текста (content пуст)");
+            throw new LlmException(LlmException.Kind.BAD_RESPONSE, 200, "Ответ AI без текста (content пуст)");
         }
 
         String jsonArray = extractJsonArray(content);
         if (jsonArray == null) {
-            throw new RuntimeException("JSON-массив не найден в ответе AI: "
+            throw new LlmException(LlmException.Kind.BAD_RESPONSE, 200, "JSON-массив не найден в ответе AI: "
                 + content.substring(0, Math.min(200, content.length())));
         }
         List<?> items = mapper.readValue(jsonArray, List.class);

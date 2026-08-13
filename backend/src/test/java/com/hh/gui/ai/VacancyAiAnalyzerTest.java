@@ -414,4 +414,113 @@ class VacancyAiAnalyzerTest {
         assertEquals(40000, job.salaryMin);
         assertFalse(job.isRemote());
     }
+
+    // ── Классификация сбоев LLM и переход по цепочке провайдеров ──
+
+    /** Всегда падает заданным способом вместо HTTP-вызова. */
+    private static class FailingAnalyzer extends VacancyAiAnalyzer {
+        private final RuntimeException failure;
+        int calls = 0;
+        FailingAnalyzer(RuntimeConfig config, AiProviderManager pm, AiMetrics metrics, RuntimeException failure) {
+            super(config, pm, metrics);
+            this.failure = failure;
+        }
+        @Override
+        String callLlm(String prompt, int maxTokens) {
+            calls++;
+            throw failure;
+        }
+    }
+
+    private static RuntimeConfig configWith(int providers) {
+        RuntimeConfig config = new RuntimeConfig();
+        List<AiProviderConfig> list = new java.util.ArrayList<>();
+        list.add(new AiProviderConfig("primary", "http://localhost/p", "k1", "m1"));
+        if (providers > 1) list.add(new AiProviderConfig("fallback", "http://localhost/f", "k2", "m2"));
+        config.setAiProviders(list);
+        config.setMaxRetries(1);        // без ожидания экспоненциального backoff
+        config.setAiRequestDelayMs(0);
+        return config;
+    }
+
+    private static List<com.hh.gui.model.Vacancy> oneVacancy() {
+        com.hh.gui.model.Vacancy v = new com.hh.gui.model.Vacancy();
+        v.setHhId("1");
+        v.setTitle("Тест");
+        v.setDescription("Обязанности: тест");
+        return List.of(v);
+    }
+
+    private static SearchJob testJob() {
+        SearchJob job = new SearchJob();
+        job.personName = "Тест";
+        job.searchName = "Тест";
+        return job;
+    }
+
+    @Test
+    void unusableResponse_switchesToFallbackProvider() {
+        // Регрессия инцидента 2026-08-13: провайдер ответил HTTP 200 без "choices",
+        // классификация шла подстрокой по тексту исключения, "429"/"401" не совпали —
+        // и резервный провайдер не пробовался вообще, пакет был брошен.
+        RuntimeConfig config = configWith(2);
+        AiProviderManager pm = new AiProviderManager(config, new AiMetrics(new SimpleMeterRegistry(), config));
+        FailingAnalyzer a = new FailingAnalyzer(config, pm, new AiMetrics(new SimpleMeterRegistry(), config),
+            new LlmException(LlmException.Kind.BAD_RESPONSE, 200, "Ответ AI не содержит choices"));
+        setFieldQuietly(a, "batchSizeDefault", 5);
+
+        a.analyzeBatch(oneVacancy(), testJob());
+
+        assertTrue(pm.getCurrentProviderName().startsWith("fallback"),
+            "неюзабельный ответ обязан привести к переходу на резервного провайдера, а не к отказу");
+    }
+
+    @Test
+    void unusableResponse_withNoFallback_doesNotEnterCooldown() {
+        // Обратная сторона: cooldown означает «не спрашивать никого часами». Это верно
+        // для rate-limit, но не для модели, которая отвечает быстро и мусором — иначе
+        // один кривой ответ вешал бы весь пайплайн до утра.
+        RuntimeConfig config = configWith(1);
+        AiProviderManager pm = new AiProviderManager(config, new AiMetrics(new SimpleMeterRegistry(), config));
+        FailingAnalyzer a = new FailingAnalyzer(config, pm, new AiMetrics(new SimpleMeterRegistry(), config),
+            new LlmException(LlmException.Kind.BAD_RESPONSE, 200, "Ответ AI не содержит choices"));
+        setFieldQuietly(a, "batchSizeDefault", 5);
+
+        a.analyzeBatch(oneVacancy(), testJob());
+
+        assertFalse(pm.isInCooldown(), "мусорный ответ единственного провайдера не должен вешать cooldown");
+    }
+
+    @Test
+    void authError_withNoFallback_doesEnterCooldown() {
+        // А вот 401/403 без запасного провайдера — законный повод уйти в cooldown:
+        // ключ не починится от повторов.
+        RuntimeConfig config = configWith(1);
+        AiProviderManager pm = new AiProviderManager(config, new AiMetrics(new SimpleMeterRegistry(), config));
+        FailingAnalyzer a = new FailingAnalyzer(config, pm, new AiMetrics(new SimpleMeterRegistry(), config),
+            new LlmException(LlmException.Kind.AUTH, 401, "LLM API returned 401"));
+        setFieldQuietly(a, "batchSizeDefault", 5);
+
+        a.analyzeBatch(oneVacancy(), testJob());
+
+        assertTrue(pm.isInCooldown(), "неверные учётные данные без резерва — законный cooldown");
+    }
+
+    @Test
+    void kindForStatus_mapsHttpStatusesToKinds() {
+        assertEquals(LlmException.Kind.RATE_LIMIT, LlmException.kindForStatus(429));
+        assertEquals(LlmException.Kind.AUTH, LlmException.kindForStatus(401));
+        assertEquals(LlmException.Kind.AUTH, LlmException.kindForStatus(403));
+        assertEquals(LlmException.Kind.HTTP_ERROR, LlmException.kindForStatus(500));
+    }
+
+    private static void setFieldQuietly(Object target, String name, Object value) {
+        try {
+            Field f = VacancyAiAnalyzer.class.getDeclaredField(name);
+            f.setAccessible(true);
+            f.set(target, value);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
 }
