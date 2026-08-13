@@ -39,6 +39,14 @@ public class VacancyAiAnalyzer {
     private static final Logger log = LoggerFactory.getLogger(VacancyAiAnalyzer.class);
     private static final java.util.Set<String> VALID_VERDICTS = java.util.Set.of("yes", "no", "fraud");
     private static final java.util.Set<String> VALID_NOVELTY_COLORS = java.util.Set.of("red", "yellow", "green");
+    /**
+     * Bump this whenever buildPrompt()'s output schema changes (fields added/removed/reworded).
+     * It's folded into computeCriteriaHash() so the AI-reuse cache (findAnalyzedByHhIdAndCriteriaHash /
+     * findAnalyzedByDedupKeyAndCriteriaHash) can't keep copying forward a verdict produced under an
+     * older schema — otherwise a vacancy first analyzed before a field existed would carry that field
+     * empty forever, since the criteria hash used to depend only on search settings.
+     */
+    private static final String PROMPT_SCHEMA_VERSION = "v3-novelty";
     private static final int MAX_DESCRIPTION_CHARS = 600;
     private static final int FALLBACK_DESCRIPTION_CHARS = 500;
 
@@ -436,6 +444,7 @@ public class VacancyAiAnalyzer {
      */
     public String computeCriteriaHash(SearchJob job) {
         String normalized = String.join("|",
+            PROMPT_SCHEMA_VERSION,
             nullToEmpty(job.city).trim().toLowerCase(),
             sortedJoined(job.priorityDistricts),
             sortedJoined(job.skills),
