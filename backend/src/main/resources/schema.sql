@@ -53,6 +53,12 @@ CREATE TABLE IF NOT EXISTS searches (
     delayed_chat_id TEXT DEFAULT NULL,
     delayed_publish_minutes INTEGER DEFAULT NULL,
     subscriber_feed INTEGER NOT NULL DEFAULT 0,
+    -- Publish pacing for chat_id's own public-format posts (independent of the
+    -- delayed_chat_id mechanic above): when set, an approved batch isn't sent as a
+    -- burst — each vacancy is queued with a staggered vacancies.queued_publish_at
+    -- (first ~immediately, then +N minutes apart) and drained by the scheduler.
+    -- NULL/0 = send immediately, as before.
+    publish_pace_minutes INTEGER DEFAULT NULL,
     UNIQUE(user_id, name)
 );
 
@@ -116,6 +122,11 @@ CREATE TABLE IF NOT EXISTS vacancies (
     -- flips to 1 once the scheduler has actually sent it to the delayed destination.
     delayed_publish_at TEXT DEFAULT NULL,
     delayed_notified INTEGER DEFAULT 0,
+    -- Publish queue (see searches.publish_pace_minutes): when set, this row's own
+    -- primary send is due at this time instead of immediately; the scheduler marks
+    -- the regular `notified` flag once actually sent — this isn't a second
+    -- destination like delayed_publish_at, just a paced primary one.
+    queued_publish_at TEXT DEFAULT NULL,
     UNIQUE(hh_id, person, search_name)
 );
 

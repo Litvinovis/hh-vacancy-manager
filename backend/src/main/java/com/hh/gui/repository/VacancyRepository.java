@@ -501,6 +501,45 @@ public class VacancyRepository {
     }
 
     /**
+     * Publish-pacing queue (see searches.publish_pace_minutes) — unlike
+     * scheduleDelayedPublish (a second destination), this paces the PRIMARY send
+     * itself: instead of a burst, each vacancy in the batch gets its own
+     * queued_publish_at, and the scheduler drains them in order, marking the regular
+     * `notified` flag once actually sent. ids/publishAts are parallel lists (each
+     * vacancy gets its own timestamp, not one shared value) since the caller staggers
+     * them by the search's pace. Guarded by "queued_publish_at IS NULL" — same
+     * reasoning as scheduleDelayedPublish, a re-run can't push an already-queued
+     * item's due time forward.
+     */
+    public void enqueuePublish(List<Long> ids, List<String> publishAts) {
+        for (int i = 0; i < ids.size(); i++) {
+            jdbc.update(
+                "UPDATE vacancies SET queued_publish_at=? WHERE id=? AND queued_publish_at IS NULL",
+                publishAts.get(i), ids.get(i));
+        }
+    }
+
+    /**
+     * Latest queued_publish_at still waiting to be sent for this search, or empty if
+     * nothing's queued — lets the caller chain a newly-approved batch onto the end of
+     * whatever's already in the queue instead of overlapping it.
+     */
+    public Optional<String> findQueueTailTime(Long searchId) {
+        String tail = jdbc.queryForObject(
+            "SELECT MAX(queued_publish_at) FROM vacancies WHERE search_id = ? AND notified = 0 " +
+            "AND queued_publish_at IS NOT NULL", String.class, searchId);
+        return Optional.ofNullable(tail);
+    }
+
+    /** Queued vacancies whose turn has come and haven't been sent yet. */
+    public List<Vacancy> findDueQueuedPublications(String nowIso, int limit) {
+        return jdbc.query(
+            "SELECT * FROM vacancies WHERE queued_publish_at IS NOT NULL AND queued_publish_at <= ? " +
+            "AND notified = 0 AND closed_at IS NULL ORDER BY queued_publish_at LIMIT ?",
+            rowMapper, nowIso, limit);
+    }
+
+    /**
      * Approved postings due for a liveness re-check on hh.ru (see
      * VacancyPipelineService.checkVacancyFreshness): only 'yes' verdicts anyone
      * actually sees, not yet known closed, last confirmed (or first saved) more

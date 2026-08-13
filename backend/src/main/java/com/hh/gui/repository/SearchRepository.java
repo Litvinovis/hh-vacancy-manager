@@ -51,6 +51,8 @@ public class SearchRepository {
         int delayedPublishMinutes = rs.getInt("delayed_publish_minutes");
         s.setDelayedPublishMinutes(rs.wasNull() ? null : delayedPublishMinutes);
         s.setSubscriberFeed(rs.getInt("subscriber_feed") == 1);
+        int publishPaceMinutes = rs.getInt("publish_pace_minutes");
+        s.setPublishPaceMinutes(rs.wasNull() ? null : publishPaceMinutes);
         return s;
     };
 
@@ -94,8 +96,8 @@ public class SearchRepository {
             INSERT INTO searches (user_id, name, queries, area, schedule, salary_min,
                 priority_districts, skills, not_suitable, exclude_words, ai_notes, enabled,
                 created_at, updated_at, is_global, source_url, run_interval_hours, last_run_at, chat_id,
-                public_format, delayed_chat_id, delayed_publish_minutes, subscriber_feed)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                public_format, delayed_chat_id, delayed_publish_minutes, subscriber_feed, publish_pace_minutes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """;
 
         KeyHolder keyHolder = new GeneratedKeyHolder();
@@ -124,7 +126,8 @@ public class SearchRepository {
             ps.setInt(i++, s.isPublicFormat() ? 1 : 0);
             ps.setString(i++, s.getDelayedChatId());
             ps.setObject(i++, s.getDelayedPublishMinutes(), Types.INTEGER);
-            ps.setInt(i, s.isSubscriberFeed() ? 1 : 0);
+            ps.setInt(i++, s.isSubscriberFeed() ? 1 : 0);
+            ps.setObject(i, s.getPublishPaceMinutes(), Types.INTEGER);
             return ps;
         }, keyHolder);
 
@@ -140,14 +143,14 @@ public class SearchRepository {
             "UPDATE searches SET name=?, queries=?, area=?, schedule=?, salary_min=?, " +
             "priority_districts=?, skills=?, not_suitable=?, exclude_words=?, ai_notes=?, enabled=?, updated_at=?, " +
             "source_url=?, run_interval_hours=?, chat_id=?, " +
-            "public_format=?, delayed_chat_id=?, delayed_publish_minutes=?, subscriber_feed=? " +
+            "public_format=?, delayed_chat_id=?, delayed_publish_minutes=?, subscriber_feed=?, publish_pace_minutes=? " +
             "WHERE id=?",
             s.getName(), writeList(s.getQueries()), s.getArea(), s.getSchedule(), s.getSalaryMin(),
             writeList(s.getPriorityDistricts()), writeList(s.getSkills()), writeList(s.getNotSuitable()),
             writeList(s.getExcludeWords()), s.getAiNotes(), s.isEnabled() ? 1 : 0, s.getUpdatedAt(),
             s.getSourceUrl(), s.getRunIntervalHours(), s.getChatId(),
             s.isPublicFormat() ? 1 : 0, s.getDelayedChatId(), s.getDelayedPublishMinutes(), s.isSubscriberFeed() ? 1 : 0,
-            s.getId());
+            s.getPublishPaceMinutes(), s.getId());
     }
 
     /** Stamps the last automatic/manual run time for a search, used by the per-search interval scheduler. */
