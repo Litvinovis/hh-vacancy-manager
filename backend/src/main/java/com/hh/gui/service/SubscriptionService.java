@@ -57,6 +57,13 @@ public class SubscriptionService {
         return paymentGateway.createCheckout(telegramUserId, sub.getPlanPriceRub());
     }
 
+    /** Scheduled sweep — see SubscriptionRepository.expireDue. */
+    public int expireDue() {
+        int expired = repo.expireDue();
+        if (expired > 0) log.info("Подписки: {} истекших переведены в статус expired", expired);
+        return expired;
+    }
+
     public void cancel(long telegramUserId) {
         repo.findByTelegramUserId(telegramUserId).ifPresent(s -> {
             s.setStatus(Subscription.STATUS_CANCELLED);
