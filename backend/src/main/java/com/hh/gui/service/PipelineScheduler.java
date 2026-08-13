@@ -76,6 +76,10 @@ public class PipelineScheduler implements SchedulingConfigurer {
     // paid feed itself is already gated on expires_at at query time (see
     // SubscriptionRepository.findActiveChatIds); this only keeps the stored status honest.
     private static final Duration SUBSCRIPTION_EXPIRY_CHECK_INTERVAL = Duration.ofHours(1);
+    // A 3-day reminder window (see SubscriptionService.RENEWAL_REMINDER_DAYS_BEFORE) only
+    // needs to be checked well under once a day to land reliably inside it; hourly matches
+    // the expiry sweep above and keeps both subscription chores on one easy-to-reason cadence.
+    private static final Duration RENEWAL_REMINDER_CHECK_INTERVAL = Duration.ofHours(1);
 
     private static final Duration QUEUED_PUBLISH_CHECK_INTERVAL = Duration.ofMinutes(1);
     private static final int QUEUED_PUBLISH_BATCH_PER_TICK = 50;
@@ -111,6 +115,7 @@ public class PipelineScheduler implements SchedulingConfigurer {
         registrar.addTriggerTask(this::runDueDelayedPublications, new PeriodicTrigger(DELAYED_PUBLISH_CHECK_INTERVAL));
         registrar.addTriggerTask(this::runDueQueuedPublications, new PeriodicTrigger(QUEUED_PUBLISH_CHECK_INTERVAL));
         registrar.addTriggerTask(this::runSubscriptionExpiry, new PeriodicTrigger(SUBSCRIPTION_EXPIRY_CHECK_INTERVAL));
+        registrar.addTriggerTask(this::runRenewalReminders, new PeriodicTrigger(RENEWAL_REMINDER_CHECK_INTERVAL));
     }
 
     /**
@@ -150,6 +155,15 @@ public class PipelineScheduler implements SchedulingConfigurer {
             subscriptionService.expireDue();
         } catch (Exception e) {
             log.error("Истечение подписок завершилось ошибкой: {}", e.getMessage(), e);
+        }
+    }
+
+    private void runRenewalReminders() {
+        if (schemaNotReady() || !featureFlags.isSubscriptionsEnabled()) return;
+        try {
+            subscriptionService.sendDueRenewalReminders();
+        } catch (Exception e) {
+            log.error("Напоминание о продлении подписки завершилось ошибкой: {}", e.getMessage(), e);
         }
     }
 

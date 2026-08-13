@@ -272,6 +272,52 @@ class SubscriptionServiceTest {
         assertThrows(IllegalStateException.class, () -> service.activate(12345L, "pay_x", 30));
     }
 
+    @Test
+    void activate_redeliveredWebhook_doesNotExtendTwice() {
+        // Провайдер вправе повторно доставить то же уведомление — без этой защиты второй
+        // вызов с тем же externalPaymentId молча продлил бы ещё на daysValid поверх
+        // первого, подарив второй период за один платёж.
+        service.subscribe(1L, 1L);
+        service.activate(1L, "pay_1", 30);
+        String firstExpiry = repo.findByTelegramUserId(1L).orElseThrow().getExpiresAt();
+
+        service.activate(1L, "pay_1", 30);
+
+        assertEquals(firstExpiry, repo.findByTelegramUserId(1L).orElseThrow().getExpiresAt());
+        assertEquals(1, notifier.messages.size(), "повторная доставка не должна слать второе подтверждение");
+    }
+
+    @Test
+    void activate_genuineRenewal_withNewPaymentId_doesExtend() {
+        // В отличие от повтора — другой payment_id обязан продлить по-настоящему.
+        service.subscribe(1L, 1L);
+        service.activate(1L, "pay_1", 30);
+        String firstExpiry = repo.findByTelegramUserId(1L).orElseThrow().getExpiresAt();
+
+        service.activate(1L, "pay_2", 30);
+
+        assertNotEquals(firstExpiry, repo.findByTelegramUserId(1L).orElseThrow().getExpiresAt());
+        assertEquals(2, notifier.messages.size());
+    }
+
+    // ── notifyPaymentFailed() ──
+
+    @Test
+    void notifyPaymentFailed_sendsMessageToChat() {
+        service.subscribe(42L, 777L);
+
+        service.notifyPaymentFailed(42L);
+
+        assertEquals(List.of("777"), notifier.sentTo);
+        assertTrue(notifier.messages.get(0).contains("Не удалось"));
+    }
+
+    @Test
+    void notifyPaymentFailed_unknownUser_isNoOp() {
+        assertDoesNotThrow(() -> service.notifyPaymentFailed(999L));
+        assertTrue(notifier.messages.isEmpty());
+    }
+
     // ── sendDueRenewalReminders() ──
 
     @Test

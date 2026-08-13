@@ -23,6 +23,10 @@ public class WebMvcConfig implements WebMvcConfigurer {
     public void addInterceptors(InterceptorRegistry registry) {
         registry.addInterceptor(authInterceptor)
             .addPathPatterns("/api/**")
-            .excludePathPatterns("/api/auth/**");
+            // /api/auth/**: how a session gets established in the first place.
+            // /api/payments/**: called by the payment provider's servers, not a browser
+            // with a Telegram-bot session — it authenticates itself via its own shared
+            // secret instead (see PaymentWebhookController).
+            .excludePathPatterns("/api/auth/**", "/api/payments/**");
     }
 }

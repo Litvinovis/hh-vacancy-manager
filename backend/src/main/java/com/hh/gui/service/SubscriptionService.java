@@ -21,6 +21,10 @@ public class SubscriptionService {
 
     private static final Logger log = LoggerFactory.getLogger(SubscriptionService.class);
 
+    /** The only plan there is: 200₽/month. See PaymentWebhookController — this is the
+     * daysValid it passes to activate() on a confirmed payment. */
+    public static final int SUBSCRIPTION_PERIOD_DAYS = 30;
+
     private final SubscriptionRepository repo;
     private final PaymentGateway paymentGateway;
     private final TelegramNotifier telegramNotifier;
@@ -132,14 +136,27 @@ public class SubscriptionService {
 
     /**
      * Called once a payment provider actually confirms payment (webhook — see
-     * com.hh.gui.controller.PaymentWebhookController). A renewal made before the current
-     * period ends extends from the LATER of now/current expiry, not from now — paying
-     * early must never shorten what was already bought. Sends the confirmation itself so
-     * activation and its notification can't drift apart.
+     * PaymentWebhookController). A renewal made before the current period ends extends
+     * from the LATER of now/current expiry, not from now — paying early must never
+     * shorten what was already bought. Sends the confirmation itself so activation and
+     * its notification can't drift apart.
+     *
+     * Idempotent on externalPaymentId: a webhook provider may redeliver the same
+     * notification (network hiccup, provider-side retry policy) — without this guard a
+     * redelivered "payment succeeded" for a payment already recorded would silently grant
+     * a second period for the one payment, since the extend-from-current-expiry logic
+     * below has no other way to tell "genuine renewal" from "duplicate delivery" apart.
      */
     public void activate(long telegramUserId, String externalPaymentId, int daysValid) {
         Subscription sub = repo.findByTelegramUserId(telegramUserId).orElseThrow(
             () -> new IllegalStateException("Нет подписки для telegram_user_id=" + telegramUserId));
+
+        if (externalPaymentId != null && externalPaymentId.equals(sub.getExternalPaymentId())
+                && Subscription.STATUS_ACTIVE.equals(sub.getStatus())) {
+            log.info("Подписка: повторная доставка вебхука для payment_id={}, telegram_user_id={} — пропущено",
+                externalPaymentId, telegramUserId);
+            return;
+        }
 
         Instant base = Instant.now();
         if (sub.getExpiresAt() != null) {
@@ -165,6 +182,18 @@ public class SubscriptionService {
         telegramNotifier.sendViaChannelBot(
             "✅ Подписка активирована. Доступ к ранним вакансиям до " + sub.getExpiresAt() + ".",
             String.valueOf(sub.getTelegramChatId()));
+    }
+
+    /**
+     * A provider's "payment failed/canceled" notification — the subscription row is
+     * already 'pending' at this point (nothing to roll back), so this is purely informing
+     * the person their money didn't go through, instead of leaving them to wonder why
+     * /status still says pending. No-op if the row is gone (nothing to notify about).
+     */
+    public void notifyPaymentFailed(long telegramUserId) {
+        repo.findByTelegramUserId(telegramUserId).ifPresent(s -> telegramNotifier.sendViaChannelBot(
+            "Не удалось провести оплату. Попробовать снова: /subscribe",
+            String.valueOf(s.getTelegramChatId())));
     }
 
     // Reminder window: monthly plan, three days is enough notice without feeling like spam.

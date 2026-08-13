@@ -53,6 +53,11 @@ app:
     delayed-publish-enabled: ${TELEGRAM_DELAYED_PUBLISH_ENABLED:false}
   subscriptions:
     enabled: ${SUBSCRIPTIONS_ENABLED:false}
+    # Shared secret the payment provider's webhook must present (see
+    # PaymentWebhookController) — that endpoint is excluded from session auth since it's
+    # called by the provider's servers, not a browser, so this is what stands in its
+    # place. Empty means the endpoint accepts nothing (fails closed, not open).
+    webhook-secret: ${SUBSCRIPTIONS_WEBHOOK_SECRET:}
 
 management:
   endpoints:
