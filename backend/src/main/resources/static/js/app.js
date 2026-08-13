@@ -1073,7 +1073,7 @@ function renderProvidersList(providers) {
         </div>
         <div class="provider-field">
           <label>API Key</label>
-          <input class="provider-inp provider-key" type="password" data-field="apiKey" value="${escHtml(p.apiKeyFull || '')}" placeholder="sk-...">
+          <input class="provider-inp provider-key" type="password" data-field="apiKey" value="${escHtml(p.apiKey || '')}" placeholder="sk-... (оставь как есть, чтобы не менять ключ)">
         </div>
         <div class="provider-field">
           <label>Модель</label>
