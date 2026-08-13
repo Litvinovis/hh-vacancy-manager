@@ -63,6 +63,9 @@ public class VacancyPipelineService {
     @Value("${app.notifications.enabled:false}")
     private boolean notificationsEnabledDefault;
 
+    @Value("${app.channel-notifications.enabled:false}")
+    private boolean channelNotificationsEnabledDefault;
+
     public VacancyPipelineService(HhApiClient hhApiClient, ScraperClient scraperClient, VacancyAiAnalyzer aiAnalyzer,
                                    VacancyRepository vacancyRepo, TelegramNotifier telegramNotifier,
                                    RuntimeConfig runtimeConfig, AiMetrics metrics, FeatureFlags featureFlags,
@@ -79,10 +82,14 @@ public class VacancyPipelineService {
         this.searchRepo = searchRepo;
         runtimeConfig.setPipelineBatchSize(runtimeConfig.getPipelineBatchSize() > 0 ? runtimeConfig.getPipelineBatchSize() : batchSizeDefault);
         runtimeConfig.setNotificationsEnabled(notificationsEnabledDefault);
+        runtimeConfig.setChannelNotificationsEnabled(channelNotificationsEnabledDefault);
     }
 
     public boolean isNotificationsEnabled() { return runtimeConfig.isNotificationsEnabled(); }
     public void setNotificationsEnabled(boolean enabled) { runtimeConfig.setNotificationsEnabled(enabled); }
+
+    public boolean isChannelNotificationsEnabled() { return runtimeConfig.isChannelNotificationsEnabled(); }
+    public void setChannelNotificationsEnabled(boolean enabled) { runtimeConfig.setChannelNotificationsEnabled(enabled); }
     public boolean isAiRateLimited() { return aiAnalyzer.isRateLimited(); }
     public long getAiCooldownUntil() { return aiAnalyzer.getRateLimitCooldownUntil(); }
 
@@ -905,19 +912,32 @@ public class VacancyPipelineService {
     // delayed_publish_minutes — matches the "5 minutes earlier" pitch this was built for.
     private static final int DEFAULT_DELAYED_PUBLISH_MINUTES = 5;
 
+    /**
+     * Personal (family) reports and public-channel sends are gated by two independent
+     * master switches — notificationsEnabled / channelNotificationsEnabled — so one can
+     * be paused without the other (e.g. testing the channel while personal alerts stay
+     * off). Everything below "public" in nature (delayed publish, subscriber broadcast)
+     * follows the channel switch, not the personal one.
+     */
     private void sendReport(List<Vacancy> approved, SearchJob job) {
-        if (!runtimeConfig.isNotificationsEnabled()) {
-            log.info("Уведомления отключены — отчёт ({} · {}, {} одобренных) не отправлен",
-                job.personName, job.searchName, approved.size());
-            return;
-        }
-
         boolean usePublicFormat = featureFlags.isPublicFormatEnabled() && job.publicFormat;
         if (usePublicFormat) {
-            sendPublicPosts(approved, job);
+            if (!runtimeConfig.isChannelNotificationsEnabled()) {
+                log.info("Публикация в канал отключена — отчёт ({} · {}, {} одобренных) не отправлен",
+                    job.personName, job.searchName, approved.size());
+            } else {
+                sendPublicPosts(approved, job);
+            }
         } else {
-            sendPersonalReport(approved, job);
+            if (!runtimeConfig.isNotificationsEnabled()) {
+                log.info("Личные уведомления отключены — отчёт ({} · {}, {} одобренных) не отправлен",
+                    job.personName, job.searchName, approved.size());
+            } else {
+                sendPersonalReport(approved, job);
+            }
         }
+
+        if (!runtimeConfig.isChannelNotificationsEnabled()) return;
 
         // Same AI evaluation, deferred second destination — never re-analyzed, just
         // scheduled here and picked up later by publishDueDelayed(). Independent of
@@ -999,6 +1019,7 @@ public class VacancyPipelineService {
      * notified flag, which this never touches.
      */
     public void publishDueDelayed(int limit) {
+        if (!runtimeConfig.isChannelNotificationsEnabled()) return;
         List<Vacancy> due = vacancyRepo.findDueDelayedPublications(Instant.now().toString(), limit);
         if (due.isEmpty()) return;
 

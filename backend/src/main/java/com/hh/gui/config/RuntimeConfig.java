@@ -149,6 +149,12 @@ public class RuntimeConfig {
     private volatile int cooldownHours = 0;
     private volatile int pipelineBatchSize = 10;
     private volatile boolean notificationsEnabled = false;
+    // Separate master switch for public-channel sends (public-format posts, delayed
+    // publish, subscriber broadcast) — independent of notificationsEnabled above, which
+    // now covers only personal (family) reports. Added so one can be paused without
+    // the other (e.g. keep testing the channel while personal alerts stay off, or vice
+    // versa) — see VacancyPipelineService.sendReport.
+    private volatile boolean channelNotificationsEnabled = false;
     private volatile int aiBatchSize = 5;
     private volatile boolean pipelineEnabled = true;
     private volatile int cardPrescreenBatchSize = 30;
@@ -291,9 +297,13 @@ public class RuntimeConfig {
                 "Влияет на размер выборки из БД и количество вакансий за один AI-запрос.",
                 "number", 1, 100, pipelineBatchSize),
 
-            SettingDescriptor.of("notificationsEnabled", "Уведомления Telegram",
-                "Включить/выключить отправку уведомлений о новых вакансиях в Telegram.",
+            SettingDescriptor.of("notificationsEnabled", "Личные уведомления Telegram",
+                "Включить/выключить отправку личных отчётов о новых вакансиях в Telegram (не влияет на публичный канал).",
                 "boolean", null, null, notificationsEnabled),
+
+            SettingDescriptor.of("channelNotificationsEnabled", "Публикация в канал Telegram",
+                "Включить/выключить публикацию вакансий в публичный канал/подписчикам (не влияет на личные уведомления).",
+                "boolean", null, null, channelNotificationsEnabled),
 
             SettingDescriptor.of("aiBatchSize", "Размер пачки AI",
                 "Количество вакансий, отправляемых в одном AI-запросе. " +
@@ -348,6 +358,7 @@ public class RuntimeConfig {
                     case "cooldownHours" -> setCooldownHours(toInt(value, errors, key, 0, 72));
                     case "pipelineBatchSize" -> setPipelineBatchSize(toInt(value, errors, key, 1, 100));
                     case "notificationsEnabled" -> setNotificationsEnabled(toBool(value, errors, key));
+                    case "channelNotificationsEnabled" -> setChannelNotificationsEnabled(toBool(value, errors, key));
                     case "aiBatchSize" -> setAiBatchSize(toInt(value, errors, key, 1, 50));
                     case "pipelineEnabled" -> setPipelineEnabled(toBool(value, errors, key));
                     case "cardPrescreenBatchSize" -> setCardPrescreenBatchSize(toInt(value, errors, key, 1, 100));
@@ -393,6 +404,7 @@ public class RuntimeConfig {
         m.put("cooldownHours", cooldownHours);
         m.put("pipelineBatchSize", pipelineBatchSize);
         m.put("notificationsEnabled", notificationsEnabled);
+        m.put("channelNotificationsEnabled", channelNotificationsEnabled);
         m.put("aiBatchSize", aiBatchSize);
         m.put("pipelineEnabled", pipelineEnabled);
         m.put("cardPrescreenBatchSize", cardPrescreenBatchSize);
@@ -497,6 +509,9 @@ public class RuntimeConfig {
 
     public boolean isNotificationsEnabled() { return notificationsEnabled; }
     public void setNotificationsEnabled(boolean v) { this.notificationsEnabled = v; }
+
+    public boolean isChannelNotificationsEnabled() { return channelNotificationsEnabled; }
+    public void setChannelNotificationsEnabled(boolean v) { this.channelNotificationsEnabled = v; }
 
     public int getAiBatchSize() { return aiBatchSize; }
     public void setAiBatchSize(int v) { this.aiBatchSize = v; }
