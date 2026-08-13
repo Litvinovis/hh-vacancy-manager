@@ -936,6 +936,27 @@ public class VacancyPipelineService {
      * follows the channel switch, not the personal one.
      */
     private void sendReport(List<Vacancy> rawApproved, SearchJob job) {
+        boolean usePublicFormat = featureFlags.isPublicFormatEnabled() && job.publicFormat;
+        boolean channelEnabled = runtimeConfig.isChannelNotificationsEnabled();
+        boolean primaryWillSend = usePublicFormat ? channelEnabled : runtimeConfig.isNotificationsEnabled();
+        boolean delayedWillSchedule = channelEnabled && featureFlags.isDelayedPublishEnabled()
+            && job.delayedChatId != null && !job.delayedChatId.isBlank();
+        boolean subscribersWillGet = channelEnabled && featureFlags.isSubscriptionsEnabled() && job.subscriberFeed;
+
+        // Nothing downstream will consume the deduped list, so don't build it. This is
+        // not a micro-optimization: approved-but-unnotified rows are never marked
+        // notified while their destination is off, so findUnnotifiedApproved returns
+        // the SAME rows on every pipeline tick — forever. Deduping them each time meant
+        // re-running per-employer DB lookups and full-description similarity comparisons
+        // (see dedupeBySimilarity) against a backlog of ~20k rows, every ~10 minutes,
+        // and throwing the result away. Live logs showed the identical
+        // "10 схлопнуто в 9" line repeating run after run.
+        if (!primaryWillSend && !delayedWillSchedule && !subscribersWillGet) {
+            log.info("Доставка отключена — отчёт ({} · {}, {} одобренных) пропущен без дедупа",
+                job.personName, job.searchName, rawApproved.size());
+            return;
+        }
+
         List<Vacancy> approved = dedupeByKey(rawApproved);
         if (approved.size() < rawApproved.size()) {
             log.info("Дедуп перед отправкой ({} · {}): {} вакансий схлопнуто в {} (клоны той же вакансии в одном пакете)",
@@ -948,30 +969,22 @@ public class VacancyPipelineService {
                 job.personName, job.searchName, beforeSimilarity, approved.size());
         }
 
-        boolean usePublicFormat = featureFlags.isPublicFormatEnabled() && job.publicFormat;
-        if (usePublicFormat) {
-            if (!runtimeConfig.isChannelNotificationsEnabled()) {
-                log.info("Публикация в канал отключена — отчёт ({} · {}, {} одобренных) не отправлен",
-                    job.personName, job.searchName, approved.size());
-            } else {
+        if (primaryWillSend) {
+            if (usePublicFormat) {
                 sendPublicPosts(approved, job);
-            }
-        } else {
-            if (!runtimeConfig.isNotificationsEnabled()) {
-                log.info("Личные уведомления отключены — отчёт ({} · {}, {} одобренных) не отправлен",
-                    job.personName, job.searchName, approved.size());
             } else {
                 sendPersonalReport(approved, job);
             }
+        } else {
+            log.info("Основная доставка отключена — отчёт ({} · {}, {} одобренных) не отправлен",
+                job.personName, job.searchName, approved.size());
         }
-
-        if (!runtimeConfig.isChannelNotificationsEnabled()) return;
 
         // Same AI evaluation, deferred second destination — never re-analyzed, just
         // scheduled here and picked up later by publishDueDelayed(). Independent of
         // whether the primary send above (chatId) succeeded, ran at all, or used the
         // personal template: the free channel is its own delivery, not a retry of it.
-        if (featureFlags.isDelayedPublishEnabled() && job.delayedChatId != null && !job.delayedChatId.isBlank()) {
+        if (delayedWillSchedule) {
             int minutes = job.delayedPublishMinutes != null ? job.delayedPublishMinutes : DEFAULT_DELAYED_PUBLISH_MINUTES;
             String publishAt = Instant.now().plusSeconds(minutes * 60L).toString();
             vacancyRepo.scheduleDelayedPublish(approved.stream().map(Vacancy::getId).toList(), publishAt);
@@ -982,7 +995,7 @@ public class VacancyPipelineService {
         // Instant paid-subscriber broadcast — the "early access" half of the delayed
         // dual-publish: same approvals, no separate AI pass, sent right now instead of
         // waiting for the scheduler. Independent of chatId/delayedChatId above.
-        if (featureFlags.isSubscriptionsEnabled() && job.subscriberFeed) {
+        if (subscribersWillGet) {
             broadcastToSubscribers(approved, job);
         }
     }
@@ -1170,12 +1183,23 @@ public class VacancyPipelineService {
                 continue;
             }
             String chatId = searchOpt.get().getChatId();
-            for (Vacancy v : entry.getValue()) {
-                if (telegramNotifier.sendViaChannelBot(formatPublicPost(v), chatId)) {
-                    vacancyRepo.markNotified(List.of(v.getId()));
-                } else {
-                    log.warn("Публикация из очереди не удалась для id={} (search_id={})", v.getId(), entry.getKey());
-                }
+            // At most one post per search per tick. enqueuePublicPosts spreads due times
+            // publishPaceMinutes apart, so normally only one IS due — but every row whose
+            // time passed while the app was down or the channel was switched off comes back
+            // due simultaneously, and sending that whole set in this loop would dump the
+            // backlog into the channel in seconds: exactly the burst the pacing feature
+            // exists to prevent. Draining one per tick keeps the catch-up gradual; the rest
+            // stay queued and are picked up by the following ticks.
+            List<Vacancy> dueForSearch = entry.getValue();
+            Vacancy v = dueForSearch.get(0);
+            if (telegramNotifier.sendViaChannelBot(formatPublicPost(v), chatId)) {
+                vacancyRepo.markNotified(List.of(v.getId()));
+            } else {
+                log.warn("Публикация из очереди не удалась для id={} (search_id={})", v.getId(), entry.getKey());
+            }
+            if (dueForSearch.size() > 1) {
+                log.info("Очередь публикации (search_id={}): просрочено {} постов, отправлен 1 — остальные следующими тиками",
+                    entry.getKey(), dueForSearch.size());
             }
         }
     }

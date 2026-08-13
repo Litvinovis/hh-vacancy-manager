@@ -584,4 +584,55 @@ class VacancyPipelineServiceTest {
 
         assertEquals(1, r.closed, "при мелком остатке очереди актуализация должна работать");
     }
+
+    private void sendReport(VacancyPipelineService svc, List<Vacancy> approved, SearchJob job) throws Exception {
+        Method m = VacancyPipelineService.class.getDeclaredMethod("sendReport", List.class, SearchJob.class);
+        m.setAccessible(true);
+        m.invoke(svc, approved, job);
+    }
+
+    @Test
+    void sendReport_deliveryDisabled_skipsDedupEntirely() throws Exception {
+        // Регрессия: дедуп выполнялся ДО проверки «доставка включена». Одобренные строки
+        // не помечаются notified, пока назначение выключено, поэтому findUnnotifiedApproved
+        // возвращал те же строки каждый тик — и каждые ~10 минут заново гонялись запросы в
+        // БД по работодателю и сравнение полных описаний по бэклогу в ~20k строк впустую.
+        // Репозиторий здесь null: если дедуп всё же запустится, тест упадёт с NPE.
+        RuntimeConfig config = new RuntimeConfig();
+        config.setNotificationsEnabled(false);
+        config.setChannelNotificationsEnabled(false);
+        VacancyPipelineService svc = new VacancyPipelineService(
+            null, null, null, null, null, config, null, new FeatureFlags(), null, null);
+
+        SearchJob job = new SearchJob();
+        job.personName = "Мама";
+        job.searchName = "Рядом с домом";
+
+        Vacancy v = vacancy("Продавец", "Подходит", 80);
+        v.setDescription("Обязанности: продавать\nТребования: опыт");
+
+        assertDoesNotThrow(() -> sendReport(svc, List.of(v), job),
+            "при выключенной доставке дедуп не должен выполняться вовсе");
+    }
+
+    @Test
+    void sendReport_deliveryEnabled_stillDedupes() throws Exception {
+        // Обратная сторона: когда доставка включена, дедуп обязан отработать как раньше.
+        // Тот же null-репозиторий — теперь NPE ОЖИДАЕМ, он доказывает, что дедуп дошёл
+        // до findNotifiedByEmployer.
+        RuntimeConfig config = new RuntimeConfig();
+        config.setNotificationsEnabled(true);
+        VacancyPipelineService svc = new VacancyPipelineService(
+            null, null, null, null, null, config, null, new FeatureFlags(), null, null);
+
+        SearchJob job = new SearchJob();
+        job.personName = "Мама";
+        job.searchName = "Рядом с домом";
+
+        Vacancy v = vacancy("Продавец", "Подходит", 80);
+        v.setDescription("Обязанности: продавать\nТребования: опыт");
+
+        assertThrows(Exception.class, () -> sendReport(svc, List.of(v), job),
+            "при включённой доставке дедуп должен обращаться к репозиторию");
+    }
 }
