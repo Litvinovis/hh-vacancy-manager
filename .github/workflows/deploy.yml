@@ -52,7 +52,30 @@ jobs:
 
           sudo mkdir -p ${DEPLOY_DIR}
           sudo cp scraper/package.json scraper/package-lock.json scraper/server.js ${DEPLOY_DIR}/
-          sudo chown -R clawd:clawd ${DEPLOY_DIR}
+          # Only the files just copied — NOT -R over ${DEPLOY_DIR}. That recursed into
+          # profile-data/, Chromium's live browser profile, whose HTTP cache had grown to
+          # 1.6 GB of hundreds of thousands of files held open by the running browser.
+          # Walking that on every deploy is what made this step flaky (it failed ~3× in
+          # one day and needed `gh run rerun --failed`). node_modules is created by the
+          # npm ci below, which already runs as clawd.
+          sudo chown clawd:clawd ${DEPLOY_DIR} ${DEPLOY_DIR}/package.json ${DEPLOY_DIR}/package-lock.json ${DEPLOY_DIR}/server.js
+
+          # Chromium never bounds its own disk cache, and this profile is deliberately
+          # long-lived (DDoS-Guard clearance + hh.ru session cookies must survive across
+          # restarts — see PROFILE_DIR in server.js). Left alone it reached 1.6 GB, of
+          # which 1.65 GB was regenerable HTTP/code cache and only ~7 MB was the cookies
+          # and storage worth keeping. Purge the caches only, and only past a threshold,
+          # so a normal deploy keeps its warm cache.
+          PROFILE_DEFAULT="${DEPLOY_DIR}/profile-data/Default"
+          if [ -d "$PROFILE_DEFAULT" ]; then
+            PROFILE_MB=$(sudo du -sm "${DEPLOY_DIR}/profile-data" | cut -f1)
+            if [ "$PROFILE_MB" -gt 500 ]; then
+              echo "Профиль браузера разросся до ${PROFILE_MB} МБ — чистим кэш (куки не трогаем)"
+              sudo systemctl stop hh-scraper || true
+              sudo rm -rf "$PROFILE_DEFAULT/Cache" "$PROFILE_DEFAULT/Code Cache"
+              echo "После чистки: $(sudo du -sh ${DEPLOY_DIR}/profile-data | cut -f1)"
+            fi
+          fi
 
           cd ${DEPLOY_DIR}
           # --ignore-scripts: package.json's own postinstall runs "playwright install
