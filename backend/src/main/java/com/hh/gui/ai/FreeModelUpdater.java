@@ -57,10 +57,60 @@ public class FreeModelUpdater {
     // scheduled refresh into dozens of calls. Reached only when many candidates in a row
     // fail; the common case is 3 probes (the current chain, all healthy).
     static final int MAX_PROBES_PER_REFRESH = 12;
-    // Deliberately shaped like the real workload — a JSON array and nothing else — so a
-    // model that cannot hold format discipline fails here rather than mid-batch.
-    private static final String PROBE_PROMPT =
-        "Верни строго JSON-массив: [{\"id\":\"1\",\"ok\":true}]. Никакого текста вне массива.";
+    // How many candidates beyond the open slots to probe, so the score has something to
+    // choose between instead of rubber-stamping whoever the heuristic listed first.
+    static final int EXTRA_CANDIDATES_TO_COMPARE = 2;
+    /**
+     * A miniature of the real job, not a liveness ping. Asking a model to echo
+     * {"ok":true} proves almost nothing — nearly anything in the free pool can do that,
+     * so a 2.6B model would score the same as a capable one and could win a slot on
+     * context length alone. This asks for the actual schema over two cards with an
+     * obvious right answer, which measures the thing the chain is chosen for.
+     *
+     * Note what the second card tests: the whole novelty_color/novelty_note field pair
+     * was unreliable in production precisely because weak models silently omit fields
+     * they find hard. Scoring on "returned all six fields" selects against exactly that.
+     */
+    private static final String PROBE_PROMPT = """
+        Ты — аналитик вакансий. Оцени каждую вакансию и верни строго JSON-массив.
+        У КАЖДОГО элемента ровно шесть полей: id, score (0-100), verdict ("yes"/"no"/"fraud"),
+        reason (до 10 слов), noveltyColor ("red"/"yellow"/"green"), noveltyNote (до 8 слов).
+        Ищем: работа с людьми и текстами, без программирования.
+        Никакого текста вне массива.
+
+        ВАКАНСИИ:
+        ---
+        ID: p1
+        Название: Оператор чата поддержки
+        Описание: отвечать на вопросы клиентов в чате по скриптам
+        ---
+        ID: p2
+        Название: Ведущий инженер-программист C++
+        Описание: разработка высоконагруженного бэкенда, 10 лет опыта на C++
+        """;
+
+    /** Ids used in PROBE_PROMPT — a model that invents its own has not understood the task. */
+    private static final List<String> PROBE_IDS = List.of("p1", "p2");
+    /** p2 is a senior C++ role against a "no programming" brief — the unambiguous reject. */
+    private static final String PROBE_REJECT_ID = "p2";
+    private static final Set<String> PROBE_VALID_VERDICTS = Set.of("yes", "no", "fraud");
+    private static final Set<String> PROBE_VALID_COLORS = Set.of("red", "yellow", "green");
+    private static final List<String> PROBE_REQUIRED_FIELDS =
+        List.of("id", "score", "verdict", "reason", "noveltyColor", "noveltyNote");
+
+    /**
+     * Capability score out of {@value #PROBE_MAX_SCORE}. Structure is worth more in total
+     * than the single semantic check, because a model that cannot hold the contract breaks
+     * every batch, whereas one bad judgement is what the score threshold in the pipeline is
+     * already for.
+     */
+    static final int PROBE_MAX_SCORE = 8;
+    /**
+     * Below this a model is not eligible at all. Set so that returning both requested ids
+     * with every field filled and valid verdicts (2+2+1 = 5) is the floor — anything less
+     * means the contract itself is unreliable.
+     */
+    static final int PROBE_MIN_SCORE = 5;
     // Roomy on purpose: a reasoning model that spends its budget thinking would otherwise
     // look dead at a tight cap, and we want to reject models for what they answer, not for
     // being cut off. Still tiny next to a real analysis batch.
@@ -122,19 +172,46 @@ public class FreeModelUpdater {
         summary.put("current", current);
         summary.put("droppedFromFreePool", current.stream().filter(m -> !freeIds.contains(m)).toList());
 
+        // Two independent things can disqualify a model, and both must be checked.
+        // Being listed as free protects the wallet; answering protects the pipeline.
+        // Checking only one of them is how each of the two bugs here happened: the old
+        // code trusted catalog membership alone and kept a 403-blocked model forever,
+        // and checking health alone would keep a model that quietly went paid.
+        List<String> stillFree = current.stream().filter(freeIds::contains).toList();
+        List<String> leftPool = current.stream().filter(m -> !freeIds.contains(m)).toList();
+        if (!leftPool.isEmpty()) {
+            log.warn("Обновление free-моделей: {} больше не бесплатны — исключаем без проверки", leftPool);
+        }
+
         Probe probe = new Probe();
 
-        // The current chain is probed FIRST, every refresh — that is the whole point. A
-        // model can sit in the free catalog and still refuse every request, which is
-        // exactly how a dead slot survived here unnoticed. Being listed is not evidence.
+        // Only models still in the free pool get probed. A probe is a real billed request,
+        // so probing one that just went paid would mean paying to find out we must drop it.
+        // The current chain is probed on EVERY refresh — that is the whole point: a model
+        // can sit in the free catalog and still refuse every request, which is exactly how
+        // a dead slot survived here unnoticed. Being listed is not evidence of working.
         List<String> healthy = new ArrayList<>();
         List<String> unhealthy = new ArrayList<>();
-        for (String id : current) {
-            if (probe.isHealthy(id)) healthy.add(id); else unhealthy.add(id);
+        Map<String, Integer> scores = new LinkedHashMap<>();
+        for (String id : stillFree) {
+            int score = probe.score(id);
+            // A model already in the chain is kept on a rate-limited probe: we learned
+            // nothing about it, and churning the chain on no information is worse.
+            if (score == RATE_LIMITED || score >= PROBE_MIN_SCORE) {
+                healthy.add(id);
+                if (score != RATE_LIMITED) scores.put(id, score);
+            } else {
+                unhealthy.add(id);
+                log.warn("Обновление free-моделей: {} набрала {}/{} — ниже порога {}",
+                    id, score, PROBE_MAX_SCORE, PROBE_MIN_SCORE);
+            }
         }
         summary.put("healthyCurrent", List.copyOf(healthy));
         summary.put("unhealthyCurrent", List.copyOf(unhealthy));
+        summary.put("scores", new LinkedHashMap<>(scores));
 
+        // healthy can only contain models that were in stillFree, so reaching a full chain
+        // here already means every one of them is both free and answering.
         if (healthy.size() == MODELS_IN_CHAIN) {
             summary.put("status", "unchanged");
             summary.put("probes", probe.used);
@@ -148,15 +225,39 @@ public class FreeModelUpdater {
         // Fill the remaining slots from the catalog, best-looking candidates first, but
         // only keeping the ones that actually answer. Ranking is by capability now; the
         // former LLM ranking call was a paid guess about behaviour this measures directly.
+        // Candidates are tried in a cheap heuristic order (instruct-looking, then widest
+        // context) purely to decide WHO to spend a probe on — the heuristic never decides
+        // who wins. Selection among those probed is by measured score, so a small model
+        // with a huge context window cannot beat a capable one on paper.
+        int needed = MODELS_IN_CHAIN - healthy.size();
+        // Probe a couple MORE than strictly needed, otherwise the score only filters and
+        // never actually chooses: stopping at the first passing candidates would seat them
+        // by catalog order, which is the heuristic we just said must not decide.
+        int wanted = needed + EXTRA_CANDIDATES_TO_COMPARE;
+        Map<String, Integer> candidateScores = new LinkedHashMap<>();
         for (String id : rankedCandidateIds(candidates)) {
-            if (healthy.size() >= MODELS_IN_CHAIN) break;
+            if (candidateScores.size() >= wanted) break;
             if (healthy.contains(id) || unhealthy.contains(id)) continue;
             if (probe.exhausted()) {
                 log.warn("Обновление free-моделей: исчерпан лимит проверок ({})", MAX_PROBES_PER_REFRESH);
                 break;
             }
-            if (probe.isHealthy(id)) healthy.add(id);
+            int score = probe.score(id);
+            if (score != RATE_LIMITED && score >= PROBE_MIN_SCORE) candidateScores.put(id, score);
         }
+        // Best measured first; context breaks ties between equally capable models.
+        Map<String, Long> contextById = candidates.stream()
+            .collect(java.util.stream.Collectors.toMap(FreeModel::id, FreeModel::contextLength, (a, b) -> a));
+        candidateScores.entrySet().stream()
+            .sorted(Comparator
+                .comparingInt((Map.Entry<String, Integer> e) -> e.getValue()).reversed()
+                .thenComparing(e -> -contextById.getOrDefault(e.getKey(), 0L)))
+            .limit(needed)
+            .forEach(e -> {
+                healthy.add(e.getKey());
+                scores.put(e.getKey(), e.getValue());
+            });
+        summary.put("scores", new LinkedHashMap<>(scores));
         summary.put("probes", probe.used);
 
         if (healthy.isEmpty()) {
@@ -190,7 +291,8 @@ public class FreeModelUpdater {
             return used >= MAX_PROBES_PER_REFRESH;
         }
 
-        boolean isHealthy(String modelId) {
+        /** Score for this model, or RATE_LIMITED when the pool was too busy to judge. */
+        int score(String modelId) {
             if (used > 0) pause();   // no pause before the first probe
             used++;
             return probeModel(modelId);
@@ -210,36 +312,86 @@ public class FreeModelUpdater {
     }
 
     /**
-     * One tiny real request. Healthy means "came back with a parseable JSON array" —
-     * the same shape every real batch needs.
+     * Runs PROBE_PROMPT against one model and scores how well it did the job.
+     * Returns 0 for anything unusable, so a score below PROBE_MIN_SCORE and an outright
+     * failure are the same thing to the caller.
      *
-     * A rate-limited answer is NOT unhealthy: 429 says the pool is busy, nothing about
-     * this model's fitness, and demoting a good model over it would make the chain worse
-     * exactly when it is under pressure. Protected for tests.
+     * A rate-limited answer is deliberately NOT a zero: 429 says the pool is busy and
+     * nothing about this model's fitness, and demoting a good model over it would degrade
+     * the chain exactly when it is under pressure. Those keep their current standing.
+     * Protected for tests.
      */
-    protected boolean probeModel(String modelId) {
+    protected int probeModel(String modelId) {
         try {
             String response = analyzer.callLlm(PROBE_PROMPT, PROBE_MAX_TOKENS, modelId);
             Map<?, ?> parsed = mapper.readValue(response, Map.class);
             List<?> choices = (List<?>) parsed.get("choices");
-            if (choices == null || choices.isEmpty()) return false;
+            if (choices == null || choices.isEmpty()) return 0;
             Object message = ((Map<?, ?>) choices.get(0)).get("message");
             String content = message instanceof Map<?, ?> m ? (String) m.get("content") : null;
-            if (content == null || content.isBlank()) return false;
+            if (content == null || content.isBlank()) return 0;
             String jsonArray = VacancyAiAnalyzer.extractJsonArray(content);
-            if (jsonArray == null) return false;
-            return !((List<?>) mapper.readValue(jsonArray, List.class)).isEmpty();
+            if (jsonArray == null) return 0;
+            return scoreProbeAnswer(mapper.readValue(jsonArray, List.class));
         } catch (LlmException e) {
             if (e.kind() == LlmException.Kind.RATE_LIMIT) {
-                log.info("Проверка модели {}: 429 — считаем исправной, судить по нагрузке пула нельзя", modelId);
-                return true;
+                log.info("Проверка модели {}: 429 — судить по загруженности пула нельзя, оценку сохраняем", modelId);
+                return RATE_LIMITED;
             }
             log.info("Проверка модели {}: не прошла ({}: {})", modelId, e.kind(), e.getMessage());
-            return false;
+            return 0;
         } catch (Exception e) {
             log.info("Проверка модели {}: не прошла ({})", modelId, e.getMessage());
-            return false;
+            return 0;
         }
+    }
+
+    /** Sentinel: the probe could not be judged because the pool was busy, not because the model is bad. */
+    static final int RATE_LIMITED = -1;
+
+    /**
+     * Scores one probe answer. Structure carries more weight in total than the single
+     * semantic check: a model that cannot hold the field contract breaks every batch it
+     * ever touches, while one questionable verdict is what minScore in the pipeline is for.
+     */
+    static int scoreProbeAnswer(List<?> items) {
+        if (items == null || items.isEmpty()) return 0;
+
+        Map<String, Map<?, ?>> byId = new LinkedHashMap<>();
+        for (Object raw : items) {
+            if (raw instanceof Map<?, ?> item && item.get("id") != null) {
+                byId.put(String.valueOf(item.get("id")), item);
+            }
+        }
+
+        int score = 0;
+        // +2 — returned exactly the cards it was given, no inventions, none dropped.
+        if (byId.keySet().equals(new LinkedHashSet<>(PROBE_IDS))) score += 2;
+
+        // +2 — every required field present and non-blank on every item. This is the check
+        // that selects against models which quietly omit the fields they find hard.
+        boolean allFieldsPresent = !byId.isEmpty() && byId.values().stream().allMatch(item ->
+            PROBE_REQUIRED_FIELDS.stream().allMatch(f -> {
+                Object v = item.get(f);
+                return v != null && !String.valueOf(v).isBlank();
+            }));
+        if (allFieldsPresent) score += 2;
+
+        // +1 — verdicts from the allowed set.
+        boolean verdictsValid = !byId.isEmpty() && byId.values().stream()
+            .allMatch(item -> PROBE_VALID_VERDICTS.contains(String.valueOf(item.get("verdict"))));
+        if (verdictsValid) score += 1;
+
+        // +1 — colors from the allowed set.
+        boolean colorsValid = !byId.isEmpty() && byId.values().stream()
+            .allMatch(item -> PROBE_VALID_COLORS.contains(String.valueOf(item.get("noveltyColor"))));
+        if (colorsValid) score += 1;
+
+        // +2 — actually understood the brief: a senior C++ role is not a "no programming" job.
+        Map<?, ?> reject = byId.get(PROBE_REJECT_ID);
+        if (reject != null && "no".equals(String.valueOf(reject.get("verdict")))) score += 2;
+
+        return score;
     }
 
     /** Catalog order to try replacements in: instruct-looking first, then widest context. */
@@ -268,6 +420,24 @@ public class FreeModelUpdater {
         return lower.contains("instruct") || lower.contains("-it:") || lower.contains("chat");
     }
 
+    /**
+     * True only when both prompt and completion cost exactly zero. Anything unparsable or
+     * missing counts as NOT free — an unreadable price is not a reason to start paying.
+     */
+    static boolean isFreePricing(Object pricing) {
+        if (!(pricing instanceof Map<?, ?> p)) return false;
+        return isZero(p.get("prompt")) && isZero(p.get("completion"));
+    }
+
+    private static boolean isZero(Object value) {
+        if (value == null) return false;
+        try {
+            return new java.math.BigDecimal(String.valueOf(value)).signum() == 0;
+        } catch (NumberFormatException e) {
+            return false;
+        }
+    }
+
     /** Reads the live catalog. Protected for tests. */
     @SuppressWarnings("unchecked")
     protected List<FreeModel> fetchFreeModels() throws Exception {
@@ -285,6 +455,13 @@ public class FreeModelUpdater {
         for (Map<String, Object> m : data) {
             String id = String.valueOf(m.get("id"));
             if (!id.endsWith(":free")) continue;
+            // The ":free" suffix is a naming convention, and a chain built on a convention
+            // would start spending real money the day it stops holding. The catalog states
+            // the price outright, so check that instead of trusting the name.
+            if (!isFreePricing(m.get("pricing"))) {
+                log.warn("Каталог моделей: {} помечена как ':free', но цена не нулевая — исключаем", id);
+                continue;
+            }
             long context = m.get("context_length") instanceof Number n ? n.longValue() : 0;
             result.add(new FreeModel(id,
                 m.get("name") != null ? String.valueOf(m.get("name")) : "",
