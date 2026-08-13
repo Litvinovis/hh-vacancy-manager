@@ -66,6 +66,14 @@ function escHtml(s) {
   return d.innerHTML;
 }
 
+// escHtml экранирует кавычки, но не мешает схеме javascript:/data: сработать при
+// клике — а url приходит со стороннего сайта (hh.ru), не от нас. Пропускаем только
+// http(s), всё остальное превращаем в безобидный якорь.
+function safeUrl(u) {
+  if (!u) return '';
+  return /^https?:\/\//i.test(String(u).trim()) ? escHtml(u) : '#';
+}
+
 function formatDate(iso) {
   if (!iso) return '—';
   const d = new Date(iso);
@@ -538,7 +546,7 @@ function renderDetail(v) {
     <div class="dtitle">${escHtml(v.title)}</div>
     <div class="dcomp">
       ${escHtml(v.company || '')}
-      ${v.url ? `· <a class="durl" href="${escHtml(v.url)}" target="_blank">hh.ru ↗</a>` : ''}
+      ${v.url ? `· <a class="durl" href="${safeUrl(v.url)}" target="_blank" rel="noopener noreferrer">hh.ru ↗</a>` : ''}
     </div>
 
     ${heroSection}
