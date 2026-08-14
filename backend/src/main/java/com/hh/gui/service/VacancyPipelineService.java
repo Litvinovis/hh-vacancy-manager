@@ -1032,11 +1032,24 @@ public class VacancyPipelineService {
             log.info("Дедуп перед отправкой ({} · {}): {} вакансий схлопнуто в {} (клоны той же вакансии в одном пакете)",
                 job.personName, job.searchName, rawApproved.size(), approved.size());
         }
-        int beforeSimilarity = approved.size();
-        approved = dedupeBySimilarity(approved, job);
-        if (approved.size() < beforeSimilarity) {
+        List<Vacancy> beforeSimilarity = approved;
+        List<Vacancy> afterSimilarity = dedupeBySimilarity(approved, job);
+        approved = afterSimilarity;
+        if (afterSimilarity.size() < beforeSimilarity.size()) {
             log.info("Дедуп по схожести описания ({} · {}): {} вакансий схлопнуто в {}",
-                job.personName, job.searchName, beforeSimilarity, approved.size());
+                job.personName, job.searchName, beforeSimilarity.size(), afterSimilarity.size());
+            // Unlike dedupeByKey's exact-match drops (self-resolved later by
+            // findUnnotifiedApproved's dedup_key guard once the kept twin is sent), a
+            // similarity-matched drop has a different dedup_key — nothing ever marks it
+            // notified, so without this it comes back from findUnnotifiedApproved and
+            // gets re-compared against every notified vacancy again on every single
+            // pipeline tick, forever. It will never be sent, so resolve it now the same
+            // way sending would have.
+            List<Long> droppedIds = beforeSimilarity.stream()
+                .filter(v -> !afterSimilarity.contains(v))
+                .map(Vacancy::getId)
+                .toList();
+            vacancyRepo.markNotified(droppedIds);
         }
 
         if (primaryWillSend) {
