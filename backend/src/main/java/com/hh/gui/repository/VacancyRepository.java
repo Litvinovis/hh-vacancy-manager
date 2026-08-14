@@ -456,9 +456,11 @@ public class VacancyRepository {
     }
 
     /**
-     * Mark vacancies as notified (sent to Telegram). By primary key, not hh_id —
-     * the same hh_id can appear as multiple rows (one per person/search) and only
-     * the specific rows just reported on should be marked.
+     * Mark vacancies as notified (sent to Telegram) — or, from VacancyPipelineService's
+     * similarity dedup, resolved as a near-duplicate that will never be sent. Either way
+     * the row is done: it stops being returned by findUnnotifiedApproved. By primary
+     * key, not hh_id — the same hh_id can appear as multiple rows (one per
+     * person/search) and only the specific rows just reported on should be marked.
      */
     public void markNotified(List<Long> ids) {
         String now = Instant.now().toString();

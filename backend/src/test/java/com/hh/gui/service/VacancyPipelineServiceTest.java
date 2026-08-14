@@ -636,6 +636,60 @@ class VacancyPipelineServiceTest {
             "при включённой доставке дедуп должен обращаться к репозиторию");
     }
 
+    /** Репозиторий для теста similarity-дедупа: отдаёт подготовленный список уже
+     * уведомлённых вакансий по работодателю, копит id, переданные в markNotified. */
+    private static class FakeSimilarityRepo extends VacancyRepository {
+        List<Vacancy> alreadyNotified = List.of();
+        final List<Long> markedNotified = new ArrayList<>();
+        FakeSimilarityRepo() { super(null); }
+        @Override
+        public List<Vacancy> findNotifiedByEmployer(String person, String searchName, String employerName) {
+            return alreadyNotified;
+        }
+        @Override
+        public void markNotified(List<Long> ids) {
+            markedNotified.addAll(ids);
+        }
+    }
+
+    private static class RecordingNotifier extends TelegramNotifier {
+        @Override
+        public boolean send(String message, String targetChatId) {
+            return true;
+        }
+    }
+
+    @Test
+    void sendReport_similarityDuplicate_resolvedSoItStopsComingBack() throws Exception {
+        // Регрессия: dedupeByKey-клоны самостоятельно разрешаются через SQL-guard
+        // findUnnotifiedApproved, как только их двойник помечен notified. Но у клона по
+        // схожести описания dedup_key другой — этот guard его не ловит, и раньше он
+        // приходил из findUnnotifiedApproved заново на каждом тике пайплайна, снова
+        // проигрывал то же сравнение с БД и снова отбрасывался — навсегда, впустую.
+        RuntimeConfig config = new RuntimeConfig();
+        config.setNotificationsEnabled(true);
+        FakeSimilarityRepo repo = new FakeSimilarityRepo();
+        VacancyPipelineService svc = new VacancyPipelineService(
+            null, null, null, repo, new RecordingNotifier(), config, null, new FeatureFlags(), null, null);
+
+        Vacancy alreadySent = vacancy("Продавец", "Подходит", 80);
+        alreadySent.setDescription("Обязанности: продавать\nТребования: опыт");
+        repo.alreadyNotified = List.of(alreadySent);
+
+        Vacancy candidate = vacancy("Продавец-консультант", "Подходит", 75);
+        candidate.setId(50L);
+        candidate.setDescription("Обязанности: продавать\nТребования: опыт"); // идентичное описание — похожесть 1.0
+
+        SearchJob job = new SearchJob();
+        job.personName = "Мама";
+        job.searchName = "Рядом с домом";
+
+        sendReport(svc, List.of(candidate), job);
+
+        assertEquals(List.of(50L), repo.markedNotified,
+            "клон по схожести должен быть помечен notified, иначе findUnnotifiedApproved будет возвращать его вечно");
+    }
+
     // ── Взаимное исключение прогонов одного поиска ──
 
     /** Считает, сколько прогонов одного поиска выполнялось одновременно. */
