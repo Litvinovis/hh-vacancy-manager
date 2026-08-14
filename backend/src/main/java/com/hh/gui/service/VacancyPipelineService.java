@@ -372,7 +372,12 @@ public class VacancyPipelineService {
         List<ScraperClient.SearchHit> result = new ArrayList<>();
         for (ScraperClient.SearchHit h : hits) {
             String title = h.title() != null ? h.title().toLowerCase() : "";
-            if (lower.stream().noneMatch(title::contains)) result.add(h);
+            // Some listings hide the excluded trade behind a generic title ("Менеджер /
+            // Помощник руководителя") and only give it away in the employer name (e.g.
+            // "Агентство Недвижимости ..." recruiting under a vague title) — title alone
+            // missed those.
+            String employer = h.employerName() != null ? h.employerName().toLowerCase() : "";
+            if (lower.stream().noneMatch(w -> title.contains(w) || employer.contains(w))) result.add(h);
         }
         return result;
     }
@@ -443,14 +448,20 @@ public class VacancyPipelineService {
         return saved;
     }
 
-    /** Drop candidates whose title contains an excluded word — before scraping, not just before AI. */
+    /**
+     * Drop candidates whose title or employer name contains an excluded word — before
+     * scraping, not just before AI. Checks the employer too (see filterExcludedHits):
+     * some listings hide the excluded trade behind a generic title and only give it
+     * away in who's hiring.
+     */
     private List<Vacancy> filterExcluded(List<Vacancy> vacancies, List<String> excludeWords) {
         if (excludeWords == null || excludeWords.isEmpty()) return vacancies;
         List<String> lower = excludeWords.stream().map(String::toLowerCase).toList();
         List<Vacancy> result = new ArrayList<>();
         for (Vacancy v : vacancies) {
             String title = v.getTitle() != null ? v.getTitle().toLowerCase() : "";
-            if (lower.stream().noneMatch(title::contains)) result.add(v);
+            String employer = rawEmployer(v).toLowerCase();
+            if (lower.stream().noneMatch(w -> title.contains(w) || employer.contains(w))) result.add(v);
         }
         return result;
     }
