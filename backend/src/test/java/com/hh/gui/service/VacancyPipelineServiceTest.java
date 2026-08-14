@@ -146,6 +146,42 @@ class VacancyPipelineServiceTest {
         assertTrue(result.stream().noneMatch(h -> h.hhId().equals("2")));
     }
 
+    @Test
+    void filterExcludedHits_dropsByEmployerName_evenWithGenericTitle() throws Exception {
+        // Живой пример: риелторские агентства нанимают под нейтральным заголовком
+        // ("Менеджер / Помощник руководителя") — само слово встречается только в
+        // названии работодателя.
+        List<ScraperClient.SearchHit> hits = List.of(
+            new ScraperClient.SearchHit("1", "Менеджер / Помощник руководителя", "Агентство Недвижимости Инфинити", null, "Уфа", null, "https://hh.ru/vacancy/1"),
+            hit("2", "Кассир"));
+        List<ScraperClient.SearchHit> result = filterExcludedHits(hits, List.of("риэлтор", "риелтор", "агентство недвижимости"));
+        assertEquals(1, result.size());
+        assertEquals("2", result.get(0).hhId());
+    }
+
+    // ── filterExcluded (Vacancy-версия того же фильтра, используется после скрейпинга) ──
+
+    private List<Vacancy> filterExcluded(List<Vacancy> vacancies, List<String> excludeWords) throws Exception {
+        Method m = VacancyPipelineService.class.getDeclaredMethod("filterExcluded", List.class, List.class);
+        m.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        List<Vacancy> result = (List<Vacancy>) m.invoke(service, vacancies, excludeWords);
+        return result;
+    }
+
+    @Test
+    void filterExcluded_dropsByEmployerName_evenWithGenericTitle() throws Exception {
+        Vacancy realtor = vacancy("Менеджер / Помощник руководителя", "", 0);
+        realtor.setCompany("Агентство Недвижимости Инфинити");
+        Vacancy other = vacancy("Кассир", "", 0);
+        other.setCompany("ООО Ромашка");
+
+        List<Vacancy> result = filterExcluded(List.of(realtor, other), List.of("риэлтор", "риелтор", "агентство недвижимости"));
+
+        assertEquals(1, result.size());
+        assertEquals("Кассир", result.get(0).getTitle());
+    }
+
     // ── isBelowSalaryFloor (deterministic zero-token reject before the AI call) ──
 
     private boolean isBelowSalaryFloor(Vacancy v, com.hh.gui.model.SearchJob job) throws Exception {
