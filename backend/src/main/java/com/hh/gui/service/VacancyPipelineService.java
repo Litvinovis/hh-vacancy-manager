@@ -494,6 +494,11 @@ public class VacancyPipelineService {
     }
 
     private synchronized void enterScrapeCooldown() {
+        // Different searches run concurrently (see runFullPipeline's per-job lock), so
+        // one real hh.ru block can be discovered independently by several in-flight runs
+        // within the same second — without this guard each of them struck the counter,
+        // jumping straight to a multi-hour freeze for what was a single event.
+        if (isScrapeCoolingDown()) return;
         scrapeCooldownStrikes++;
         long cooldown = Math.min(SCRAPE_COOLDOWN_BASE_MS << (scrapeCooldownStrikes - 1), SCRAPE_COOLDOWN_MAX_MS);
         scrapeCooldownUntil = System.currentTimeMillis() + cooldown;

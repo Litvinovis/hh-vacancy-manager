@@ -528,6 +528,36 @@ class VacancyPipelineServiceTest {
         assertTrue(svc.isScrapeCoolingDown(), "бёрст свежих 403 должен по-прежнему замораживать скрейпинг");
     }
 
+    private void enterScrapeCooldown(VacancyPipelineService svc) throws Exception {
+        Method m = VacancyPipelineService.class.getDeclaredMethod("enterScrapeCooldown");
+        m.setAccessible(true);
+        m.invoke(svc);
+    }
+
+    private int scrapeCooldownStrikes(VacancyPipelineService svc) throws Exception {
+        java.lang.reflect.Field f = VacancyPipelineService.class.getDeclaredField("scrapeCooldownStrikes");
+        f.setAccessible(true);
+        return f.getInt(svc);
+    }
+
+    @Test
+    void enterScrapeCooldown_calledWhileAlreadyCoolingDown_doesNotDoubleStrike() throws Exception {
+        // Регрессия: разные поиски выполняются параллельно (см. differentJobs_runConcurrently
+        // ниже), так что один и тот же реальный блок hh.ru независимые прогоны могли
+        // обнаружить порознь в течение одной секунды — каждый вызывал enterScrapeCooldown(),
+        // и счётчик страйков прыгал 1→2→3 сразу, разгоняя заморозку до нескольких часов
+        // за одно событие вместо честной эскалации после действительно повторной блокировки.
+        VacancyPipelineService svc = new VacancyPipelineService(
+            null, null, null, null, null, new RuntimeConfig(), null, new FeatureFlags(), null, null);
+
+        enterScrapeCooldown(svc);
+        enterScrapeCooldown(svc);
+        enterScrapeCooldown(svc);
+
+        assertEquals(1, scrapeCooldownStrikes(svc),
+            "повторные срабатывания, пока заморозка уже активна, не должны разгонять эскалацию");
+    }
+
     @Test
     void checkVacancyFreshness_aliveArchivedAndInconclusive_handledDistinctly() {
         RuntimeConfig config = new RuntimeConfig();
