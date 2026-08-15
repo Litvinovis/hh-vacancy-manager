@@ -427,6 +427,79 @@ public class VacancyPipelineService {
         return "@" + channel;
     }
 
+    private record TgSalary(Integer from, Integer to, String currency) {}
+
+    // Tier 1 (high confidence): an explicit label directly in front of the number(s) —
+    // "Заработная плата от 40000 рублей", "Оплата: 80 000 рублей", "З/п 55000 RUR".
+    // The label itself is strong enough evidence that a currency token isn't required.
+    private static final java.util.regex.Pattern LABELED_SALARY = java.util.regex.Pattern.compile(
+        "(?:заработная\\s+плата|зарплата|з/?п|оплата)\\s*:?\\s*(?:от\\s+)?" +
+        "(\\d[\\d\\s]{2,8}\\d)(?:\\s*[-–—]\\s*(?:до\\s+)?(\\d[\\d\\s]{2,8}\\d))?" +
+        "\\s*(₽|руб(?:лей|\\.)?|RUR|RUB|\\$|USD|€|EUR)?",
+        java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.UNICODE_CASE);
+
+    // Tier 2 (position-restricted): a line that's ENTIRELY a number range + currency,
+    // nothing else — the "60 000 – 250 000 ₽" line these bot-formatted posts put right
+    // under the title (mirrors hh.ru's own salary-widget style). Only scanned within the
+    // first few lines (see extractTgSalary) — the same bare pattern found deep in a post
+    // is far more likely to be an unrelated number (a boost-price footer, a phone number)
+    // than a salary, so it's deliberately NOT scanned across the whole text.
+    private static final java.util.regex.Pattern BARE_SALARY_LINE = java.util.regex.Pattern.compile(
+        "^(?:от\\s+)?(\\d[\\d\\s]{2,8}\\d)(?:\\s*[-–—]\\s*(?:до\\s+)?(\\d[\\d\\s]{2,8}\\d))?" +
+        "\\s*(₽|руб(?:лей|\\.)?|RUR|RUB|\\$|USD|€|EUR)\\s*$",
+        java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.UNICODE_CASE);
+
+    private static final int SALARY_SCAN_LINES = 4;
+
+    private static Integer parseSalaryNumber(String raw) {
+        if (raw == null) return null;
+        try {
+            int n = Integer.parseInt(raw.replaceAll("\\s", ""));
+            return n > 0 ? n : null;
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private static String normalizeCurrency(String raw) {
+        if (raw == null || raw.isBlank()) return "RUR";
+        String r = raw.toLowerCase();
+        if (r.contains("$") || r.contains("usd")) return "USD";
+        if (r.contains("€") || r.contains("eur")) return "EUR";
+        return "RUR";
+    }
+
+    /**
+     * Best-effort salary extraction for Path B posts (see discoverFromTelegram) —
+     * deliberately conservative: a wrong salary actively misleads a reader in a way
+     * "not specified" never does, so this only accepts patterns confident enough to
+     * be worth the small extra completeness (see LABELED_SALARY / BARE_SALARY_LINE
+     * javadoc for what each tier requires). Anything else stays unset, same as before.
+     */
+    private static TgSalary extractTgSalary(String text) {
+        java.util.regex.Matcher labeled = LABELED_SALARY.matcher(text);
+        if (labeled.find()) {
+            Integer from = parseSalaryNumber(labeled.group(1));
+            Integer to = parseSalaryNumber(labeled.group(2));
+            if (from != null || to != null) {
+                return new TgSalary(from, to, normalizeCurrency(labeled.group(3)));
+            }
+        }
+        String[] lines = text.split("\n");
+        for (int i = 0; i < Math.min(lines.length, SALARY_SCAN_LINES); i++) {
+            String line = stripTgArtifacts(lines[i]);
+            java.util.regex.Matcher bare = BARE_SALARY_LINE.matcher(line);
+            if (bare.matches()) {
+                Integer from = parseSalaryNumber(bare.group(1));
+                Integer to = parseSalaryNumber(bare.group(2));
+                if (from != null || to != null) {
+                    return new TgSalary(from, to, normalizeCurrency(bare.group(3)));
+                }
+            }
+        }
+        return null;
+    }
+
     // Verified live: many channels (e.g. frilanser_vacansii) open every post with a
     // hashtag line (#вакансия #smm #удаленно) before the actual role name on the next
     // non-empty line — without skipping it, every such vacancy's title was literally
@@ -558,6 +631,12 @@ public class VacancyPipelineService {
                     v.setTitle(title);
                     v.setCompany(employer);
                     v.setDescription(msg.text());
+                    TgSalary salary = extractTgSalary(msg.text());
+                    if (salary != null) {
+                        v.setSalaryFrom(salary.from());
+                        v.setSalaryTo(salary.to());
+                        v.setCurrency(salary.currency());
+                    }
                     v.setSource("telegram");
                     v.setStatus("new");
                     v.setScrapeStatus("ok");

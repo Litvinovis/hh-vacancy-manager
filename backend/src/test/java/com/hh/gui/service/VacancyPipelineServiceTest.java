@@ -1075,6 +1075,75 @@ class VacancyPipelineServiceTest {
     }
 
     @Test
+    void discoverFromTelegram_labeledSalary_extractsFromAndCurrency() {
+        String text = "SMM-специалист\n\nЗаработная плата от 40000 рублей\n\nЗадачи: ...";
+        FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
+            true, null, List.of(tgMsg("tg_testchan_70", text)))));
+        FakeTgRepo repo = new FakeTgRepo(Set.of());
+        VacancyPipelineService svc = new VacancyPipelineService(
+            null, null, tg, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null);
+
+        svc.discoverFromTelegram(tgJob(), List.of("testchan"));
+
+        Vacancy v = repo.saved.get(0);
+        assertEquals(40000, v.getSalaryFrom());
+        assertNull(v.getSalaryTo());
+        assertEquals("RUR", v.getCurrency());
+    }
+
+    @Test
+    void discoverFromTelegram_bareSalaryRangeNearTitle_extractsFromAndTo() {
+        String text = "Асессор\n60 000 – 250 000 ₽\n\nОбязанности: ...";
+        FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
+            true, null, List.of(tgMsg("tg_testchan_71", text)))));
+        FakeTgRepo repo = new FakeTgRepo(Set.of());
+        VacancyPipelineService svc = new VacancyPipelineService(
+            null, null, tg, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null);
+
+        svc.discoverFromTelegram(tgJob(), List.of("testchan"));
+
+        Vacancy v = repo.saved.get(0);
+        assertEquals(60000, v.getSalaryFrom());
+        assertEquals(250000, v.getSalaryTo());
+    }
+
+    @Test
+    void discoverFromTelegram_bareNumberDeepInText_notMistakenForSalary() {
+        // "350₽" встречается в конце поста как цена продвижения самого поста в канале —
+        // это НЕ зарплата вакансии; вне первых SALARY_SCAN_LINES строк и без метки не
+        // должно приниматься, лучше "не указана", чем неверная цифра.
+        String text = "Оператор чата\n\nОбязанности: отвечать на сообщения\n\nТребования: без опыта\n\n"
+            + "Реклама: 2 часа в топ - 350₽";
+        FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
+            true, null, List.of(tgMsg("tg_testchan_72", text)))));
+        FakeTgRepo repo = new FakeTgRepo(Set.of());
+        VacancyPipelineService svc = new VacancyPipelineService(
+            null, null, tg, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null);
+
+        svc.discoverFromTelegram(tgJob(), List.of("testchan"));
+
+        Vacancy v = repo.saved.get(0);
+        assertNull(v.getSalaryFrom());
+        assertNull(v.getSalaryTo());
+    }
+
+    @Test
+    void discoverFromTelegram_noSalaryMentioned_leavesSalaryUnset() {
+        String text = "Копирайтер\n\nОбязанности: пишет тексты\n\nОплата по договорённости";
+        FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
+            true, null, List.of(tgMsg("tg_testchan_73", text)))));
+        FakeTgRepo repo = new FakeTgRepo(Set.of());
+        VacancyPipelineService svc = new VacancyPipelineService(
+            null, null, tg, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null);
+
+        svc.discoverFromTelegram(tgJob(), List.of("testchan"));
+
+        Vacancy v = repo.saved.get(0);
+        assertNull(v.getSalaryFrom());
+        assertNull(v.getSalaryTo());
+    }
+
+    @Test
     void discoverFromTelegram_excludeWordMatch_dropsCandidateBeforeSaving() {
         FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
             true, null, List.of(tgMsg("1", "Риэлтор без опыта, удалённо, доход от 100000")))));
