@@ -598,18 +598,28 @@ public class VacancyRepository {
     }
 
     /**
-     * Already-notified vacancies for this employer (person/search-scoped) — feeds
-     * VacancyPipelineService.dedupeBySimilarity's cross-run near-duplicate check (same
-     * employer, description differs by only a phrase or two — DedupKeys' exact hash
-     * misses these). LOWER()-matched since employer_name/company casing isn't
-     * normalized in storage; the caller does the real fuzzy comparison in Java, this
-     * just bounds which rows are worth fetching. LIMIT 50: a prolific employer could
-     * otherwise accumulate an unbounded backlog to compare against.
+     * Already-notified OR already-queued vacancies for this employer (person/search-
+     * scoped) — feeds VacancyPipelineService.dedupeBySimilarity's cross-run near-
+     * duplicate check (same employer, description differs by only a phrase or two —
+     * DedupKeys' exact hash misses these). LOWER()-matched since employer_name/company
+     * casing isn't normalized in storage; the caller does the real fuzzy comparison in
+     * Java, this just bounds which rows are worth fetching. LIMIT 50: a prolific
+     * employer could otherwise accumulate an unbounded backlog to compare against.
+     * Queued-but-not-yet-sent rows are included, not just notified=1: with a small
+     * maxApproved window and a large approved backlog, findUnnotifiedApproved's own
+     * "skip already-queued" guard (see its javadoc) means two exact-duplicate postings
+     * can land in two DIFFERENT calls' disjoint top-`limit` windows — dedupeBySimilarity
+     * only compares within one call's batch plus whatever this method returns, so
+     * without queued rows here, both copies get approved into the queue separately.
+     * Verified live: two copies of "Куратор в онлайн-школу" (same channel, same
+     * fallback employer) both sat notified=0 with nothing queued yet, invisible to
+     * each other across two separate analyze/approve passes.
      */
     public List<Vacancy> findNotifiedByEmployer(String person, String searchName, String employerName) {
         if (employerName == null || employerName.isBlank()) return List.of();
         return jdbc.query(
-            "SELECT * FROM vacancies WHERE person=? AND search_name=? AND notified=1 " +
+            "SELECT * FROM vacancies WHERE person=? AND search_name=? " +
+            "AND (notified=1 OR queued_publish_at IS NOT NULL) " +
             "AND LOWER(COALESCE(NULLIF(employer_name,''), company)) = LOWER(?) " +
             "ORDER BY updated_at DESC LIMIT 50",
             rowMapper, person, searchName, employerName);
