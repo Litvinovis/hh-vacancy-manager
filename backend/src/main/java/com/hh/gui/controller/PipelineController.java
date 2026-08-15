@@ -409,6 +409,17 @@ public class PipelineController {
         return ResponseEntity.ok(resp);
     }
 
+    /** POST /api/pipeline/channel-subscribers-check — manual trigger for the periodic
+     *  subscriber-count poll (see PipelineScheduler's 6-hour SUBSCRIBER_COUNT_CHECK_INTERVAL),
+     *  same reason freshness-check above exists: an operator shouldn't have to wait out
+     *  the schedule to see the gauge populate after a config change or on first setup. */
+    @PostMapping("/pipeline/channel-subscribers-check")
+    public ResponseEntity<Map<String, Object>> channelSubscribersCheck(@RequestAttribute("currentUser") User currentUser) {
+        if (!currentUser.isAdmin()) return ResponseEntity.status(403).body(Map.of("error", "Требуются права администратора"));
+        pipelineService.checkChannelSubscribers();
+        return ResponseEntity.ok(Map.of("status", "ok"));
+    }
+
     /**
      * POST /api/ai/reset-provider — manually reset to primary
      */
