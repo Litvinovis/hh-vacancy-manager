@@ -14,8 +14,8 @@ import com.hh.gui.model.Vacancy;
 import com.hh.gui.repository.SearchRepository;
 import com.hh.gui.repository.VacancyRepository;
 import com.hh.gui.util.DedupKeys;
-import com.hh.gui.util.SalaryFormatter;
 import com.hh.gui.util.TelegramPostParser;
+import com.hh.gui.util.VacancyPostFormatter;
 import com.hh.gui.util.TextSimilarity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -1403,7 +1403,8 @@ public class VacancyPipelineService {
     }
 
     private void sendPersonalReport(List<Vacancy> approved, SearchJob job) {
-        String header = "🔍 <b>" + escapeHtml(job.personName) + " · " + escapeHtml(job.searchName) + "</b>\n\n";
+        String header = "🔍 <b>" + VacancyPostFormatter.escapeHtml(job.personName) + " · "
+            + VacancyPostFormatter.escapeHtml(job.searchName) + "</b>\n\n";
         List<List<Vacancy>> chunks = chunkReport(approved, header);
 
         int notifiedCount = 0;
@@ -1694,29 +1695,12 @@ public class VacancyPipelineService {
     }
 
     /** Single-vacancy public post: no internal scoring/routing info, just what a subscriber needs. */
-    private static final Map<String, String> NOVELTY_EMOJI = Map.of("red", "🔴", "yellow", "🟡", "green", "🟢");
 
     /** Exposed for PipelineController's publish-queue preview endpoint — renders exactly
      *  what sendPublicPosts/publishDueQueued would actually send, so a queued item can be
      *  inspected before its queued_publish_at elapses instead of waiting for it. */
     public String formatPublicPost(Vacancy v) {
-        String salary = SalaryFormatter.forReport(v);
-        String company = v.getCompany() != null && !v.getCompany().isEmpty() ? escapeHtml(v.getCompany()) : "компания не указана";
-        String title = truncate(v.getTitle(), 150);
-        String reason = truncate(v.getAiReason(), 300);
-
-        StringBuilder sb = new StringBuilder();
-        sb.append(String.format("📌 <b>%s</b>\n", escapeHtml(title)));
-        sb.append(String.format("🏢 %s · 💰 %s\n", company, salary));
-        if (reason != null && !reason.isBlank()) {
-            sb.append(String.format("💡 %s\n", escapeHtml(reason)));
-        }
-        String noveltyEmoji = v.getNoveltyColor() != null ? NOVELTY_EMOJI.get(v.getNoveltyColor()) : null;
-        if (noveltyEmoji != null && v.getNoveltyNote() != null && !v.getNoveltyNote().isBlank()) {
-            sb.append(String.format("%s %s\n", noveltyEmoji, escapeHtml(capitalize(v.getNoveltyNote()))));
-        }
-        sb.append(formatApplyLine(v));
-        return sb.toString();
+        return VacancyPostFormatter.publicPost(v);
     }
 
     /** Combines up to PUBLISH_BATCH_SIZE vacancies into ONE Telegram message — a
@@ -1734,22 +1718,7 @@ public class VacancyPipelineService {
         return sb.toString();
     }
 
-    /** The "👉 <url>" line — falls back to an email/phone/personal-contact extracted from
-     *  the description when the stored url is just the Telegram post's own self-link (see
-     *  TelegramPostParser.isSelfLink for why that's otherwise a dead end for the reader). */
-    private static String formatApplyLine(Vacancy v) {
-        String url = v.getUrl();
-        if (TelegramPostParser.isSelfLink(url)) {
-            TelegramPostParser.Contact contact = TelegramPostParser.contact(v.getDescription());
-            if (contact != null) return String.format("%s %s\n", contact.emoji(), contact.display());
-        }
-        return url != null && !url.isBlank() ? String.format("👉 %s\n", url) : "";
-    }
 
-    private static String capitalize(String s) {
-        if (s == null || s.isEmpty()) return s;
-        return Character.toUpperCase(s.charAt(0)) + s.substring(1);
-    }
 
     /** Splits vacancies into groups that each fit under TELEGRAM_MAX_MESSAGE_CHARS once formatted. */
     private List<List<Vacancy>> chunkReport(List<Vacancy> vacancies, String header) {
@@ -1780,33 +1749,10 @@ public class VacancyPipelineService {
     }
 
     private String formatVacancyEntry(Vacancy v) {
-        int score = v.getAiScore() != null ? v.getAiScore() : 0;
-        String emoji = score >= 80 ? "🟢" : score >= 60 ? "🟡" : "🟠";
-        String salary = SalaryFormatter.forReport(v);
-        String company = v.getCompany() != null && !v.getCompany().isEmpty() ? escapeHtml(v.getCompany()) : "компания не указана";
-        // Title/reason are scraped/AI-generated text with no hard length cap upstream —
-        // truncate defensively so one unusually long entry can't alone blow past Telegram's
-        // 4096-char message limit regardless of how chunkReport groups entries.
-        String title = truncate(v.getTitle(), 150);
-        String reason = truncate(v.getAiReason(), 300);
-
-        StringBuilder sb = new StringBuilder();
-        sb.append(String.format("%s <b>[%d%%]</b> %s\n", emoji, score, escapeHtml(title)));
-        sb.append(String.format("   🏢 %s | 💰 %s\n", company, salary));
-        sb.append(String.format("   💡 %s\n", escapeHtml(reason)));
-        sb.append(String.format("   🔗 %s\n\n", v.getUrl()));
-        return sb.toString();
+        return VacancyPostFormatter.reportEntry(v);
     }
 
-    private static String truncate(String s, int maxChars) {
-        if (s == null) return "";
-        return s.length() > maxChars ? s.substring(0, maxChars) + "…" : s;
-    }
 
-    private String escapeHtml(String text) {
-        if (text == null) return "";
-        return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;");
-    }
 
     public static class PipelineResult {
         public int collected;
