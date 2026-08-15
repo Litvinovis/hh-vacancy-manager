@@ -1511,6 +1511,7 @@ public class VacancyPipelineService {
     private List<Vacancy> dedupeBySimilarity(List<Vacancy> vacancies, SearchJob job) {
         List<Vacancy> kept = new ArrayList<>();
         Map<String, List<Vacancy>> notifiedByEmployerKey = new HashMap<>();
+        List<Vacancy> unresolvedEmployerPool = null; // lazy: only fetched if an unresolved case actually shows up
 
         for (Vacancy v : vacancies) {
             String key = employerKey(v);
@@ -1527,6 +1528,27 @@ public class VacancyPipelineService {
                     k -> vacancyRepo.findNotifiedByEmployer(job.personName, job.searchName, rawEmployer(v)));
                 duplicate = notified.stream().anyMatch(n ->
                     TextSimilarity.lineSimilarity(v.getDescription(), n.getDescription()) >= SIMILAR_DESCRIPTION_THRESHOLD);
+            }
+
+            // Cross-channel duplicate check: employerKey is per-channel when neither
+            // regex extraction NOR the AI fallback (see AiResult.company) could name a
+            // real employer — Path B's fallback is literally "@channel" (see
+            // discoverFromTelegram). The comparisons above are scoped to ONE channel's
+            // key and miss the same posting repeated on a DIFFERENT channel. Verified
+            // live: "Удаленный оператор ЕГАИС / Товаровед Saby" posted on two different
+            // channels, neither naming its employer — invisible to each other under the
+            // per-channel key. Same conservative similarity bar, just not fenced to one
+            // @channel — only engaged for this specific unresolved-employer case, so it
+            // can't misfire on two different real companies that both merely lack a key.
+            if (!duplicate && rawEmployer(v).startsWith("@")) {
+                if (unresolvedEmployerPool == null) {
+                    unresolvedEmployerPool = vacancyRepo.findWithUnresolvedEmployer(job.personName, job.searchName);
+                }
+                List<Vacancy> pool = unresolvedEmployerPool;
+                duplicate = kept.stream().anyMatch(k -> rawEmployer(k).startsWith("@")
+                        && TextSimilarity.lineSimilarity(v.getDescription(), k.getDescription()) >= SIMILAR_DESCRIPTION_THRESHOLD)
+                    || pool.stream().anyMatch(n ->
+                        TextSimilarity.lineSimilarity(v.getDescription(), n.getDescription()) >= SIMILAR_DESCRIPTION_THRESHOLD);
             }
 
             if (!duplicate) kept.add(v);

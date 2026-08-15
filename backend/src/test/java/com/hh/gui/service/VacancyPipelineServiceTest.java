@@ -713,11 +713,16 @@ class VacancyPipelineServiceTest {
      * уведомлённых вакансий по работодателю, копит id, переданные в markNotified. */
     private static class FakeSimilarityRepo extends VacancyRepository {
         List<Vacancy> alreadyNotified = List.of();
+        List<Vacancy> unresolvedEmployerPool = List.of();
         final List<Long> markedNotified = new ArrayList<>();
         FakeSimilarityRepo() { super(null); }
         @Override
         public List<Vacancy> findNotifiedByEmployer(String person, String searchName, String employerName) {
             return alreadyNotified;
+        }
+        @Override
+        public List<Vacancy> findWithUnresolvedEmployer(String person, String searchName) {
+            return unresolvedEmployerPool;
         }
         @Override
         public void markNotified(List<Long> ids) {
@@ -726,8 +731,10 @@ class VacancyPipelineServiceTest {
     }
 
     private static class RecordingNotifier extends TelegramNotifier {
+        final List<String> sent = new ArrayList<>();
         @Override
         public boolean send(String message, String targetChatId) {
+            sent.add(message);
             return true;
         }
     }
@@ -761,6 +768,68 @@ class VacancyPipelineServiceTest {
 
         assertEquals(List.of(50L), repo.markedNotified,
             "клон по схожести должен быть помечен notified, иначе findUnnotifiedApproved будет возвращать его вечно");
+    }
+
+    @Test
+    void sendReport_crossChannelDuplicateWithUnresolvedEmployer_isDropped() throws Exception {
+        // Живой пример: "Удаленный оператор ЕГАИС / Товаровед Saby" repostнута на двух
+        // разных каналах, ни один не назвал реального работодателя (company="@channel1"/
+        // "@channel2") — employerKey для них разный, per-employer сравнение их не видит
+        // вместе. findWithUnresolvedEmployer расширяет пул сравнения на все каналы сразу.
+        RuntimeConfig config = new RuntimeConfig();
+        config.setNotificationsEnabled(true);
+        FakeSimilarityRepo repo = new FakeSimilarityRepo();
+        RecordingNotifier notifier = new RecordingNotifier();
+        VacancyPipelineService svc = new VacancyPipelineService(
+            null, null, null, null, repo, notifier, config, null, new FeatureFlags(), null, null);
+
+        Vacancy alreadyQueuedOnOtherChannel = vacancy("Оператор ЕГАИС", "Подходит", 80);
+        alreadyQueuedOnOtherChannel.setCompany("@onlinevakansii");
+        alreadyQueuedOnOtherChannel.setDescription("Обязанности: работа с ЕГАИС\nТребования: опыт");
+        repo.unresolvedEmployerPool = List.of(alreadyQueuedOnOtherChannel);
+
+        Vacancy candidate = vacancy("Оператор ЕГАИС", "Подходит", 75);
+        candidate.setId(60L);
+        candidate.setCompany("@rabota_onlaynr"); // другой канал, тоже не назвавший работодателя
+        candidate.setDescription("Обязанности: работа с ЕГАИС\nТребования: опыт"); // идентичное описание
+
+        SearchJob job = new SearchJob();
+        job.personName = "Мама";
+        job.searchName = "Рядом с домом";
+
+        sendReport(svc, List.of(candidate), job);
+
+        // markNotified тоже вызывается при обычной успешной отправке — реальный сигнал
+        // "отброшен как дубль, а не отправлен" это отсутствие вызова notifier.send.
+        assertTrue(notifier.sent.isEmpty(), "дубль с другого канала не должен быть реально отправлен");
+        assertEquals(List.of(60L), repo.markedNotified,
+            "дубль с другого канала при нераспознанном работодателе на обоих должен быть отброшен как повтор");
+    }
+
+    @Test
+    void sendReport_sameTitleDifferentRealEmployers_bothKept() throws Exception {
+        // Контрольный случай: два РАЗНЫХ канала, но у ОБОИХ уже известен настоящий
+        // (не заглушка) работодатель — межканальная проверка не должна вмешиваться,
+        // остаётся обычный per-employer дедуп, который их не спутает.
+        RuntimeConfig config = new RuntimeConfig();
+        config.setNotificationsEnabled(true);
+        FakeSimilarityRepo repo = new FakeSimilarityRepo();
+        RecordingNotifier notifier = new RecordingNotifier();
+        VacancyPipelineService svc = new VacancyPipelineService(
+            null, null, null, null, repo, notifier, config, null, new FeatureFlags(), null, null);
+
+        Vacancy candidate = vacancy("Менеджер по продажам", "Подходит", 75);
+        candidate.setId(61L);
+        candidate.setCompany("Реальная Компания ООО"); // не заглушка
+        candidate.setDescription("Обязанности: продавать\nТребования: опыт");
+
+        SearchJob job = new SearchJob();
+        job.personName = "Мама";
+        job.searchName = "Рядом с домом";
+
+        sendReport(svc, List.of(candidate), job);
+
+        assertEquals(1, notifier.sent.size(), "с реальным работодателем не должен сработать межканальный дедуп-фолбэк — вакансия должна уйти в отчёт");
     }
 
     // ── Взаимное исключение прогонов одного поиска ──
