@@ -5,6 +5,7 @@ import com.hh.gui.ai.VacancyAiAnalyzer;
 import com.hh.gui.client.HhApiClient;
 import com.hh.gui.client.ScraperClient;
 import com.hh.gui.client.ScraperClient.ScrapeResult;
+import com.hh.gui.client.TelegramClient;
 import com.hh.gui.config.FeatureFlags;
 import com.hh.gui.config.RuntimeConfig;
 import com.hh.gui.model.SearchConfig;
@@ -49,6 +50,7 @@ public class VacancyPipelineService {
 
     private final HhApiClient hhApiClient;
     private final ScraperClient scraperClient;
+    private final TelegramClient telegramClient;
     private final VacancyAiAnalyzer aiAnalyzer;
     private final VacancyRepository vacancyRepo;
     private final TelegramNotifier telegramNotifier;
@@ -71,12 +73,14 @@ public class VacancyPipelineService {
     @Value("${app.pipeline.batch-size:10}")
     private int batchSizeDefault;
 
-    public VacancyPipelineService(HhApiClient hhApiClient, ScraperClient scraperClient, VacancyAiAnalyzer aiAnalyzer,
+    public VacancyPipelineService(HhApiClient hhApiClient, ScraperClient scraperClient, TelegramClient telegramClient,
+                                   VacancyAiAnalyzer aiAnalyzer,
                                    VacancyRepository vacancyRepo, TelegramNotifier telegramNotifier,
                                    RuntimeConfig runtimeConfig, AiMetrics metrics, FeatureFlags featureFlags,
                                    SearchRepository searchRepo, SubscriptionService subscriptionService) {
         this.hhApiClient = hhApiClient;
         this.scraperClient = scraperClient;
+        this.telegramClient = telegramClient;
         this.aiAnalyzer = aiAnalyzer;
         this.vacancyRepo = vacancyRepo;
         this.telegramNotifier = telegramNotifier;
@@ -361,6 +365,161 @@ public class VacancyPipelineService {
                 } catch (Exception e) {
                     log.warn("Не удалось сохранить {} ({} · {}): {}", hit.hhId(), job.personName, job.searchName, e.getMessage());
                 }
+            }
+        }
+        return saved;
+    }
+
+    private static final java.util.regex.Pattern HH_LINK_PATTERN =
+        java.util.regex.Pattern.compile("(?:https?://)?[a-z0-9-]+\\.hh\\.ru/vacancy/(\\d+)", java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    // Best-effort employer extraction for Telegram posts with no first-party job-board
+    // link (see discoverFromTelegram) — mirrors the legacy collector/tg_parser.py
+    // heuristic. Channel posts rarely label the field explicitly; when they don't,
+    // the channel itself becomes the "employer" for dedup purposes (see below).
+    private static final java.util.regex.Pattern TG_EMPLOYER_PATTERN =
+        java.util.regex.Pattern.compile("(?:компания|организация|фирма|работодатель)[\\s:]*([^\\n,]{2,60})",
+            java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    private static String extractTgEmployer(String text, String channel) {
+        java.util.regex.Matcher m = TG_EMPLOYER_PATTERN.matcher(text);
+        if (m.find()) return m.group(1).trim();
+        // No dedup key can be computed without SOME employer value (see DedupKeys) —
+        // falling back to the channel keeps same-channel reposts/duplicates catchable
+        // even though it can't catch the same posting cross-channel.
+        return "@" + channel;
+    }
+
+    private static String extractTgTitle(String text) {
+        for (String line : text.split("\n")) {
+            String t = line.strip();
+            if (!t.isEmpty()) return t.length() > 150 ? t.substring(0, 147) + "..." : t;
+        }
+        return text.length() > 150 ? text.substring(0, 147) + "..." : text;
+    }
+
+    /**
+     * EXPERIMENTAL, manual-trigger only (see runFullPipelineFromUrl for the analogous
+     * hh.ru-URL feature) — reads configured public Telegram channels via the tg-scraper
+     * sidecar and turns their posts into candidates through one of two paths:
+     *
+     * Path A: the post links to an hh.ru vacancy — extract the hh_id and save a normal
+     * scrape-pending stub, exactly like RSS/URL discovery. Reuses the whole existing
+     * scrape+AI pipeline unchanged; the Telegram post was just how this hh_id was found.
+     *
+     * Path B: no first-party link — the channel post IS the only source. Save it with
+     * scrape_status='ok' straight away (there's nothing to scrape) and let the normal
+     * AI analysis step pick it up next. source="telegram" distinguishes these from hh.
+     *
+     * Only hh.ru links are recognized for Path A today — a superjob.ru or avito.ru link
+     * in a post falls through to Path B (treated as original content) since neither has
+     * a scraper wired up yet.
+     */
+    public PipelineResult runFullPipelineFromTelegram(SearchJob job, List<String> channels) {
+        java.util.concurrent.locks.ReentrantLock lock = lockFor(job);
+        if (!lock.tryLock()) {
+            log.info("Telegram-поиск {} · {} уже выполняется — параллельный запуск пропущен",
+                job.personName, job.searchName);
+            return new PipelineResult();
+        }
+        try {
+            int discovered = discoverFromTelegram(job, channels);
+            log.info("Шаг 1 Telegram ({} · {}): {} новых кандидатов", job.personName, job.searchName, discovered);
+
+            int scraped = scrapePending(job);
+            log.info("Шаг 2 ({} · {}): скрейпинг обработал {} записей", job.personName, job.searchName, scraped);
+
+            int analyzed = analyzePending(job, runtimeConfig.getMaxPerRun());
+            log.info("Шаг 3 ({} · {}): {} вакансий проанализировано AI", job.personName, job.searchName, analyzed);
+
+            List<Vacancy> approved = vacancyRepo.findUnnotifiedApproved(
+                job.personName, job.searchName, runtimeConfig.getMinScore(), runtimeConfig.getMaxApproved());
+            log.info("Шаг 4 ({} · {}): {} одобренных неуведомлённых", job.personName, job.searchName, approved.size());
+
+            if (!approved.isEmpty()) {
+                sendReport(approved, job);
+            }
+
+            PipelineResult result = new PipelineResult();
+            result.collected = discovered;
+            result.newVacancies = discovered;
+            result.analyzed = analyzed;
+            result.approved = approved.size();
+            return result;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    // No @Transactional — see discoverFromUrl above for why it was a no-op here.
+    protected int discoverFromTelegram(SearchJob job, List<String> channels) {
+        if (channels == null || channels.isEmpty()) return 0;
+
+        List<Vacancy> candidates = new ArrayList<>();
+        for (String channel : channels) {
+            TelegramClient.ChannelResult result = telegramClient.fetchChannel(channel, 100);
+            if (!result.ok()) {
+                log.warn("Telegram-канал @{} ({} · {}) недоступен: {}", channel, job.personName, job.searchName, result.reason());
+                continue;
+            }
+            for (TelegramClient.TelegramMessage msg : result.items()) {
+                if (msg.text() == null || msg.text().isBlank()) continue;
+
+                java.util.regex.Matcher hhLink = HH_LINK_PATTERN.matcher(msg.text());
+                Vacancy v = new Vacancy();
+                v.setCreatedAt(Instant.now().toString());
+                v.setPerson(job.personName);
+                v.setSearchName(job.searchName);
+                v.setUserId(job.isGlobal ? null : job.userId);
+                v.setSearchId(job.searchId);
+                v.setRemote(job.isRemote());
+                v.setSourceQuery(job.searchName);
+                v.setUrl(msg.link());
+
+                if (hhLink.find()) {
+                    // Path A: reuse the normal hh.ru pipeline — this Telegram post was
+                    // just how the hh_id was discovered.
+                    v.setHhId(hhLink.group(1));
+                    v.setTitle(extractTgTitle(msg.text()));
+                    v.setSource("hh");
+                    v.setStatus("new");
+                    v.setScrapeStatus("pending");
+                    v.setDedupKey(DedupKeys.compute(v.getTitle(), null));
+                } else {
+                    // Path B: the post itself is the only source — never write its own
+                    // wording anywhere downstream except AI analysis input; the public
+                    // post text this pipeline eventually sends out is AI-generated from
+                    // extracted facts, not a copy (see VacancyAiAnalyzer/sendPublicPosts).
+                    String employer = extractTgEmployer(msg.text(), channel);
+                    v.setHhId(msg.id());
+                    v.setTitle(extractTgTitle(msg.text()));
+                    v.setCompany(employer);
+                    v.setDescription(msg.text());
+                    v.setSource("telegram");
+                    v.setStatus("new");
+                    v.setScrapeStatus("ok");
+                    v.setAiVerdict("pending");
+                    v.setAiScore(0);
+                    v.setDedupKey(DedupKeys.compute(v.getTitle(), employer, msg.text()));
+                }
+                candidates.add(v);
+            }
+        }
+        if (candidates.isEmpty()) return 0;
+
+        List<Vacancy> filtered = filterExcluded(candidates, job.excludeWords);
+        Set<String> knownHhIds = vacancyRepo.findExistingHhIds(
+            filtered.stream().map(Vacancy::getHhId).toList(), job.personName, job.searchName);
+        List<Vacancy> fresh = filtered.stream().filter(v -> !knownHhIds.contains(v.getHhId())).toList();
+
+        int saved = 0;
+        for (Vacancy v : fresh) {
+            try {
+                vacancyRepo.save(v);
+                saved++;
+            } catch (Exception e) {
+                log.warn("Не удалось сохранить Telegram-кандидата {} ({} · {}): {}",
+                    v.getHhId(), job.personName, job.searchName, e.getMessage());
             }
         }
         return saved;

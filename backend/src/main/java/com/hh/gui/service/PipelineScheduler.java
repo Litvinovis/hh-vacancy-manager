@@ -104,6 +104,7 @@ public class PipelineScheduler implements SchedulingConfigurer {
         registrar.addTriggerTask(this::runPipeline, this::nextPipelineExecution);
         registrar.addTriggerTask(this::runDailyAnalysis, this::nextDailyExecution);
         registrar.addTriggerTask(this::runDueUrlSearches, new PeriodicTrigger(Duration.ofMillis(URL_SEARCH_CHECK_INTERVAL_MS)));
+        registrar.addTriggerTask(this::runDueTelegramSearches, new PeriodicTrigger(Duration.ofMillis(URL_SEARCH_CHECK_INTERVAL_MS)));
         PeriodicTrigger freeModelTrigger = new PeriodicTrigger(FREE_MODEL_REFRESH_INTERVAL);
         freeModelTrigger.setInitialDelay(FREE_MODEL_REFRESH_INITIAL_DELAY);
         registrar.addTriggerTask(this::refreshFreeModels, freeModelTrigger);
@@ -284,6 +285,43 @@ public class PipelineScheduler implements SchedulingConfigurer {
             } finally {
                 // Stamped even on failure — a search whose URL/sidecar is broken shouldn't be
                 // retried every 5-minute check tick, only once per its own configured interval.
+                searchRepo.updateLastRunAt(search.getId(), now);
+            }
+        }
+    }
+
+    /**
+     * Checks every search with a saved telegram_channels list + run_interval_hours
+     * and runs the ones whose interval has elapsed — same due-time model as
+     * runDueUrlSearches, independent scheduling column.
+     */
+    private void runDueTelegramSearches() {
+        if (schemaNotReady()) return;
+        if (!runtimeConfig.isPipelineEnabled()) {
+            log.debug("Автозапуск Telegram-поисков пропущен — пайплайн отключён в настройках");
+            return;
+        }
+        if (aiAnalyzer.isRateLimited()) {
+            log.info("Автозапуск Telegram-поисков пропущен — активен период охлаждения");
+            return;
+        }
+        for (SearchConfig search : searchRepo.findScheduledTelegramSearches()) {
+            if (!isDue(search)) continue;
+
+            Optional<SearchJob> jobOpt = profileFactory.buildForSearchId(search.getId());
+            if (jobOpt.isEmpty()) continue;
+            SearchJob job = jobOpt.get();
+
+            String now = Instant.now().toString();
+            try {
+                log.info("=== Автозапуск Telegram-поиска: {} · {} ===", job.personName, job.searchName);
+                VacancyPipelineService.PipelineResult result =
+                    pipelineService.runFullPipelineFromTelegram(job, job.telegramChannels);
+                log.info("Telegram-поиск {} · {} завершён: собрано={}, проанализировано={}, одобрено={}",
+                    job.personName, job.searchName, result.collected, result.analyzed, result.approved);
+            } catch (Exception e) {
+                log.error("Telegram-поиск {} · {} завершился ошибкой: {}", job.personName, job.searchName, e.getMessage(), e);
+            } finally {
                 searchRepo.updateLastRunAt(search.getId(), now);
             }
         }

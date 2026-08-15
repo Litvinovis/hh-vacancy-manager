@@ -2,6 +2,7 @@ package com.hh.gui.service;
 
 import com.hh.gui.ai.VacancyAiAnalyzer;
 import com.hh.gui.client.ScraperClient;
+import com.hh.gui.client.TelegramClient;
 import com.hh.gui.config.FeatureFlags;
 import com.hh.gui.config.RuntimeConfig;
 import com.hh.gui.model.SearchJob;
@@ -36,7 +37,7 @@ class VacancyPipelineServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new VacancyPipelineService(null, null, null, null, null, new RuntimeConfig(), null, new FeatureFlags(), null, null);
+        service = new VacancyPipelineService(null, null, null, null, null, null, new RuntimeConfig(), null, new FeatureFlags(), null, null);
     }
 
     private List<List<Vacancy>> chunkReport(List<Vacancy> vacancies, String header) throws Exception {
@@ -364,7 +365,7 @@ class VacancyPipelineServiceTest {
             new ScraperClient.SearchPageResult(true, null, page2, null));
         FakeRepo repo = new FakeRepo(Set.of("901", "902", "903", "904", "905", "906", "907"));
         VacancyPipelineService svc = new VacancyPipelineService(
-            null, scraper, new FakeAnalyzer(config), repo, null, config, null, new FeatureFlags(), null, null);
+            null, scraper, null, new FakeAnalyzer(config), repo, null, config, null, new FeatureFlags(), null, null);
 
         int saved = svc.discoverFromUrl(urlJob(), "https://hh.ru/search/vacancy?text=x", 3);
 
@@ -434,7 +435,7 @@ class VacancyPipelineServiceTest {
         FakeAnalyzeRepo repo = new FakeAnalyzeRepo();
         FakeBatchAnalyzer analyzer = new FakeBatchAnalyzer(config);
         VacancyPipelineService svc = new VacancyPipelineService(
-            null, null, analyzer, repo, null, config,
+            null, null, null, analyzer, repo, null, config,
             new com.hh.gui.ai.AiMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry(), config),
             new FeatureFlags(), null, null);
 
@@ -537,7 +538,7 @@ class VacancyPipelineServiceTest {
         FreshnessScraper scraper = new FreshnessScraper(config);
         repo.pending.forEach(v -> scraper.byId.put(v.getHhId(), failResult("http_403")));
         VacancyPipelineService svc = new VacancyPipelineService(
-            null, scraper, new FakeAnalyzer(config), repo, null, config, null, new FeatureFlags(), null, null);
+            null, scraper, null, new FakeAnalyzer(config), repo, null, config, null, new FeatureFlags(), null, null);
 
         int count = scrapePending(svc, urlJob());
 
@@ -557,7 +558,7 @@ class VacancyPipelineServiceTest {
         FreshnessScraper scraper = new FreshnessScraper(config);
         repo.pending.forEach(v -> scraper.byId.put(v.getHhId(), failResult("http_403")));
         VacancyPipelineService svc = new VacancyPipelineService(
-            null, scraper, new FakeAnalyzer(config), repo, null, config, null, new FeatureFlags(), null, null);
+            null, scraper, null, new FakeAnalyzer(config), repo, null, config, null, new FeatureFlags(), null, null);
 
         scrapePending(svc, urlJob());
 
@@ -584,7 +585,7 @@ class VacancyPipelineServiceTest {
         // и счётчик страйков прыгал 1→2→3 сразу, разгоняя заморозку до нескольких часов
         // за одно событие вместо честной эскалации после действительно повторной блокировки.
         VacancyPipelineService svc = new VacancyPipelineService(
-            null, null, null, null, null, new RuntimeConfig(), null, new FeatureFlags(), null, null);
+            null, null, null, null, null, null, new RuntimeConfig(), null, new FeatureFlags(), null, null);
 
         enterScrapeCooldown(svc);
         enterScrapeCooldown(svc);
@@ -605,7 +606,7 @@ class VacancyPipelineServiceTest {
         scraper.byId.put("12", failResult("archived"));
         scraper.byId.put("13", failResult("http_403"));
         VacancyPipelineService svc = new VacancyPipelineService(
-            null, scraper, new FakeAnalyzer(config), repo, null, config, null, new FeatureFlags(), null, null);
+            null, scraper, null, new FakeAnalyzer(config), repo, null, config, null, new FeatureFlags(), null, null);
 
         VacancyPipelineService.FreshnessResult r = svc.checkVacancyFreshness(5);
 
@@ -625,7 +626,7 @@ class VacancyPipelineServiceTest {
         repo.due = List.of(pendingVacancy("11", null));
         FreshnessScraper scraper = new FreshnessScraper(config);
         VacancyPipelineService svc = new VacancyPipelineService(
-            null, scraper, new FakeAnalyzer(config), repo, null, config, null, new FeatureFlags(), null, null);
+            null, scraper, null, new FakeAnalyzer(config), repo, null, config, null, new FeatureFlags(), null, null);
 
         VacancyPipelineService.FreshnessResult r = svc.checkVacancyFreshness(5);
 
@@ -644,7 +645,7 @@ class VacancyPipelineServiceTest {
         FreshnessScraper scraper = new FreshnessScraper(config);
         scraper.byId.put("11", failResult("archived"));
         VacancyPipelineService svc = new VacancyPipelineService(
-            null, scraper, new FakeAnalyzer(config), repo, null, config, null, new FeatureFlags(), null, null);
+            null, scraper, null, new FakeAnalyzer(config), repo, null, config, null, new FeatureFlags(), null, null);
 
         VacancyPipelineService.FreshnessResult r = svc.checkVacancyFreshness(5);
 
@@ -668,7 +669,7 @@ class VacancyPipelineServiceTest {
         config.setNotificationsEnabled(false);
         config.setChannelNotificationsEnabled(false);
         VacancyPipelineService svc = new VacancyPipelineService(
-            null, null, null, null, null, config, null, new FeatureFlags(), null, null);
+            null, null, null, null, null, null, config, null, new FeatureFlags(), null, null);
 
         SearchJob job = new SearchJob();
         job.personName = "Мама";
@@ -689,7 +690,7 @@ class VacancyPipelineServiceTest {
         RuntimeConfig config = new RuntimeConfig();
         config.setNotificationsEnabled(true);
         VacancyPipelineService svc = new VacancyPipelineService(
-            null, null, null, null, null, config, null, new FeatureFlags(), null, null);
+            null, null, null, null, null, null, config, null, new FeatureFlags(), null, null);
 
         SearchJob job = new SearchJob();
         job.personName = "Мама";
@@ -736,7 +737,7 @@ class VacancyPipelineServiceTest {
         config.setNotificationsEnabled(true);
         FakeSimilarityRepo repo = new FakeSimilarityRepo();
         VacancyPipelineService svc = new VacancyPipelineService(
-            null, null, null, repo, new RecordingNotifier(), config, null, new FeatureFlags(), null, null);
+            null, null, null, null, repo, new RecordingNotifier(), config, null, new FeatureFlags(), null, null);
 
         Vacancy alreadySent = vacancy("Продавец", "Подходит", 80);
         alreadySent.setDescription("Обязанности: продавать\nТребования: опыт");
@@ -767,7 +768,7 @@ class VacancyPipelineServiceTest {
         final java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
 
         ConcurrencyProbe(RuntimeConfig config) {
-            super(null, null, null, null, null, config, null, new FeatureFlags(), null, null);
+            super(null, null, null, null, null, null, config, null, new FeatureFlags(), null, null);
         }
 
         @Override
@@ -837,5 +838,120 @@ class VacancyPipelineServiceTest {
 
         assertEquals(2, svc.bodyRuns.get(), "разные поиски должны выполняться оба");
         assertEquals(2, svc.maxInFlight.get(), "разные поиски должны идти параллельно");
+    }
+
+    // ── discoverFromTelegram: Path A (ссылка на hh.ru) vs Path B (только текст поста) ──
+
+    private static SearchJob tgJob() {
+        SearchJob job = new SearchJob();
+        job.personName = "Все пользователи";
+        job.searchName = "Без техстека";
+        job.isGlobal = true;
+        return job;
+    }
+
+    private static TelegramClient.TelegramMessage tgMsg(String id, String text) {
+        return new TelegramClient.TelegramMessage(id, text, "2026-08-15T09:00:00.000Z",
+            "https://t.me/testchan/" + id, "testchan", "telegram");
+    }
+
+    private static class FakeTelegramClient extends TelegramClient {
+        final java.util.Map<String, ChannelResult> byChannel;
+        FakeTelegramClient(java.util.Map<String, ChannelResult> byChannel) { this.byChannel = byChannel; }
+        @Override
+        public ChannelResult fetchChannel(String username, int limit) {
+            return byChannel.getOrDefault(username, new ChannelResult(true, null, List.of()));
+        }
+    }
+
+    private static class FakeTgRepo extends VacancyRepository {
+        final Set<String> known;
+        final List<Vacancy> saved = new ArrayList<>();
+        FakeTgRepo(Set<String> known) {
+            super(null);
+            this.known = known;
+        }
+        @Override
+        public Set<String> findExistingHhIds(Collection<String> hhIds, String person, String searchName) {
+            Set<String> result = new java.util.HashSet<>(hhIds);
+            result.retainAll(known);
+            return result;
+        }
+        @Override
+        public Vacancy save(Vacancy v) {
+            saved.add(v);
+            return v;
+        }
+    }
+
+    @Test
+    void discoverFromTelegram_hhLinkInPost_goesThroughNormalHhPipelineAsPathA() {
+        // Пост со ссылкой на hh.ru — это Path A: сохраняем обычный scrape-pending стаб
+        // по hh_id из ссылки, а не текст поста как готовое описание.
+        FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
+            true, null, List.of(tgMsg("1", "Менеджер по продажам\nПодробности: https://ufa.hh.ru/vacancy/123456789")))));
+        FakeTgRepo repo = new FakeTgRepo(Set.of());
+        VacancyPipelineService svc = new VacancyPipelineService(
+            null, null, tg, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null);
+
+        int saved = svc.discoverFromTelegram(tgJob(), List.of("testchan"));
+
+        assertEquals(1, saved);
+        Vacancy v = repo.saved.get(0);
+        assertEquals("123456789", v.getHhId(), "hh_id должен быть извлечён из ссылки в посте, а не из id сообщения");
+        assertEquals("hh", v.getSource());
+        assertEquals("pending", v.getScrapeStatus(), "Path A должен идти через обычный скрейпинг, не готовую вакансию");
+    }
+
+    @Test
+    void discoverFromTelegram_noFirstPartyLink_savedAsOriginalTelegramContentPathB() {
+        // Пост без ссылки на биржу — Path B: текст поста сам по себе источник, скрейпинг
+        // не нужен (scrape_status сразу 'ok'), готов к AI-анализу.
+        String text = "Оператор чата, удалённо\nЗарплата от 40000\nОбращаться в лс";
+        FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
+            true, null, List.of(tgMsg("tg_testchan_42", text)))));
+        FakeTgRepo repo = new FakeTgRepo(Set.of());
+        VacancyPipelineService svc = new VacancyPipelineService(
+            null, null, tg, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null);
+
+        int saved = svc.discoverFromTelegram(tgJob(), List.of("testchan"));
+
+        assertEquals(1, saved);
+        Vacancy v = repo.saved.get(0);
+        assertEquals("tg_testchan_42", v.getHhId());
+        assertEquals("telegram", v.getSource());
+        assertEquals("ok", v.getScrapeStatus(), "Path B уже содержит весь текст — скрейпить нечего");
+        assertEquals("pending", v.getAiVerdict());
+        assertEquals(text, v.getDescription(), "полный текст поста должен уйти в AI-анализ как описание");
+        assertFalse(v.getDedupKey().isEmpty(), "без явного работодателя dedup_key всё равно должен строиться (см. extractTgEmployer)");
+    }
+
+    @Test
+    void discoverFromTelegram_excludeWordMatch_dropsCandidateBeforeSaving() {
+        FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
+            true, null, List.of(tgMsg("1", "Риэлтор без опыта, удалённо, доход от 100000")))));
+        FakeTgRepo repo = new FakeTgRepo(Set.of());
+        VacancyPipelineService svc = new VacancyPipelineService(
+            null, null, tg, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null);
+        SearchJob job = tgJob();
+        job.excludeWords = List.of("риэлтор");
+
+        int saved = svc.discoverFromTelegram(job, List.of("testchan"));
+
+        assertEquals(0, saved, "риэлторские посты должны отсеиваться так же, как для hh.ru-источника");
+        assertTrue(repo.saved.isEmpty());
+    }
+
+    @Test
+    void discoverFromTelegram_alreadyKnownMessageId_skipsSavingAgain() {
+        FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
+            true, null, List.of(tgMsg("tg_testchan_7", "Продавец-консультант удалённо")))));
+        FakeTgRepo repo = new FakeTgRepo(Set.of("tg_testchan_7"));
+        VacancyPipelineService svc = new VacancyPipelineService(
+            null, null, tg, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null);
+
+        int saved = svc.discoverFromTelegram(tgJob(), List.of("testchan"));
+
+        assertEquals(0, saved, "уже сохранённое на прошлом прогоне сообщение не должно сохраняться повторно");
     }
 }

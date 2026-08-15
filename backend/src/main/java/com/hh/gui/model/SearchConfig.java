@@ -36,6 +36,7 @@ public class SearchConfig {
     private boolean subscriberFeed;
     private Integer publishPaceMinutes;
     private int runPriority;
+    private List<String> telegramChannels;
 
     public SearchConfig() {}
 
@@ -123,6 +124,9 @@ public class SearchConfig {
 
     public int getRunPriority() { return runPriority; }
     public void setRunPriority(int runPriority) { this.runPriority = runPriority; }
+
+    public List<String> getTelegramChannels() { return telegramChannels; }
+    public void setTelegramChannels(List<String> telegramChannels) { this.telegramChannels = telegramChannels; }
 
     public boolean isRemote() {
         return "remote".equalsIgnoreCase(schedule) || area == 113;

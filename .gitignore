@@ -8,6 +8,8 @@ config/profiles/default.yaml
 backend/target/
 *.class
 scraper/node_modules/
+tg-scraper/node_modules/
+tg-scraper/profile-data/
 
 # Data
 data/

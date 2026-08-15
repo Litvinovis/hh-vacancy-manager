@@ -54,6 +54,7 @@ public class SearchRepository {
         int publishPaceMinutes = rs.getInt("publish_pace_minutes");
         s.setPublishPaceMinutes(rs.wasNull() ? null : publishPaceMinutes);
         s.setRunPriority(rs.getInt("run_priority"));
+        s.setTelegramChannels(readList(rs.getString("telegram_channels")));
         return s;
     };
 
@@ -98,8 +99,8 @@ public class SearchRepository {
                 priority_districts, skills, not_suitable, exclude_words, ai_notes, enabled,
                 created_at, updated_at, is_global, source_url, run_interval_hours, last_run_at, chat_id,
                 public_format, delayed_chat_id, delayed_publish_minutes, subscriber_feed, publish_pace_minutes,
-                run_priority)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                run_priority, telegram_channels)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """;
 
         KeyHolder keyHolder = new GeneratedKeyHolder();
@@ -130,7 +131,8 @@ public class SearchRepository {
             ps.setObject(i++, s.getDelayedPublishMinutes(), Types.INTEGER);
             ps.setInt(i++, s.isSubscriberFeed() ? 1 : 0);
             ps.setObject(i++, s.getPublishPaceMinutes(), Types.INTEGER);
-            ps.setInt(i, s.getRunPriority());
+            ps.setInt(i++, s.getRunPriority());
+            ps.setString(i, writeList(s.getTelegramChannels()));
             return ps;
         }, keyHolder);
 
@@ -147,14 +149,14 @@ public class SearchRepository {
             "priority_districts=?, skills=?, not_suitable=?, exclude_words=?, ai_notes=?, enabled=?, updated_at=?, " +
             "source_url=?, run_interval_hours=?, chat_id=?, " +
             "public_format=?, delayed_chat_id=?, delayed_publish_minutes=?, subscriber_feed=?, publish_pace_minutes=?, " +
-            "run_priority=? " +
+            "run_priority=?, telegram_channels=? " +
             "WHERE id=?",
             s.getName(), writeList(s.getQueries()), s.getArea(), s.getSchedule(), s.getSalaryMin(),
             writeList(s.getPriorityDistricts()), writeList(s.getSkills()), writeList(s.getNotSuitable()),
             writeList(s.getExcludeWords()), s.getAiNotes(), s.isEnabled() ? 1 : 0, s.getUpdatedAt(),
             s.getSourceUrl(), s.getRunIntervalHours(), s.getChatId(),
             s.isPublicFormat() ? 1 : 0, s.getDelayedChatId(), s.getDelayedPublishMinutes(), s.isSubscriberFeed() ? 1 : 0,
-            s.getPublishPaceMinutes(), s.getRunPriority(), s.getId());
+            s.getPublishPaceMinutes(), s.getRunPriority(), writeList(s.getTelegramChannels()), s.getId());
     }
 
     /** Stamps the last automatic/manual run time for a search, used by the per-search interval scheduler. */
@@ -207,6 +209,19 @@ public class SearchRepository {
     public List<SearchConfig> findScheduledUrlSearches() {
         return jdbc.query(
             "SELECT * FROM searches WHERE enabled = TRUE AND source_url IS NOT NULL AND source_url != '' " +
+            "AND run_interval_hours IS NOT NULL ORDER BY id",
+            rowMapper);
+    }
+
+    /**
+     * Enabled searches configured for scheduled Telegram-channel runs (telegram_channels
+     * + run_interval_hours both set) — same due-time model as findScheduledUrlSearches.
+     * The '[]' check filters out the column's default empty-list value.
+     */
+    public List<SearchConfig> findScheduledTelegramSearches() {
+        return jdbc.query(
+            "SELECT * FROM searches WHERE enabled = TRUE AND telegram_channels IS NOT NULL " +
+            "AND telegram_channels != '' AND telegram_channels != '[]' " +
             "AND run_interval_hours IS NOT NULL ORDER BY id",
             rowMapper);
     }
