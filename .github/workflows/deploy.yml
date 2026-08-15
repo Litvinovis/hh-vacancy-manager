@@ -94,6 +94,27 @@ jobs:
           sudo systemctl enable hh-scraper
           sudo systemctl restart hh-scraper
 
+      - name: Deploy tg-scraper sidecar
+        run: |
+          DEPLOY_DIR=/opt/hh-gui/tg-scraper
+          NPM_BIN=/home/clawd/.nvm/versions/node/v24.18.0/bin/npm
+
+          sudo mkdir -p ${DEPLOY_DIR}
+          # Same reasoning as the hh-scraper step above: only the files just copied,
+          # NOT -R over ${DEPLOY_DIR} — profile-data/ holds the logged-in Telegram
+          # session (IndexedDB/localStorage), which must survive every deploy untouched.
+          sudo cp tg-scraper/package.json tg-scraper/package-lock.json tg-scraper/server.js ${DEPLOY_DIR}/
+          sudo chown clawd:clawd ${DEPLOY_DIR} ${DEPLOY_DIR}/package.json ${DEPLOY_DIR}/package-lock.json ${DEPLOY_DIR}/server.js
+
+          cd ${DEPLOY_DIR}
+          ${NPM_BIN} ci --omit=dev --ignore-scripts
+          ${NPM_BIN} exec playwright install chromium
+
+          sudo cp "$GITHUB_WORKSPACE/scripts/tg-scraper.service" /etc/systemd/system/tg-scraper.service
+          sudo systemctl daemon-reload
+          sudo systemctl enable tg-scraper
+          sudo systemctl restart tg-scraper
+
       - name: Deploy
         run: |
           DEPLOY_DIR=/opt/hh-gui
@@ -179,6 +200,20 @@ jobs:
             exit 1
           fi
           echo "✅ Scraper health check passed (code: $SCRAPER_HTTP_CODE)"
+
+          TG_SCRAPER_STATUS=$(sudo systemctl is-active tg-scraper)
+          if [ "$TG_SCRAPER_STATUS" != "active" ]; then
+            echo "❌ tg-scraper sidecar failed to start (see: journalctl -u tg-scraper)"
+            exit 1
+          fi
+          echo "✅ tg-scraper sidecar is running"
+
+          TG_SCRAPER_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8096/health)
+          if [ "$TG_SCRAPER_HTTP_CODE" != "200" ]; then
+            echo "❌ tg-scraper health check failed (code: $TG_SCRAPER_HTTP_CODE)"
+            exit 1
+          fi
+          echo "✅ tg-scraper health check passed (code: $TG_SCRAPER_HTTP_CODE)"
 
       - name: Notify Telegram
         if: always() && github.event_name != 'pull_request'

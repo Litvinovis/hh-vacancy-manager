@@ -35,6 +35,7 @@ public class SearchJob {
     public Integer delayedPublishMinutes;
     public boolean subscriberFeed;
     public Integer publishPaceMinutes;
+    public List<String> telegramChannels;
 
     public boolean isRemote() {
         return "remote".equalsIgnoreCase(schedule) || area == 113;

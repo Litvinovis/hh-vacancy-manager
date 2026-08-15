@@ -103,6 +103,7 @@ public class SearchProfileFactory {
         job.delayedPublishMinutes = search.getDelayedPublishMinutes();
         job.subscriberFeed = search.isSubscriberFeed();
         job.publishPaceMinutes = search.getPublishPaceMinutes();
+        job.telegramChannels = search.getTelegramChannels();
         return job;
     }
 }

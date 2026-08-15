@@ -1,0 +1,14 @@
+{
+  "name": "tg-web-scraper",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Headless-browser sidecar that logs into web.telegram.org as a real account (no api_id/api_hash registration) and reads public channel posts for the Telegram vacancy-source pipeline.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "postinstall": "playwright install --with-deps chromium"
+  },
+  "dependencies": {
+    "playwright": "^1.62.1"
+  }
+}
