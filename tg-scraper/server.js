@@ -165,11 +165,26 @@ async function loginPassword(password) {
 
 async function collectMessages(page, channel) {
   const raw = await page.$$eval('.bubble.channel-post[data-mid]', (nodes) =>
-    nodes.map((n) => ({
-      mid: n.getAttribute('data-mid'),
-      ts: n.getAttribute('data-timestamp'),
-      text: (n.querySelector('.message.spoilers-container') || {}).innerText || '',
-    }))
+    nodes.map((n) => {
+      const messageEl = n.querySelector('.message.spoilers-container');
+      const text = messageEl ? messageEl.innerText || '' : '';
+      // innerText drops href attributes — a link whose visible label is just
+      // "Посмотреть вакансию полностью" (verified live on the kadrout channel)
+      // leaves the actual URL nowhere in the plain text at all. Anchor hrefs are
+      // appended as a separate trailing line so the downstream URL-extraction
+      // regex (Java side) can still find them, without disturbing the visible text.
+      const hrefs = messageEl
+        ? Array.from(messageEl.querySelectorAll('a[href]'))
+            .map((a) => a.getAttribute('href'))
+            .filter((h) => h && /^https?:\/\//i.test(h) && !/^https?:\/\/t\.me\//i.test(h))
+        : [];
+      const uniqueHrefs = [...new Set(hrefs)];
+      return {
+        mid: n.getAttribute('data-mid'),
+        ts: n.getAttribute('data-timestamp'),
+        text: uniqueHrefs.length ? `${text}\n\n${uniqueHrefs.join('\n')}` : text,
+      };
+    })
   );
   return raw
     .filter((r) => r.text && r.text.trim().length > 0)
