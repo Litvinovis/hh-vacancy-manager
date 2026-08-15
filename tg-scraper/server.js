@@ -199,28 +199,78 @@ async function loginPassword(password) {
 }
 
 async function collectMessages(page, channel) {
-  const raw = await page.$$eval('.bubble.channel-post[data-mid]', (nodes) =>
-    nodes.map((n) => {
+  const raw = await page.evaluate(async () => {
+    // Views/reactions: rendered reaction pills are sticker images referenced only by
+    // an opaque data-doc-id (Telegram Web K renders even standard emoji reactions
+    // through its sticker pipeline) — verified live that the doc-id has no emoji
+    // identity anywhere in the DOM (no alt text, no title, no data-emoji). The raw
+    // MTProto message object DOES carry it plainly (reactions.results[].reaction.
+    // emoticon), and Telegram Web K exposes its own internal managers on
+    // window.appImManager for exactly this kind of read — undocumented and private
+    // to this client build, so this is inherently more fragile than the public DOM
+    // text scraping above and needs to fail soft (null views / empty reactions),
+    // never break message collection over it.
+    const chat = window.appImManager && window.appImManager.chat;
+    const managers = chat && chat.managers;
+    const peerId = chat && chat.peerId;
+
+    const nodes = Array.from(document.querySelectorAll('.bubble.channel-post[data-mid]'));
+    const out = [];
+    for (const n of nodes) {
       const messageEl = n.querySelector('.message.spoilers-container');
-      const text = messageEl ? messageEl.innerText || '' : '';
+      // <reactions-element> (reaction pills AND the views/timestamp span, both — see
+      // the live-verified markup dump) is a direct child of messageEl, not a sibling
+      // outside it — innerText picked up its text too, appending stray digits/glyphs
+      // ("1\n3\n\n21:56") onto every post's stored description. Read from a
+      // clone with it stripped instead of the live element; ts/views/reactions are
+      // already read separately (data-timestamp attribute, appMessagesManager above).
+      let cleanMessageEl = messageEl;
+      if (messageEl) {
+        cleanMessageEl = messageEl.cloneNode(true);
+        cleanMessageEl.querySelectorAll('reactions-element').forEach((el) => el.remove());
+      }
+      const text = cleanMessageEl ? cleanMessageEl.innerText || '' : '';
       // innerText drops href attributes — a link whose visible label is just
       // "Посмотреть вакансию полностью" (verified live on the kadrout channel)
       // leaves the actual URL nowhere in the plain text at all. Anchor hrefs are
       // appended as a separate trailing line so the downstream URL-extraction
       // regex (Java side) can still find them, without disturbing the visible text.
-      const hrefs = messageEl
-        ? Array.from(messageEl.querySelectorAll('a[href]'))
+      const hrefs = cleanMessageEl
+        ? Array.from(cleanMessageEl.querySelectorAll('a[href]'))
             .map((a) => a.getAttribute('href'))
             .filter((h) => h && /^https?:\/\//i.test(h) && !/^https?:\/\/t\.me\//i.test(h))
         : [];
       const uniqueHrefs = [...new Set(hrefs)];
-      return {
+
+      let views = null;
+      let reactions = {};
+      if (managers && peerId != null) {
+        try {
+          const msg = await managers.appMessagesManager.getMessageByPeer(peerId, Number(n.getAttribute('data-mid')));
+          if (msg) {
+            if (typeof msg.views === 'number') views = msg.views;
+            const results = msg.reactions && msg.reactions.results;
+            if (Array.isArray(results)) {
+              for (const r of results) {
+                if (r.reaction && r.reaction.emoticon && typeof r.count === 'number') {
+                  reactions[r.reaction.emoticon] = r.count;
+                }
+              }
+            }
+          }
+        } catch (e) { /* best-effort — see comment above */ }
+      }
+
+      out.push({
         mid: n.getAttribute('data-mid'),
         ts: n.getAttribute('data-timestamp'),
         text: uniqueHrefs.length ? `${text}\n\n${uniqueHrefs.join('\n')}` : text,
-      };
-    })
-  );
+        views,
+        reactions,
+      });
+    }
+    return out;
+  });
   return raw
     .filter((r) => r.text && r.text.trim().length > 0)
     .map((r) => {
@@ -235,6 +285,8 @@ async function collectMessages(page, channel) {
         link: `https://t.me/${channel}/${realId}`,
         channel,
         source: 'telegram',
+        views: r.views,
+        reactions: r.reactions,
       };
     });
 }

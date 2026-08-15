@@ -57,6 +57,37 @@ public class TelegramNotifier {
             message, targetChatId);
     }
 
+    /**
+     * Current subscriber count of a channel the channel bot is admin of (Bot API
+     * getChatMemberCount) — null on any failure (missing token, network error, bot not
+     * an admin there), never an exception; the caller (a periodic metrics poll) should
+     * just skip that channel this tick rather than fail the whole sweep over one.
+     */
+    public Integer getChatMemberCount(String targetChatId) {
+        if (channelBotToken == null || channelBotToken.isEmpty()) return null;
+        if (targetChatId == null || targetChatId.isBlank()) return null;
+        try {
+            String url = "https://api.telegram.org/bot" + channelBotToken + "/getChatMemberCount?chat_id="
+                + URLEncoder.encode(targetChatId, StandardCharsets.UTF_8);
+            HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(10000);
+            conn.setReadTimeout(15000);
+
+            int code = conn.getResponseCode();
+            String body = HttpUtil.readBody(conn, code);
+            if (code != 200) {
+                log.warn("getChatMemberCount({}) вернул {}: {}", targetChatId, code, body);
+                return null;
+            }
+            var json = new tools.jackson.databind.ObjectMapper().readTree(body);
+            return json.path("ok").asBoolean(false) ? json.path("result").asInt() : null;
+        } catch (Exception e) {
+            log.warn("Не удалось получить число подписчиков для {}: {}", targetChatId, e.getMessage());
+            return null;
+        }
+    }
+
     private boolean doSend(String token, String missingTokenMessage, String message, String resolvedChatId) {
         if (token == null || token.isEmpty()) {
             log.warn(missingTokenMessage);
