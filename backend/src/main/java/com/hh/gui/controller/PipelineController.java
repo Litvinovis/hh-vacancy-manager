@@ -223,6 +223,62 @@ public class PipelineController {
     }
 
     /**
+     * Discover candidates from a search's configured Telegram channels right now,
+     * instead of waiting for PipelineScheduler's own run_interval_hours cadence (built
+     * for this: run_interval_hours is often several hours, and there was previously no
+     * way to force an off-cycle run without editing the DB directly). Runs the whole
+     * discover → scrape (for hh.ru-linked Path A hits) → AI-analyze → notify chain
+     * synchronously — same pattern as discover-from-url above.
+     * POST /api/pipeline/discover-from-telegram  body: {searchId}
+     */
+    @PostMapping("/pipeline/discover-from-telegram")
+    public ResponseEntity<Map<String, Object>> discoverFromTelegram(
+            @RequestBody Map<String, Object> body,
+            @RequestAttribute("currentUser") User currentUser) {
+        if (!currentUser.isAdmin()) {
+            return ResponseEntity.status(403).body(Map.of("error", "Ручной запуск Telegram-поиска доступен только администратору"));
+        }
+        Object searchIdRaw = body.get("searchId");
+        if (searchIdRaw == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Укажите searchId"));
+        }
+        Long searchId;
+        try {
+            searchId = Long.valueOf(searchIdRaw.toString());
+        } catch (NumberFormatException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Некорректный searchId"));
+        }
+
+        Optional<SearchJob> jobOpt = profileFactory.buildForSearchId(searchId);
+        if (jobOpt.isEmpty()) {
+            return ResponseEntity.status(404).body(Map.of("error", "Поиск не найден"));
+        }
+        SearchJob job = jobOpt.get();
+        if (job.telegramChannels == null || job.telegramChannels.isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "У поиска не настроены Telegram-каналы"));
+        }
+
+        log.info("Ручной запуск Telegram-поиска для {} · {}: {} каналов",
+            job.personName, job.searchName, job.telegramChannels.size());
+        try {
+            PipelineResult r = pipelineService.runFullPipelineFromTelegram(job, job.telegramChannels);
+            Map<String, Object> response = new LinkedHashMap<>();
+            response.put("status", "ok");
+            response.put("collected", r.collected);
+            response.put("newVacancies", r.newVacancies);
+            response.put("analyzed", r.analyzed);
+            response.put("approved", r.approved);
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            log.error("Ошибка Telegram-поиска: {}", e.getMessage(), e);
+            Map<String, Object> error = new LinkedHashMap<>();
+            error.put("status", "error");
+            error.put("message", e.getMessage());
+            return ResponseEntity.internalServerError().body(error);
+        }
+    }
+
+    /**
      * Re-analyze all eligible vacancies (not rejected by AI or user), for every
      * configured (person, search) or just one.
      * POST /api/pipeline/reanalyze[?person=...&searchName=...]
