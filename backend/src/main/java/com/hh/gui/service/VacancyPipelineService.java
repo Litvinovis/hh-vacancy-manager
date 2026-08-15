@@ -451,6 +451,20 @@ public class VacancyPipelineService {
 
     private static final int SALARY_SCAN_LINES = 4;
 
+    // Any http(s) link that ISN'T a t.me/telegram.me self-link — verified live on
+    // kadrout: its bot posts a short teaser ending in "Посмотреть вакансию полностью"
+    // linking to kadrout.ru/vacancies/... (the full, untruncated listing on the
+    // aggregator's own site). Trailing punctuation is stripped since a URL at the end
+    // of a sentence commonly picks up a period/comma/closing paren from the prose.
+    private static final java.util.regex.Pattern EXTERNAL_URL = java.util.regex.Pattern.compile(
+        "https?://(?!t\\.me/|telegram\\.me/)\\S+", java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    private static String extractTgExternalUrl(String text) {
+        java.util.regex.Matcher m = EXTERNAL_URL.matcher(text);
+        if (!m.find()) return null;
+        return m.group().replaceAll("[.,;:!?)\\]]+$", "");
+    }
+
     private static Integer parseSalaryNumber(String raw) {
         if (raw == null) return null;
         try {
@@ -613,7 +627,12 @@ public class VacancyPipelineService {
 
                 if (hhLink.find()) {
                     // Path A: reuse the normal hh.ru pipeline — this Telegram post was
-                    // just how the hh_id was discovered.
+                    // just how the hh_id was discovered. The link readers get is the real
+                    // hh.ru vacancy URL (matches how RSS/URL discovery set it), not the
+                    // Telegram post it happened to be found in.
+                    String matchedUrl = hhLink.group();
+                    if (!matchedUrl.matches("(?i)https?://.*")) matchedUrl = "https://" + matchedUrl;
+                    v.setUrl(matchedUrl);
                     v.setHhId(hhLink.group(1));
                     v.setTitle(extractTgTitle(msg.text()));
                     v.setSource("hh");
@@ -625,6 +644,13 @@ public class VacancyPipelineService {
                     // wording anywhere downstream except AI analysis input; the public
                     // post text this pipeline eventually sends out is AI-generated from
                     // extracted facts, not a copy (see VacancyAiAnalyzer/sendPublicPosts).
+                    // Some channels (e.g. kadrout) are themselves aggregators posting only a
+                    // teaser with a link to the full listing on their own site — verified
+                    // live, that link (not a job board we have a scraper for, so still Path
+                    // B) is a far more useful "read more" destination for readers than the
+                    // truncated Telegram post itself, so prefer it as the URL when present.
+                    String externalUrl = extractTgExternalUrl(msg.text());
+                    if (externalUrl != null) v.setUrl(externalUrl);
                     String title = extractTgTitle(msg.text());
                     String employer = extractTgEmployer(msg.text(), title, channel);
                     v.setHhId(msg.id());
