@@ -1250,6 +1250,23 @@ public class VacancyPipelineService {
     // delayed_publish_minutes — matches the "5 minutes earlier" pitch this was built for.
     private static final int DEFAULT_DELAYED_PUBLISH_MINUTES = 5;
 
+    // Publish-queue pacing (enqueuePublicPosts / publishDueQueued): posts go out in
+    // batches instead of one at a time, and the gap between batches breathes with how
+    // deep the queue is — a big backlog drains faster, a shallow one is spaced out more —
+    // instead of a single fixed publishPaceMinutes regardless of how much is waiting.
+    private static final int PUBLISH_BATCH_SIZE = 5;
+    // Calibration point: at REFERENCE_QUEUE_BATCHES batches queued, the pace is exactly
+    // the search's own publishPaceMinutes; fewer batches waiting eases off toward
+    // MAX_PACE_MINUTES, more batches tightens toward MIN_PACE_MINUTES.
+    private static final int REFERENCE_QUEUE_BATCHES = 5;
+    private static final long MIN_PACE_MINUTES = 3;
+    private static final long MAX_PACE_MINUTES = 60;
+    // Public channel posts only go out 07:00–23:00 local (server timezone) — anything
+    // that would land overnight is pushed to 07:00 the next morning instead, so the
+    // queue quietly accumulates overnight rather than posting into an empty-audience window.
+    private static final int PUBLISH_WINDOW_START_HOUR = 7;
+    private static final int PUBLISH_WINDOW_END_HOUR = 23;
+
     /**
      * Personal (family) reports and public-channel sends are gated by two independent
      * master switches — notificationsEnabled / channelNotificationsEnabled — so one can
@@ -1472,36 +1489,80 @@ public class VacancyPipelineService {
     /**
      * Stamps a queued_publish_at on each vacancy, chained after whatever's already
      * queued for this search (findQueueTailTime) so a second approved batch arriving
-     * before the first has drained doesn't overlap it — just extends the line. The
-     * first vacancy in an otherwise-empty queue is due ~immediately (the next
-     * scheduler tick), each subsequent one publishPaceMinutes later.
+     * before the first has drained doesn't overlap it — just extends the line. Vacancies
+     * are grouped into PUBLISH_BATCH_SIZE-sized batches sharing one due time; each next
+     * batch's time is the previous one plus a pace that itself depends on how deep the
+     * queue already is (see dynamicPaceMinutes) — and any time landing outside the
+     * 07:00–23:00 publish window gets pushed to the next morning (see pushPastNightWindow).
      */
     private void enqueuePublicPosts(List<Vacancy> approved, SearchJob job) {
         Instant cursor = vacancyRepo.findQueueTailTime(job.searchId)
             .map(Instant::parse)
             .filter(t -> t.isAfter(Instant.now()))
             .orElse(Instant.now());
+        cursor = pushPastNightWindow(cursor);
 
+        int alreadyQueued = vacancyRepo.countQueued(job.searchId);
         List<Long> ids = new ArrayList<>();
         List<String> publishAts = new ArrayList<>();
-        for (Vacancy v : approved) {
-            ids.add(v.getId());
+        for (int i = 0; i < approved.size(); i++) {
+            if (i > 0 && i % PUBLISH_BATCH_SIZE == 0) {
+                int batchesQueued = (alreadyQueued + i) / PUBLISH_BATCH_SIZE;
+                long paceMinutes = dynamicPaceMinutes(job.publishPaceMinutes, batchesQueued);
+                cursor = pushPastNightWindow(cursor.plusSeconds(paceMinutes * 60L));
+            }
+            ids.add(approved.get(i).getId());
             publishAts.add(cursor.toString());
-            cursor = cursor.plusSeconds(job.publishPaceMinutes * 60L);
         }
         vacancyRepo.enqueuePublish(ids, publishAts);
-        log.info("В очередь публикации поставлено {} вакансий ({} · {}), интервал {} мин",
-            approved.size(), job.personName, job.searchName, job.publishPaceMinutes);
+        log.info("В очередь публикации поставлено {} вакансий батчами по {} ({} · {})",
+            approved.size(), PUBLISH_BATCH_SIZE, job.personName, job.searchName);
     }
 
     /**
-     * Fired on the queued-publish scheduler tick (see PipelineScheduler). Sends
-     * whatever's due — normally at most ~one per search per tick, since
-     * enqueuePublicPosts already spread the due times publishPaceMinutes apart; a
-     * backlog only piles up after a period the scheduler wasn't running.
+     * The gap before the NEXT batch, in minutes — breathes with queuedBatches (how many
+     * PUBLISH_BATCH_SIZE-sized batches are already waiting for this search): more queued
+     * means less time between batches (drain faster), less queued means more time
+     * (spread out, don't rush a trickle). basePaceMinutes (the search's own
+     * publishPaceMinutes) is the pace exactly AT the REFERENCE_QUEUE_BATCHES calibration
+     * point; the result is always clamped to [MIN_PACE_MINUTES, MAX_PACE_MINUTES]
+     * regardless of how far the actual queue depth is from that point.
+     */
+    private static long dynamicPaceMinutes(Integer basePaceMinutes, int queuedBatches) {
+        long base = basePaceMinutes != null && basePaceMinutes > 0 ? basePaceMinutes : REFERENCE_QUEUE_BATCHES;
+        if (queuedBatches <= 0) return Math.min(base, MAX_PACE_MINUTES);
+        long dynamic = base * REFERENCE_QUEUE_BATCHES / queuedBatches;
+        return Math.max(MIN_PACE_MINUTES, Math.min(MAX_PACE_MINUTES, dynamic));
+    }
+
+    private static boolean isOutsidePublishWindow(Instant instant) {
+        int hour = instant.atZone(java.time.ZoneId.systemDefault()).getHour();
+        return hour >= PUBLISH_WINDOW_END_HOUR || hour < PUBLISH_WINDOW_START_HOUR;
+    }
+
+    /** Rolls a candidate publish time forward to PUBLISH_WINDOW_START_HOUR the same or
+     *  next local day if it falls outside the 07:00–23:00 window — the queue accumulates
+     *  overnight instead of posting into an empty-audience window. */
+    private static Instant pushPastNightWindow(Instant candidate) {
+        if (!isOutsidePublishWindow(candidate)) return candidate;
+        java.time.ZonedDateTime zdt = candidate.atZone(java.time.ZoneId.systemDefault());
+        java.time.ZonedDateTime morning = zdt.withHour(PUBLISH_WINDOW_START_HOUR).withMinute(0).withSecond(0).withNano(0);
+        if (zdt.getHour() >= PUBLISH_WINDOW_END_HOUR) morning = morning.plusDays(1);
+        return morning.toInstant();
+    }
+
+    /**
+     * Fired on the queued-publish scheduler tick (see PipelineScheduler). Sends up to
+     * PUBLISH_BATCH_SIZE due posts per search per tick (see class javadoc on
+     * enqueuePublicPosts for why batches instead of one-at-a-time) — a backlog beyond
+     * that stays queued and is picked up by the following ticks, still gradual, just
+     * PUBLISH_BATCH_SIZE at a time instead of one. Skips entirely outside the
+     * 07:00–23:00 publish window even if something's technically due — a defensive
+     * backstop for rows whose due time was computed by older logic or drifted.
      */
     public void publishDueQueued(int limit) {
         if (!runtimeConfig.isChannelNotificationsEnabled()) return;
+        if (isOutsidePublishWindow(Instant.now())) return;
         List<Vacancy> due = vacancyRepo.findDueQueuedPublications(Instant.now().toString(), limit);
         if (due.isEmpty()) return;
 
@@ -1518,23 +1579,20 @@ public class VacancyPipelineService {
                 continue;
             }
             String chatId = searchOpt.get().getChatId();
-            // At most one post per search per tick. enqueuePublicPosts spreads due times
-            // publishPaceMinutes apart, so normally only one IS due — but every row whose
-            // time passed while the app was down or the channel was switched off comes back
-            // due simultaneously, and sending that whole set in this loop would dump the
-            // backlog into the channel in seconds: exactly the burst the pacing feature
-            // exists to prevent. Draining one per tick keeps the catch-up gradual; the rest
-            // stay queued and are picked up by the following ticks.
             List<Vacancy> dueForSearch = entry.getValue();
-            Vacancy v = dueForSearch.get(0);
-            if (telegramNotifier.sendViaChannelBot(formatPublicPost(v), chatId)) {
-                vacancyRepo.markNotified(List.of(v.getId()));
-            } else {
-                log.warn("Публикация из очереди не удалась для id={} (search_id={})", v.getId(), entry.getKey());
+            int sent = 0;
+            for (Vacancy v : dueForSearch) {
+                if (sent >= PUBLISH_BATCH_SIZE) break;
+                if (telegramNotifier.sendViaChannelBot(formatPublicPost(v), chatId)) {
+                    vacancyRepo.markNotified(List.of(v.getId()));
+                    sent++;
+                } else {
+                    log.warn("Публикация из очереди не удалась для id={} (search_id={})", v.getId(), entry.getKey());
+                }
             }
-            if (dueForSearch.size() > 1) {
-                log.info("Очередь публикации (search_id={}): просрочено {} постов, отправлен 1 — остальные следующими тиками",
-                    entry.getKey(), dueForSearch.size());
+            if (dueForSearch.size() > sent) {
+                log.info("Очередь публикации (search_id={}): просрочено {} постов, отправлено {} — остальные следующими тиками",
+                    entry.getKey(), dueForSearch.size(), sent);
             }
         }
     }

@@ -1102,4 +1102,123 @@ class VacancyPipelineServiceTest {
 
         assertEquals(0, saved, "уже сохранённое на прошлом прогоне сообщение не должно сохраняться повторно");
     }
+
+    // ── публикация батчами + динамический темп + окно 07:00–23:00 ──
+
+    private static long dynamicPaceMinutes(Integer basePaceMinutes, int queuedBatches) throws Exception {
+        Method m = VacancyPipelineService.class.getDeclaredMethod("dynamicPaceMinutes", Integer.class, int.class);
+        m.setAccessible(true);
+        return (long) m.invoke(null, basePaceMinutes, queuedBatches);
+    }
+
+    private static java.time.Instant pushPastNightWindow(java.time.Instant candidate) throws Exception {
+        Method m = VacancyPipelineService.class.getDeclaredMethod("pushPastNightWindow", java.time.Instant.class);
+        m.setAccessible(true);
+        return (java.time.Instant) m.invoke(null, candidate);
+    }
+
+    private static java.time.Instant localInstant(int hour, int minute) {
+        return java.time.ZonedDateTime.now(java.time.ZoneId.systemDefault())
+            .withHour(hour).withMinute(minute).withSecond(0).withNano(0).toInstant();
+    }
+
+    @Test
+    void dynamicPaceMinutes_emptyQueue_usesBasePace() throws Exception {
+        assertEquals(5, dynamicPaceMinutes(5, 0));
+    }
+
+    @Test
+    void dynamicPaceMinutes_deepQueue_shortensInterval() throws Exception {
+        // base=5, REFERENCE_QUEUE_BATCHES=5, 6 батчей в очереди — чуть глубже эталона,
+        // ещё выше MIN_PACE_MINUTES (=3), так что виден именно эффект укорачивания,
+        // а не отдельно проверяемый clamp.
+        assertEquals(4, dynamicPaceMinutes(5, 6), "5*5/6 = 4.16 -> округление вниз до 4, короче базовых 5 мин");
+    }
+
+    @Test
+    void dynamicPaceMinutes_shallowQueue_lengthensInterval() throws Exception {
+        // base=5, REFERENCE_QUEUE_BATCHES=5, всего 1 батч в очереди — впятеро реже эталона.
+        assertEquals(25, dynamicPaceMinutes(5, 1));
+    }
+
+    @Test
+    void dynamicPaceMinutes_extremelyDeepQueue_neverBelowMinPace() throws Exception {
+        assertEquals(3, dynamicPaceMinutes(5, 10_000), "не должен уходить ниже MIN_PACE_MINUTES независимо от размера очереди");
+    }
+
+    @Test
+    void dynamicPaceMinutes_extremelyShallowQueue_neverAboveMaxPace() throws Exception {
+        assertEquals(60, dynamicPaceMinutes(100, 1), "не должен уходить выше MAX_PACE_MINUTES независимо от базового темпа");
+    }
+
+    @Test
+    void pushPastNightWindow_daytimeInstant_unchanged() throws Exception {
+        java.time.Instant daytime = localInstant(14, 30);
+        assertEquals(daytime, pushPastNightWindow(daytime));
+    }
+
+    @Test
+    void pushPastNightWindow_earlyMorningInstant_pushedToWindowStartSameDay() throws Exception {
+        java.time.Instant earlyMorning = localInstant(2, 0);
+        java.time.Instant result = pushPastNightWindow(earlyMorning);
+        java.time.ZonedDateTime zdt = result.atZone(java.time.ZoneId.systemDefault());
+        assertEquals(7, zdt.getHour());
+        assertEquals(localInstant(2, 0).atZone(java.time.ZoneId.systemDefault()).toLocalDate(), zdt.toLocalDate(),
+            "02:00 должно сдвинуться на 07:00 ТОГО ЖЕ дня, не следующего");
+    }
+
+    @Test
+    void pushPastNightWindow_lateEveningInstant_pushedToWindowStartNextDay() throws Exception {
+        java.time.Instant lateEvening = localInstant(23, 30);
+        java.time.Instant result = pushPastNightWindow(lateEvening);
+        java.time.ZonedDateTime zdt = result.atZone(java.time.ZoneId.systemDefault());
+        java.time.ZonedDateTime originalZdt = lateEvening.atZone(java.time.ZoneId.systemDefault());
+        assertEquals(7, zdt.getHour());
+        assertEquals(originalZdt.toLocalDate().plusDays(1), zdt.toLocalDate(),
+            "23:30 должно сдвинуться на 07:00 СЛЕДУЮЩЕГО дня");
+    }
+
+    /** Captures enqueuePublish calls; findQueueTailTime/countQueued report an empty queue. */
+    private static class FakeQueueRepo extends VacancyRepository {
+        final List<Long> enqueuedIds = new ArrayList<>();
+        final List<String> enqueuedPublishAts = new ArrayList<>();
+        FakeQueueRepo() { super(null); }
+        @Override
+        public java.util.Optional<String> findQueueTailTime(Long searchId) { return java.util.Optional.empty(); }
+        @Override
+        public int countQueued(Long searchId) { return 0; }
+        @Override
+        public void enqueuePublish(List<Long> ids, List<String> publishAts) {
+            enqueuedIds.addAll(ids);
+            enqueuedPublishAts.addAll(publishAts);
+        }
+    }
+
+    @Test
+    void enqueuePublicPosts_batchesFiveVacanciesPerDueTime() throws Exception {
+        // 12 одобренных вакансий должны лечь в очередь по 5 — три группы с тремя разными
+        // (не более) queued_publish_at, а не 12 разных моментов времени.
+        FakeQueueRepo repo = new FakeQueueRepo();
+        VacancyPipelineService svc = new VacancyPipelineService(
+            null, null, null, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null);
+        SearchJob job = tgJob();
+        job.chatId = "-100123";
+        job.publishPaceMinutes = 5;
+
+        List<Vacancy> approved = new ArrayList<>();
+        for (int i = 0; i < 12; i++) {
+            Vacancy v = new Vacancy();
+            v.setId((long) (i + 1));
+            v.setAiScore(80);
+            approved.add(v);
+        }
+
+        Method m = VacancyPipelineService.class.getDeclaredMethod("sendPublicPosts", List.class, SearchJob.class);
+        m.setAccessible(true);
+        m.invoke(svc, approved, job);
+
+        assertEquals(12, repo.enqueuedIds.size());
+        java.util.Set<String> distinctTimes = new java.util.HashSet<>(repo.enqueuedPublishAts);
+        assertEquals(3, distinctTimes.size(), "12 вакансий по 5 в батче -> 3 разных момента публикации (5+5+2)");
+    }
 }

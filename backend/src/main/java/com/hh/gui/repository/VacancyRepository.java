@@ -551,6 +551,15 @@ public class VacancyRepository {
         return Optional.ofNullable(tail);
     }
 
+    /** How many vacancies are currently queued (sent or not) for this search — feeds the
+     *  dynamic publish-pace calculation (see VacancyPipelineService.dynamicPaceMinutes). */
+    public int countQueued(Long searchId) {
+        Integer count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM vacancies WHERE search_id = ? AND notified = 0 AND queued_publish_at IS NOT NULL",
+            Integer.class, searchId);
+        return count != null ? count : 0;
+    }
+
     /** Queued vacancies whose turn has come and haven't been sent yet. */
     public List<Vacancy> findDueQueuedPublications(String nowIso, int limit) {
         return jdbc.query(
