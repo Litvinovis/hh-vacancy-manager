@@ -653,6 +653,25 @@ public class VacancyRepository {
     }
 
     /**
+     * Notified or queued vacancies whose employer is still an unresolved "@channel"
+     * placeholder (see discoverFromTelegram's fallback) — feeds
+     * VacancyPipelineService.dedupeBySimilarity's cross-CHANNEL duplicate check: the
+     * same posting repeated on two different channels, neither naming a real
+     * employer, is invisible to findNotifiedByEmployer's per-employer-key scoping
+     * since the two channels' fallback employer values differ. LIMIT 100: same
+     * unbounded-backlog concern as findNotifiedByEmployer, just a wider pool since
+     * this spans every channel instead of one employer.
+     */
+    public List<Vacancy> findWithUnresolvedEmployer(String person, String searchName) {
+        return jdbc.query(
+            "SELECT * FROM vacancies WHERE person=? AND search_name=? " +
+            "AND (notified=1 OR queued_publish_at IS NOT NULL) " +
+            "AND COALESCE(NULLIF(employer_name,''), company) LIKE '@%' " +
+            "ORDER BY updated_at DESC LIMIT 100",
+            rowMapper, person, searchName);
+    }
+
+    /**
      * Approved postings due for a liveness re-check on hh.ru (see
      * VacancyPipelineService.checkVacancyFreshness): only 'yes' verdicts anyone
      * actually sees, not yet known closed, last confirmed (or first saved) more
