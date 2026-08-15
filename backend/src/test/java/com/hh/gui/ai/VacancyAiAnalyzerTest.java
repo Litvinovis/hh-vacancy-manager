@@ -303,6 +303,46 @@ class VacancyAiAnalyzerTest {
     }
 
     @Test
+    void parseResponse_salaryAndCompanyPresent_parsedIntoAiResult() throws Exception {
+        String json = "{\"choices\":[{\"message\":{\"content\":"
+            + "\"[{\\\"id\\\":\\\"1\\\",\\\"score\\\":80,\\\"verdict\\\":\\\"yes\\\",\\\"reason\\\":\\\"ok\\\","
+            + "\\\"salaryFrom\\\":60000,\\\"salaryTo\\\":90000,\\\"currency\\\":\\\"RUR\\\",\\\"company\\\":\\\"OSNOVA\\\"}]\"}}]}";
+        List<VacancyAiAnalyzer.AiResult> results = parseResponseOk(json);
+        assertEquals(1, results.size());
+        VacancyAiAnalyzer.AiResult r = results.get(0);
+        assertEquals(60000, r.salaryFrom());
+        assertEquals(90000, r.salaryTo());
+        assertEquals("RUR", r.currency());
+        assertEquals("OSNOVA", r.company());
+    }
+
+    @Test
+    void parseResponse_salaryAndCompanyNull_leavesAiResultFieldsNull() throws Exception {
+        String json = "{\"choices\":[{\"message\":{\"content\":"
+            + "\"[{\\\"id\\\":\\\"1\\\",\\\"score\\\":80,\\\"verdict\\\":\\\"yes\\\",\\\"reason\\\":\\\"ok\\\","
+            + "\\\"salaryFrom\\\":null,\\\"salaryTo\\\":null,\\\"currency\\\":null,\\\"company\\\":null}]\"}}]}";
+        List<VacancyAiAnalyzer.AiResult> results = parseResponseOk(json);
+        assertEquals(1, results.size());
+        VacancyAiAnalyzer.AiResult r = results.get(0);
+        assertNull(r.salaryFrom());
+        assertNull(r.salaryTo());
+        assertNull(r.currency());
+        assertNull(r.company());
+    }
+
+    @Test
+    void parseResponse_salaryFieldsAbsentEntirely_doesNotThrow() throws Exception {
+        // Prescreen responses use a different schema that never includes these —
+        // absence, not just null, must also parse cleanly.
+        String json = "{\"choices\":[{\"message\":{\"content\":"
+            + "\"[{\\\"id\\\":\\\"1\\\",\\\"score\\\":80,\\\"verdict\\\":\\\"yes\\\",\\\"reason\\\":\\\"ok\\\"}]\"}}]}";
+        List<VacancyAiAnalyzer.AiResult> results = parseResponseOk(json);
+        assertEquals(1, results.size());
+        assertNull(results.get(0).salaryFrom());
+        assertNull(results.get(0).company());
+    }
+
+    @Test
     void parseResponse_missingId_skipsItInsteadOfThrowing() throws Exception {
         String json = "{\"choices\":[{\"message\":{\"content\":"
             + "\"[{\\\"score\\\":80,\\\"verdict\\\":\\\"yes\\\",\\\"reason\\\":\\\"ok\\\"},"

@@ -1252,7 +1252,7 @@ public class VacancyPipelineService {
             Set<String> returnedIds = new HashSet<>();
             for (var r : results) {
                 vacancyRepo.updateAiResult(r.hhId(), job.personName, job.searchName, r.score(), r.verdict(), r.reason(),
-                    r.noveltyColor(), r.noveltyNote());
+                    r.noveltyColor(), r.noveltyNote(), r.salaryFrom(), r.salaryTo(), r.currency(), r.company());
                 returnedIds.add(r.hhId());
                 aiAnalyzed++;
                 // Fan the verdict out to this representative's clone group members.
@@ -1260,7 +1260,8 @@ public class VacancyPipelineService {
                 for (Vacancy member : group) {
                     if (member.getHhId().equals(r.hhId())) continue;
                     vacancyRepo.updateAiResult(member.getHhId(), job.personName, job.searchName,
-                        r.score(), r.verdict(), r.reason(), r.noveltyColor(), r.noveltyNote());
+                        r.score(), r.verdict(), r.reason(), r.noveltyColor(), r.noveltyNote(),
+                        r.salaryFrom(), r.salaryTo(), r.currency(), r.company());
                     deduped++;
                     metrics.recordVacanciesDeduped(1);
                 }
