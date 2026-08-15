@@ -15,6 +15,7 @@ import com.hh.gui.repository.SearchRepository;
 import com.hh.gui.repository.VacancyRepository;
 import com.hh.gui.util.DedupKeys;
 import com.hh.gui.util.SalaryFormatter;
+import com.hh.gui.util.TelegramPostParser;
 import com.hh.gui.util.TextSimilarity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -373,231 +374,6 @@ public class VacancyPipelineService {
         return saved;
     }
 
-    private static final java.util.regex.Pattern HH_LINK_PATTERN =
-        java.util.regex.Pattern.compile("(?:https?://)?[a-z0-9-]+\\.hh\\.ru/vacancy/(\\d+)", java.util.regex.Pattern.CASE_INSENSITIVE);
-
-    // Best-effort employer extraction for Telegram posts with no first-party job-board
-    // link (see discoverFromTelegram) — mirrors the legacy collector/tg_parser.py
-    // heuristic. Channel posts rarely label the field explicitly; when they don't,
-    // the channel itself becomes the "employer" for dedup purposes (see below).
-    // The colon is required (not just optional whitespace): verified live that without
-    // it, this matched ordinary sentences that merely contain the word "компания" —
-    // e.g. "Компания развивает собственные бренды..." — and captured whatever followed
-    // as the "employer", nonsense unrelated to who's actually hiring.
-    // "организация" dropped from the keyword list: verified live that some posts use it
-    // as a DUTIES sub-heading ("Обязанности: ... Организация:\n— ставить задачи...") —
-    // meaning "organizing work", not "the hiring organization" — and the colon-required
-    // rule above doesn't disambiguate that usage from a real "Организация: ООО Ромашка"
-    // label, so this word is inherently unsafe as a label keyword here.
-    private static final java.util.regex.Pattern TG_EMPLOYER_PATTERN =
-        java.util.regex.Pattern.compile("(?:компания|фирма|работодатель)\\s*:\\s*([^\\n,]{2,60})",
-            java.util.regex.Pattern.CASE_INSENSITIVE);
-    // A labeled value that's actually a bullet-list start ("Организация:\n— ставить
-    // задачи...") begins with a list marker on the captured text — reject those even
-    // for the three keywords kept above, as a general safety net.
-    private static final java.util.regex.Pattern LIST_MARKER_START =
-        java.util.regex.Pattern.compile("^[\\s]*[-—•*]");
-
-    // Verified live: most titles that DO name an employer follow "Роль в/для
-    // КомпанияName" ("Брендинг-дизайнер в Emerging Travel Group", "SMM Manager в
-    // GipsyTeam") — a trailing capitalized run after "в"/"для" is a much better bet
-    // than the raw "@channel" fallback, which is what readers used to see as the
-    // "employer" for every Path B post regardless of whether the title clearly named one.
-    // Requiring a capital first letter is what keeps this from misfiring on ordinary
-    // lowercase phrases ("для международных проектов", "для долгосрочного сотрудничества").
-    private static final java.util.regex.Pattern TITLE_TRAILING_EMPLOYER =
-        java.util.regex.Pattern.compile("(?:\\sв|\\sдля)\\s+([A-ZА-ЯЁ][\\w\\-&+./]*(?:\\s[A-ZА-ЯЁ0-9][\\w\\-&+./]*)*)\\s*$",
-            java.util.regex.Pattern.UNICODE_CASE);
-
-    // "Роль в Telegram" / "для YouTube-проекта" name the PLATFORM the work happens on,
-    // not who's hiring — TITLE_TRAILING_EMPLOYER can't distinguish that from a real
-    // company name syntactically, so reject a capture that starts with one of these.
-    private static final java.util.regex.Pattern PLATFORM_NOT_EMPLOYER = java.util.regex.Pattern.compile(
-        "^(?:Telegram|Instagram|YouTube|TikTok|VK|WhatsApp|Facebook|Zoom|LinkedIn)\\b", java.util.regex.Pattern.CASE_INSENSITIVE);
-
-    private static String extractTgEmployer(String text, String title, String channel) {
-        java.util.regex.Matcher m = TG_EMPLOYER_PATTERN.matcher(text);
-        if (m.find() && !LIST_MARKER_START.matcher(m.group(1)).find()) {
-            return m.group(1).trim();
-        }
-        java.util.regex.Matcher titleMatch = TITLE_TRAILING_EMPLOYER.matcher(title);
-        if (titleMatch.find() && !PLATFORM_NOT_EMPLOYER.matcher(titleMatch.group(1)).find()) {
-            return titleMatch.group(1).trim();
-        }
-        // No dedup key can be computed without SOME employer value (see DedupKeys) —
-        // falling back to the channel keeps same-channel reposts/duplicates catchable
-        // even though it can't catch the same posting cross-channel.
-        return "@" + channel;
-    }
-
-    private record TgSalary(Integer from, Integer to, String currency) {}
-
-    // Path B hh_id format is "tg_<channel>_<messageId>" (see tg-scraper/server.js's
-    // `id: tg_${channel}_${realId}`) — channel usernames can themselves contain
-    // underscores (e.g. "rabota_is_doma_vakansii"), so a naive split(_) would misparse;
-    // greedy .+ backing off only enough to satisfy the trailing \d+$ anchor handles that
-    // correctly. Used to tag TelegramMetrics by channel without adding a DB column —
-    // returns null for Path A (real hh.ru numeric ids) or hh.ru-sourced vacancies.
-    private static final java.util.regex.Pattern TG_CHANNEL_FROM_HHID = java.util.regex.Pattern.compile("^tg_(.+)_\\d+$");
-
-    private static String extractTgChannelFromHhId(String hhId) {
-        if (hhId == null) return null;
-        java.util.regex.Matcher m = TG_CHANNEL_FROM_HHID.matcher(hhId);
-        return m.matches() ? m.group(1) : null;
-    }
-
-    // Tier 1 (high confidence): an explicit label directly in front of the number(s) —
-    // "Заработная плата от 40000 рублей", "Оплата: 80 000 рублей", "З/п 55000 RUR".
-    // The label itself is strong enough evidence that a currency token isn't required.
-    private static final java.util.regex.Pattern LABELED_SALARY = java.util.regex.Pattern.compile(
-        "(?:заработная\\s+плата|зарплата|з/?п|оплата)\\s*:?\\s*(?:от\\s+)?" +
-        "(\\d[\\d\\s]{2,8}\\d)(?:\\s*[-–—]\\s*(?:до\\s+)?(\\d[\\d\\s]{2,8}\\d))?" +
-        "\\s*(₽|руб(?:лей|\\.)?|RUR|RUB|\\$|USD|€|EUR)?",
-        java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.UNICODE_CASE);
-
-    // Tier 2 (position-restricted): a line that's ENTIRELY a number range + currency,
-    // nothing else — the "60 000 – 250 000 ₽" line these bot-formatted posts put right
-    // under the title (mirrors hh.ru's own salary-widget style). Only scanned within the
-    // first few lines (see extractTgSalary) — the same bare pattern found deep in a post
-    // is far more likely to be an unrelated number (a boost-price footer, a phone number)
-    // than a salary, so it's deliberately NOT scanned across the whole text.
-    private static final java.util.regex.Pattern BARE_SALARY_LINE = java.util.regex.Pattern.compile(
-        "^(?:от\\s+)?(\\d[\\d\\s]{2,8}\\d)(?:\\s*[-–—]\\s*(?:до\\s+)?(\\d[\\d\\s]{2,8}\\d))?" +
-        "\\s*(₽|руб(?:лей|\\.)?|RUR|RUB|\\$|USD|€|EUR)\\s*$",
-        java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.UNICODE_CASE);
-
-    private static final int SALARY_SCAN_LINES = 4;
-
-    // Any http(s) link that ISN'T a t.me/telegram.me self-link — verified live on
-    // kadrout: its bot posts a short teaser ending in "Посмотреть вакансию полностью"
-    // linking to kadrout.ru/vacancies/... (the full, untruncated listing on the
-    // aggregator's own site). Trailing punctuation is stripped since a URL at the end
-    // of a sentence commonly picks up a period/comma/closing paren from the prose.
-    private static final java.util.regex.Pattern EXTERNAL_URL = java.util.regex.Pattern.compile(
-        "https?://(?!t\\.me/|telegram\\.me/)\\S+", java.util.regex.Pattern.CASE_INSENSITIVE);
-
-    private static String extractTgExternalUrl(String text) {
-        java.util.regex.Matcher m = EXTERNAL_URL.matcher(text);
-        if (!m.find()) return null;
-        return m.group().replaceAll("[.,;:!?)\\]]+$", "");
-    }
-
-    // Fallback "apply here" contact for Path B posts with no first-party job-board link
-    // and no other external URL either — verified live (freelancce channel, "Отклик:
-    // sasha@fond-igra.ru") that the public post's "👉" line otherwise fell back to the
-    // Telegram post's OWN link (v.getUrl() defaults to msg.link() — see discoverFromTelegram),
-    // which just points a reader back at the post they're already reading, not at anywhere
-    // they can actually apply. Tried in order: email is unambiguous on its own; a full
-    // 11-digit RU phone number's format is distinctive enough to need no keyword either;
-    // a personal @username is common enough as an unrelated mention (the channel's own
-    // handle, other posts' employers) that it's only trusted next to an actual "как
-    // откликнуться" style keyword on the same line.
-    private static final java.util.regex.Pattern CONTACT_EMAIL = java.util.regex.Pattern.compile(
-        "[\\w.+-]+@[\\w-]+\\.[a-zA-Z]{2,}");
-    private static final java.util.regex.Pattern CONTACT_PHONE = java.util.regex.Pattern.compile(
-        "(?:\\+7|8)[\\s(-]*\\d{3}[\\s)-]*\\d{3}[\\s-]*\\d{2}[\\s-]*\\d{2}(?!\\d)");
-    private static final java.util.regex.Pattern CONTACT_PERSONAL_USERNAME = java.util.regex.Pattern.compile(
-        "(?:напиши(?:те)?|пишите|отклик|контакт|обращайтесь|связаться|для\\s+связи)\\S*[:\\s].*?(@[a-zA-Z0-9_]{5,})",
-        java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.UNICODE_CASE);
-
-    private record TgContact(String emoji, String display) {}
-
-    private static TgContact extractTgContact(String text) {
-        if (text == null) return null;
-        java.util.regex.Matcher email = CONTACT_EMAIL.matcher(text);
-        if (email.find()) return new TgContact("📧", email.group());
-        java.util.regex.Matcher phone = CONTACT_PHONE.matcher(text);
-        if (phone.find()) return new TgContact("📞", phone.group().trim());
-        java.util.regex.Matcher personal = CONTACT_PERSONAL_USERNAME.matcher(text);
-        if (personal.find()) return new TgContact("💬", "https://t.me/" + personal.group(1).substring(1));
-        return null;
-    }
-
-    private static final java.util.regex.Pattern TG_SELF_LINK = java.util.regex.Pattern.compile(
-        "^https?://t\\.me/[^/]+/\\d+$", java.util.regex.Pattern.CASE_INSENSITIVE);
-
-    private static Integer parseSalaryNumber(String raw) {
-        if (raw == null) return null;
-        try {
-            int n = Integer.parseInt(raw.replaceAll("\\s", ""));
-            return n > 0 ? n : null;
-        } catch (NumberFormatException e) {
-            return null;
-        }
-    }
-
-    private static String normalizeCurrency(String raw) {
-        if (raw == null || raw.isBlank()) return "RUR";
-        String r = raw.toLowerCase();
-        if (r.contains("$") || r.contains("usd")) return "USD";
-        if (r.contains("€") || r.contains("eur")) return "EUR";
-        return "RUR";
-    }
-
-    /**
-     * Best-effort salary extraction for Path B posts (see discoverFromTelegram) —
-     * deliberately conservative: a wrong salary actively misleads a reader in a way
-     * "not specified" never does, so this only accepts patterns confident enough to
-     * be worth the small extra completeness (see LABELED_SALARY / BARE_SALARY_LINE
-     * javadoc for what each tier requires). Anything else stays unset, same as before.
-     */
-    private static TgSalary extractTgSalary(String text) {
-        java.util.regex.Matcher labeled = LABELED_SALARY.matcher(text);
-        if (labeled.find()) {
-            Integer from = parseSalaryNumber(labeled.group(1));
-            Integer to = parseSalaryNumber(labeled.group(2));
-            if (from != null || to != null) {
-                return new TgSalary(from, to, normalizeCurrency(labeled.group(3)));
-            }
-        }
-        String[] lines = text.split("\n");
-        for (int i = 0; i < Math.min(lines.length, SALARY_SCAN_LINES); i++) {
-            String line = stripTgArtifacts(lines[i]);
-            java.util.regex.Matcher bare = BARE_SALARY_LINE.matcher(line);
-            if (bare.matches()) {
-                Integer from = parseSalaryNumber(bare.group(1));
-                Integer to = parseSalaryNumber(bare.group(2));
-                if (from != null || to != null) {
-                    return new TgSalary(from, to, normalizeCurrency(bare.group(3)));
-                }
-            }
-        }
-        return null;
-    }
-
-    // Verified live: many channels (e.g. frilanser_vacansii) open every post with a
-    // hashtag line (#вакансия #smm #удаленно) before the actual role name on the next
-    // non-empty line — without skipping it, every such vacancy's title was literally
-    // its hashtags, not a job title.
-    private static final java.util.regex.Pattern HASHTAG_ONLY_LINE =
-        java.util.regex.Pattern.compile("^(?:#\\S+\\s*)+$");
-    // Some channels format the title line as a markdown heading with a generic
-    // "Вакансия:" prefix ("### Вакансия: Асессор") — strip both so the title is just
-    // the role name, matching how every other channel's plain-text title line reads.
-    // CASE_INSENSITIVE alone only folds US-ASCII case in Java — Cyrillic needs
-    // UNICODE_CASE too, or "Вакансия" (capital В) silently fails to match "вакансия"
-    // and only the "###" heading gets stripped, leaving the prefix behind.
-    private static final java.util.regex.Pattern MD_HEADING_AND_VACANCY_PREFIX =
-        java.util.regex.Pattern.compile("^#{1,6}\\s*(?:вакансия\\s*:?\\s*)?",
-            java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.UNICODE_CASE);
-    // Telegram's rich-text editor prepends a zero-width space to some posts (styling
-    // artifact, not visible in the app) — String.strip() doesn't treat it as whitespace,
-    // so left alone it silently survives into the title/description.
-    private static String stripTgArtifacts(String s) {
-        return s.replace("​", "").strip();
-    }
-
-    private static String extractTgTitle(String text) {
-        for (String line : text.split("\n")) {
-            String t = stripTgArtifacts(line);
-            if (t.isEmpty() || HASHTAG_ONLY_LINE.matcher(t).matches()) continue;
-            t = MD_HEADING_AND_VACANCY_PREFIX.matcher(t).replaceFirst("").strip();
-            if (t.isEmpty()) continue;
-            return t.length() > 150 ? t.substring(0, 147) + "..." : t;
-        }
-        return text.length() > 150 ? text.substring(0, 147) + "..." : text;
-    }
-
     /**
      * EXPERIMENTAL, manual-trigger only (see runFullPipelineFromUrl for the analogous
      * hh.ru-URL feature) — reads configured public Telegram channels via the tg-scraper
@@ -673,7 +449,7 @@ public class VacancyPipelineService {
             for (TelegramClient.TelegramMessage msg : result.items()) {
                 if (msg.text() == null || msg.text().isBlank()) continue;
 
-                java.util.regex.Matcher hhLink = HH_LINK_PATTERN.matcher(msg.text());
+                TelegramPostParser.HhLink hhLink = TelegramPostParser.hhLink(msg.text());
                 Vacancy v = new Vacancy();
                 v.setCreatedAt(Instant.now().toString());
                 v.setPerson(job.personName);
@@ -684,16 +460,14 @@ public class VacancyPipelineService {
                 v.setSourceQuery(job.searchName);
                 v.setUrl(msg.link());
 
-                if (hhLink.find()) {
+                if (hhLink != null) {
                     // Path A: reuse the normal hh.ru pipeline — this Telegram post was
                     // just how the hh_id was discovered. The link readers get is the real
                     // hh.ru vacancy URL (matches how RSS/URL discovery set it), not the
                     // Telegram post it happened to be found in.
-                    String matchedUrl = hhLink.group();
-                    if (!matchedUrl.matches("(?i)https?://.*")) matchedUrl = "https://" + matchedUrl;
-                    v.setUrl(matchedUrl);
-                    v.setHhId(hhLink.group(1));
-                    v.setTitle(extractTgTitle(msg.text()));
+                    v.setUrl(hhLink.url());
+                    v.setHhId(hhLink.hhId());
+                    v.setTitle(TelegramPostParser.title(msg.text()));
                     v.setSource("hh");
                     v.setStatus("new");
                     v.setScrapeStatus("pending");
@@ -708,15 +482,15 @@ public class VacancyPipelineService {
                     // live, that link (not a job board we have a scraper for, so still Path
                     // B) is a far more useful "read more" destination for readers than the
                     // truncated Telegram post itself, so prefer it as the URL when present.
-                    String externalUrl = extractTgExternalUrl(msg.text());
+                    String externalUrl = TelegramPostParser.externalUrl(msg.text());
                     if (externalUrl != null) v.setUrl(externalUrl);
-                    String title = extractTgTitle(msg.text());
-                    String employer = extractTgEmployer(msg.text(), title, channel);
+                    String title = TelegramPostParser.title(msg.text());
+                    String employer = TelegramPostParser.employer(msg.text(), title, channel);
                     v.setHhId(msg.id());
                     v.setTitle(title);
                     v.setCompany(employer);
                     v.setDescription(msg.text());
-                    TgSalary salary = extractTgSalary(msg.text());
+                    TelegramPostParser.Salary salary = TelegramPostParser.salary(msg.text());
                     if (salary != null) {
                         v.setSalaryFrom(salary.from());
                         v.setSalaryTo(salary.to());
@@ -758,7 +532,7 @@ public class VacancyPipelineService {
             try {
                 vacancyRepo.save(v);
                 saved++;
-                telegramMetrics.recordCollected(extractTgChannelFromHhId(v.getHhId()));
+                telegramMetrics.recordCollected(TelegramPostParser.channelFromHhId(v.getHhId()));
             } catch (Exception e) {
                 log.warn("Не удалось сохранить Telegram-кандидата {} ({} · {}): {}",
                     v.getHhId(), job.personName, job.searchName, e.getMessage());
@@ -1313,7 +1087,7 @@ public class VacancyPipelineService {
             for (var r : results) {
                 vacancyRepo.updateAiResult(r.hhId(), job.personName, job.searchName, r.score(), r.verdict(), r.reason(),
                     r.noveltyColor(), r.noveltyNote(), r.salaryFrom(), r.salaryTo(), r.currency(), r.company(), r.title());
-                telegramMetrics.recordVerdict(extractTgChannelFromHhId(r.hhId()), r.verdict());
+                telegramMetrics.recordVerdict(TelegramPostParser.channelFromHhId(r.hhId()), r.verdict());
                 returnedIds.add(r.hhId());
                 aiAnalyzed++;
                 // Fan the verdict out to this representative's clone group members.
@@ -1323,7 +1097,7 @@ public class VacancyPipelineService {
                     vacancyRepo.updateAiResult(member.getHhId(), job.personName, job.searchName,
                         r.score(), r.verdict(), r.reason(), r.noveltyColor(), r.noveltyNote(),
                         r.salaryFrom(), r.salaryTo(), r.currency(), r.company(), r.title());
-                    telegramMetrics.recordVerdict(extractTgChannelFromHhId(member.getHhId()), r.verdict());
+                    telegramMetrics.recordVerdict(TelegramPostParser.channelFromHhId(member.getHhId()), r.verdict());
                     deduped++;
                     metrics.recordVacanciesDeduped(1);
                 }
@@ -1802,7 +1576,7 @@ public class VacancyPipelineService {
                 ? dueForSearch.subList(0, PUBLISH_BATCH_SIZE) : dueForSearch;
             if (telegramNotifier.sendViaChannelBot(formatPublicPostsBatch(batch), chatId)) {
                 vacancyRepo.markNotified(batch.stream().map(Vacancy::getId).toList());
-                for (Vacancy v : batch) telegramMetrics.recordPublished(extractTgChannelFromHhId(v.getHhId()));
+                for (Vacancy v : batch) telegramMetrics.recordPublished(TelegramPostParser.channelFromHhId(v.getHhId()));
             } else {
                 log.warn("Публикация из очереди не удалась для батча из {} вакансий (search_id={})", batch.size(), entry.getKey());
             }
@@ -1962,11 +1736,11 @@ public class VacancyPipelineService {
 
     /** The "👉 <url>" line — falls back to an email/phone/personal-contact extracted from
      *  the description when the stored url is just the Telegram post's own self-link (see
-     *  extractTgContact's javadoc for why that's otherwise a dead end for the reader). */
+     *  TelegramPostParser.isSelfLink for why that's otherwise a dead end for the reader). */
     private static String formatApplyLine(Vacancy v) {
         String url = v.getUrl();
-        if (url != null && TG_SELF_LINK.matcher(url).matches()) {
-            TgContact contact = extractTgContact(v.getDescription());
+        if (TelegramPostParser.isSelfLink(url)) {
+            TelegramPostParser.Contact contact = TelegramPostParser.contact(v.getDescription());
             if (contact != null) return String.format("%s %s\n", contact.emoji(), contact.display());
         }
         return url != null && !url.isBlank() ? String.format("👉 %s\n", url) : "";
