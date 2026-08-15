@@ -331,6 +331,25 @@ class VacancyAiAnalyzerTest {
     }
 
     @Test
+    void parseResponse_titlePresent_parsedIntoAiResult() throws Exception {
+        String json = "{\"choices\":[{\"message\":{\"content\":"
+            + "\"[{\\\"id\\\":\\\"1\\\",\\\"score\\\":80,\\\"verdict\\\":\\\"yes\\\",\\\"reason\\\":\\\"ok\\\","
+            + "\\\"title\\\":\\\"Таргетолог\\\"}]\"}}]}";
+        List<VacancyAiAnalyzer.AiResult> results = parseResponseOk(json);
+        assertEquals(1, results.size());
+        assertEquals("Таргетолог", results.get(0).title());
+    }
+
+    @Test
+    void parseResponse_titleNullOrAbsent_leavesAiResultTitleNull() throws Exception {
+        String json = "{\"choices\":[{\"message\":{\"content\":"
+            + "\"[{\\\"id\\\":\\\"1\\\",\\\"score\\\":80,\\\"verdict\\\":\\\"yes\\\",\\\"reason\\\":\\\"ok\\\",\\\"title\\\":null}]\"}}]}";
+        List<VacancyAiAnalyzer.AiResult> results = parseResponseOk(json);
+        assertEquals(1, results.size());
+        assertNull(results.get(0).title());
+    }
+
+    @Test
     void parseResponse_salaryFieldsAbsentEntirely_doesNotThrow() throws Exception {
         // Prescreen responses use a different schema that never includes these —
         // absence, not just null, must also parse cleanly.
