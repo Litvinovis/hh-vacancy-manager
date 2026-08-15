@@ -927,6 +927,111 @@ class VacancyPipelineServiceTest {
     }
 
     @Test
+    void discoverFromTelegram_hashtagLeadLine_titleIsTheRoleNameNotTheHashtags() {
+        // Живой пример: frilanser_vacansii и похожие каналы открывают каждый пост строкой
+        // хэштегов (#вакансия #smm #удаленно) — без пропуска этой строки заголовком
+        // вакансии становился набор хэштегов, а не должность.
+        String text = "​#вакансия #smm #онлайншкола #удаленно\n\n SMM-специалист в онлайн-школу вязания Sviteroff\n\nЗадачи: ...";
+        FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
+            true, null, List.of(tgMsg("tg_testchan_99", text)))));
+        FakeTgRepo repo = new FakeTgRepo(Set.of());
+        VacancyPipelineService svc = new VacancyPipelineService(
+            null, null, tg, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null);
+
+        svc.discoverFromTelegram(tgJob(), List.of("testchan"));
+
+        assertEquals(1, repo.saved.size());
+        assertEquals("SMM-специалист в онлайн-школу вязания Sviteroff", repo.saved.get(0).getTitle());
+    }
+
+    @Test
+    void discoverFromTelegram_markdownHeadingTitle_stripsHeadingAndVacancyPrefix() {
+        // Живой пример: некоторые каналы форматируют первую строку как markdown-заголовок
+        // с общим префиксом ("### Вакансия: Асессор") — заголовком должна остаться
+        // только сама должность, без "###" и "Вакансия:".
+        String text = "### Вакансия: Асессор\n\nКаждый день миллионы людей смотрят...";
+        FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
+            true, null, List.of(tgMsg("tg_testchan_100", text)))));
+        FakeTgRepo repo = new FakeTgRepo(Set.of());
+        VacancyPipelineService svc = new VacancyPipelineService(
+            null, null, tg, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null);
+
+        svc.discoverFromTelegram(tgJob(), List.of("testchan"));
+
+        assertEquals(1, repo.saved.size());
+        assertEquals("Асессор", repo.saved.get(0).getTitle());
+    }
+
+    @Test
+    void discoverFromTelegram_titleNamesEmployer_extractsItInsteadOfChannelFallback() {
+        // company идёт прямо в опубликованный пост (formatVacancyEntry) — "@channel"
+        // вместо реального работодателя видит каждый читатель канала. Заголовок вида
+        // "Роль в/для КомпанияName" — самый частый способ узнать работодателя без
+        // явного "Компания:" в тексте.
+        String text = "Брендинг-дизайнер в Emerging Travel Group\n\nЗадачи: ...";
+        FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
+            true, null, List.of(tgMsg("tg_testchan_55", text)))));
+        FakeTgRepo repo = new FakeTgRepo(Set.of());
+        VacancyPipelineService svc = new VacancyPipelineService(
+            null, null, tg, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null);
+
+        svc.discoverFromTelegram(tgJob(), List.of("testchan"));
+
+        assertEquals("Emerging Travel Group", repo.saved.get(0).getCompany());
+    }
+
+    @Test
+    void discoverFromTelegram_titleHasNoNamedEmployer_fallsBackToChannel() {
+        // "для международных проектов" — lowercase after "для", не похоже на название
+        // компании: должен остаться безопасный fallback на канал, а не мусор вроде
+        // "международных проектов" в поле работодателя.
+        String text = "SMM-специалист для международных проектов\n\nЗадачи: ...";
+        FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
+            true, null, List.of(tgMsg("tg_testchan_56", text)))));
+        FakeTgRepo repo = new FakeTgRepo(Set.of());
+        VacancyPipelineService svc = new VacancyPipelineService(
+            null, null, tg, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null);
+
+        svc.discoverFromTelegram(tgJob(), List.of("testchan"));
+
+        assertEquals("@testchan", repo.saved.get(0).getCompany());
+    }
+
+    @Test
+    void discoverFromTelegram_titleNamesPlatformNotCompany_fallsBackToChannel() {
+        // "Менеджер по продажам в Telegram" — Telegram здесь платформа работы, а не
+        // работодатель; без блэклиста это стало бы company="Telegram" для десятков
+        // разных, никак не связанных вакансий.
+        String text = "Менеджер по продажам в Telegram\n\nЗадачи: ...";
+        FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
+            true, null, List.of(tgMsg("tg_testchan_57", text)))));
+        FakeTgRepo repo = new FakeTgRepo(Set.of());
+        VacancyPipelineService svc = new VacancyPipelineService(
+            null, null, tg, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null);
+
+        svc.discoverFromTelegram(tgJob(), List.of("testchan"));
+
+        assertEquals("@testchan", repo.saved.get(0).getCompany());
+    }
+
+    @Test
+    void discoverFromTelegram_wordCompanyWithoutColon_doesNotMisfireAsEmployerLabel() {
+        // "Компания развивает собственные бренды..." — слово "компания" в обычном
+        // предложении, не лейбл поля. Без требования двоеточия это захватывалось
+        // regex'ом как "работодатель: развивает собственные бренды..." — бессмыслица.
+        String text = "UGC-креатор в WAPS\n\nКомпания развивает собственные бренды на маркетплейсах.";
+        FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
+            true, null, List.of(tgMsg("tg_testchan_58", text)))));
+        FakeTgRepo repo = new FakeTgRepo(Set.of());
+        VacancyPipelineService svc = new VacancyPipelineService(
+            null, null, tg, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null);
+
+        svc.discoverFromTelegram(tgJob(), List.of("testchan"));
+
+        assertEquals("WAPS", repo.saved.get(0).getCompany(), "должен взять компанию из заголовка, не смысловое совпадение по слову «компания»");
+    }
+
+    @Test
     void discoverFromTelegram_excludeWordMatch_dropsCandidateBeforeSaving() {
         FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
             true, null, List.of(tgMsg("1", "Риэлтор без опыта, удалённо, доход от 100000")))));
