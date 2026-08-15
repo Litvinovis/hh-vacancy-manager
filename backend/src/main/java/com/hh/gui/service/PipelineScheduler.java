@@ -156,10 +156,14 @@ public class PipelineScheduler implements SchedulingConfigurer {
         }
     }
 
+    // Own-channel post engagement (views/reactions) rides the same slow cadence as
+    // subscriber count — both are "how's our channel doing" SMM health checks, neither
+    // needs anywhere near the ~10-minute freshness source-channel discovery does.
     private void runChannelSubscriberCheck() {
         if (schemaNotReady()) return;
         try {
             pipelineService.checkChannelSubscribers();
+            pipelineService.checkOwnChannelEngagement();
         } catch (Exception e) {
             log.error("Опрос числа подписчиков канала завершился ошибкой: {}", e.getMessage(), e);
         }

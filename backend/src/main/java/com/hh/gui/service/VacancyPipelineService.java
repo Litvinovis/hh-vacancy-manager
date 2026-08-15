@@ -662,20 +662,13 @@ public class VacancyPipelineService {
                 log.warn("Telegram-канал @{} ({} · {}) недоступен: {}", channel, job.personName, job.searchName, result.reason());
                 continue;
             }
-            // SMM engagement snapshot for this channel — summed across whatever's currently
-            // visible in the scrape, refreshed on every scheduled re-visit (not just at
-            // discovery), so already-known posts' growing view/reaction counts still show up
-            // in Grafana even though they're skipped below for candidate insertion.
-            int totalViews = 0;
-            Map<String, Integer> totalReactions = new HashMap<>();
-            for (TelegramClient.TelegramMessage msg : result.items()) {
-                if (msg.views() != null) totalViews += msg.views();
-                if (msg.reactions() != null) {
-                    msg.reactions().forEach((emoji, count) -> totalReactions.merge(emoji, count, Integer::sum));
-                }
-            }
-            telegramMetrics.recordViews(channel, totalViews);
-            telegramMetrics.recordReactions(channel, totalReactions);
+            // SMM engagement snapshot for this SOURCE channel (where vacancies are found,
+            // not the app's own output channel — see checkOwnChannelEngagement for that) —
+            // summed across whatever's currently visible in the scrape, refreshed on every
+            // scheduled re-visit (not just at discovery), so already-known posts' growing
+            // view/reaction counts still show up in Grafana even though they're skipped
+            // below for candidate insertion.
+            recordChannelEngagement(channel, result.items());
 
             for (TelegramClient.TelegramMessage msg : result.items()) {
                 if (msg.text() == null || msg.text().isBlank()) continue;
@@ -1829,18 +1822,66 @@ public class VacancyPipelineService {
      * search would just be redundant Bot API calls for an identical answer.
      */
     public void checkChannelSubscribers() {
+        for (String chatId : distinctPublishChatIds()) {
+            Integer count = telegramNotifier.getChatMemberCount(chatId);
+            if (count != null) {
+                telegramMetrics.recordSubscribers(chatId, count);
+            }
+        }
+    }
+
+    /** Distinct chat_ids currently configured as SOME enabled search's public-post
+     *  destination — several searches can share one channel, so callers that poll per
+     *  chat_id (checkChannelSubscribers, checkOwnChannelEngagement) only do it once each. */
+    private Set<String> distinctPublishChatIds() {
         Set<String> chatIds = new HashSet<>();
         for (SearchConfig search : searchRepo.findAllEnabled()) {
             if (search.getChatId() != null && !search.getChatId().isBlank()) {
                 chatIds.add(search.getChatId());
             }
         }
-        for (String chatId : chatIds) {
-            Integer count = telegramNotifier.getChatMemberCount(chatId);
-            if (count != null) {
-                telegramMetrics.recordSubscribers(chatId, count);
+        return chatIds;
+    }
+
+    /**
+     * Reads recent posts from the app's OWN output channel(s) — the ones searches
+     * actually publish to — via the same tg-scraper sidecar used for source channels,
+     * and records their views/reactions. Distinct from the per-SOURCE-channel snapshot
+     * discoverFromTelegram already takes (see recordChannelEngagement's other call site):
+     * that one tracks engagement on the channels vacancies are FOUND on, this one tracks
+     * engagement on the channel this app actually PUBLISHES to — the SMM question a
+     * reader of the dashboard actually cares about. The channel tag (its own username)
+     * is what tells the two apart in Grafana; no separate metric name needed.
+     *
+     * tg-scraper's /channel endpoint takes a username, not a numeric chat_id, so this
+     * resolves one via Bot API getChat first — a channel with no public username (fully
+     * private) can't be read this way and is silently skipped, same fail-open style as
+     * checkChannelSubscribers.
+     */
+    public void checkOwnChannelEngagement() {
+        for (String chatId : distinctPublishChatIds()) {
+            String username = telegramNotifier.getChatUsername(chatId);
+            if (username == null) continue;
+            TelegramClient.ChannelResult result = telegramClient.fetchChannel(username, 100);
+            if (!result.ok()) {
+                log.warn("Свой канал @{} недоступен для чтения вовлечённости: {}", username, result.reason());
+                continue;
+            }
+            recordChannelEngagement(username, result.items());
+        }
+    }
+
+    private void recordChannelEngagement(String channel, List<TelegramClient.TelegramMessage> messages) {
+        int totalViews = 0;
+        Map<String, Integer> totalReactions = new HashMap<>();
+        for (TelegramClient.TelegramMessage msg : messages) {
+            if (msg.views() != null) totalViews += msg.views();
+            if (msg.reactions() != null) {
+                msg.reactions().forEach((emoji, count) -> totalReactions.merge(emoji, count, Integer::sum));
             }
         }
+        telegramMetrics.recordViews(channel, totalViews);
+        telegramMetrics.recordReactions(channel, totalReactions);
     }
 
     /**

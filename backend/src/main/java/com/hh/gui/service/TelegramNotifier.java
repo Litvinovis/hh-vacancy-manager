@@ -88,6 +88,39 @@ public class TelegramNotifier {
         }
     }
 
+    /**
+     * Public @username of a channel the channel bot is admin of (Bot API getChat) — null
+     * if the channel has none (fully private, no public link) or on any failure. Needed
+     * because tg-scraper's web-client sidecar reads channels by username, not numeric
+     * chat_id (see VacancyPipelineService.checkOwnChannelEngagement).
+     */
+    public String getChatUsername(String targetChatId) {
+        if (channelBotToken == null || channelBotToken.isEmpty()) return null;
+        if (targetChatId == null || targetChatId.isBlank()) return null;
+        try {
+            String url = "https://api.telegram.org/bot" + channelBotToken + "/getChat?chat_id="
+                + URLEncoder.encode(targetChatId, StandardCharsets.UTF_8);
+            HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(10000);
+            conn.setReadTimeout(15000);
+
+            int code = conn.getResponseCode();
+            String body = HttpUtil.readBody(conn, code);
+            if (code != 200) {
+                log.warn("getChat({}) вернул {}: {}", targetChatId, code, body);
+                return null;
+            }
+            var json = new tools.jackson.databind.ObjectMapper().readTree(body);
+            if (!json.path("ok").asBoolean(false)) return null;
+            String username = json.path("result").path("username").asText(null);
+            return username != null && !username.isBlank() ? username : null;
+        } catch (Exception e) {
+            log.warn("Не удалось получить username канала для {}: {}", targetChatId, e.getMessage());
+            return null;
+        }
+    }
+
     private boolean doSend(String token, String missingTokenMessage, String message, String resolvedChatId) {
         if (token == null || token.isEmpty()) {
             log.warn(missingTokenMessage);
