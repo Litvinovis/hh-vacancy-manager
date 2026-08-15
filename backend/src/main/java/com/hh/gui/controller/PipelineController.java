@@ -417,6 +417,7 @@ public class PipelineController {
     public ResponseEntity<Map<String, Object>> channelSubscribersCheck(@RequestAttribute("currentUser") User currentUser) {
         if (!currentUser.isAdmin()) return ResponseEntity.status(403).body(Map.of("error", "Требуются права администратора"));
         pipelineService.checkChannelSubscribers();
+        pipelineService.checkOwnChannelEngagement();
         return ResponseEntity.ok(Map.of("status", "ok"));
     }
 
