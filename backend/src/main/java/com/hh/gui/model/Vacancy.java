@@ -60,6 +60,7 @@ public class Vacancy {
     // closed/archived on hh.ru (null = considered active).
     private String lastCheckedAt;
     private String closedAt;
+    private String queuedPublishAt;
 
     // Default constructor
     public Vacancy() {}
@@ -196,4 +197,7 @@ public class Vacancy {
 
     public String getClosedAt() { return closedAt; }
     public void setClosedAt(String closedAt) { this.closedAt = closedAt; }
+
+    public String getQueuedPublishAt() { return queuedPublishAt; }
+    public void setQueuedPublishAt(String queuedPublishAt) { this.queuedPublishAt = queuedPublishAt; }
 }

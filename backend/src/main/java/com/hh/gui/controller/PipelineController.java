@@ -182,6 +182,47 @@ public class PipelineController {
     }
 
     /**
+     * Preview of a search's public-post pipeline output — what's already been sent,
+     * what's queued and exactly when, and each item rendered exactly as it will look
+     * in the channel. Built so a queued item can be inspected right after it's approved
+     * instead of waiting for queued_publish_at (publish pacing can run hours behind
+     * a large approved batch) or for the actual Telegram send to happen.
+     * GET /api/pipeline/publish-queue?searchId=...&limit=...
+     */
+    @GetMapping("/pipeline/publish-queue")
+    public ResponseEntity<Map<String, Object>> publishQueue(
+            @RequestParam(name = "searchId") Long searchId,
+            @RequestParam(name = "limit", required = false, defaultValue = "20") int limit,
+            @RequestAttribute("currentUser") User currentUser) {
+        if (!currentUser.isAdmin()) {
+            return ResponseEntity.status(403).body(Map.of("error", "Просмотр очереди публикации доступен только администратору"));
+        }
+        List<Map<String, Object>> queued = vacancyRepo.findQueuedForSearch(searchId, limit).stream()
+            .map(v -> previewEntry(v, v.getQueuedPublishAt()))
+            .toList();
+        List<Map<String, Object>> published = vacancyRepo.findRecentlyPublished(searchId, limit).stream()
+            .map(v -> previewEntry(v, null))
+            .toList();
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("queued", queued);
+        response.put("recentlyPublished", published);
+        return ResponseEntity.ok(response);
+    }
+
+    private Map<String, Object> previewEntry(com.hh.gui.model.Vacancy v, String queuedPublishAt) {
+        Map<String, Object> entry = new LinkedHashMap<>();
+        entry.put("id", v.getId());
+        entry.put("hhId", v.getHhId());
+        entry.put("source", v.getSource());
+        entry.put("title", v.getTitle());
+        entry.put("company", v.getCompany());
+        entry.put("aiScore", v.getAiScore());
+        entry.put("queuedPublishAt", queuedPublishAt);
+        entry.put("renderedPost", pipelineService.formatPublicPost(v));
+        return entry;
+    }
+
+    /**
      * Re-analyze all eligible vacancies (not rejected by AI or user), for every
      * configured (person, search) or just one.
      * POST /api/pipeline/reanalyze[?person=...&searchName=...]
