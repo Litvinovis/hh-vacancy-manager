@@ -66,6 +66,72 @@ class VacancyPipelineServiceTest {
         return v;
     }
 
+    // ── formatPublicPost's "apply here" line: falls back to a contact when the stored
+    // url is just the Telegram post's own self-link (live bug: freelancce post "Отклик:
+    // sasha@fond-igra.ru" rendered "👉 https://t.me/freelancce/15611" — a dead link back
+    // to the post itself, not anywhere the reader could actually apply) ──
+
+    private Vacancy telegramSelfLinkVacancy(String description) {
+        Vacancy v = new Vacancy();
+        v.setHhId("tg_freelancce_15611");
+        v.setTitle("Креатор в благотворительный фонд «Игра»");
+        v.setCompany("@freelancce");
+        v.setAiScore(80);
+        v.setAiVerdict("yes");
+        v.setUrl("https://t.me/freelancce/15611");
+        v.setDescription(description);
+        return v;
+    }
+
+    @Test
+    void formatPublicPost_selfLinkWithEmailInDescription_showsEmailInstead() {
+        String post = service.formatPublicPost(telegramSelfLinkVacancy(
+            "Фонд ищет специалиста.\n\nОтклик:\n sasha@fond-igra.ru"));
+        assertTrue(post.contains("📧 sasha@fond-igra.ru"), post);
+        assertFalse(post.contains("t.me/freelancce/15611"), post);
+    }
+
+    @Test
+    void formatPublicPost_selfLinkWithPhoneInDescription_showsPhoneInstead() {
+        String post = service.formatPublicPost(telegramSelfLinkVacancy(
+            "Звоните: +7 495 123 45 67, обсудим детали."));
+        assertTrue(post.contains("📞") && post.contains("495") && post.contains("67"), post);
+        assertFalse(post.contains("t.me/freelancce/15611"), post);
+    }
+
+    @Test
+    void formatPublicPost_selfLinkWithPersonalContactNextToKeyword_showsTelegramLink() {
+        String post = service.formatPublicPost(telegramSelfLinkVacancy(
+            "Для отклика напиши Ассистент в лс @azatka_kzn"));
+        assertTrue(post.contains("💬 https://t.me/azatka_kzn"), post);
+    }
+
+    @Test
+    void formatPublicPost_atMentionWithoutContactKeyword_notTreatedAsContact() {
+        // A bare @channel mention unrelated to "how to apply" (e.g. crediting where the
+        // post came from) must not be misread as the reader's contact.
+        String post = service.formatPublicPost(telegramSelfLinkVacancy(
+            "Репост из @somechannel, вакансия интересная."));
+        assertTrue(post.contains("t.me/freelancce/15611"), post);
+    }
+
+    @Test
+    void formatPublicPost_selfLinkNoContactFound_fallsBackToTheLinkAsBefore() {
+        String post = service.formatPublicPost(telegramSelfLinkVacancy(
+            "Просто описание без каких-либо контактов."));
+        assertTrue(post.contains("👉 https://t.me/freelancce/15611"), post);
+    }
+
+    @Test
+    void formatPublicPost_realExternalUrl_unaffectedByContactExtraction() {
+        // Path A / external-job-board posts never hit the self-link fallback at all.
+        Vacancy v = vacancy("Продавец", "Подходит", 80);
+        v.setDescription("Отклик: someone@example.com");
+        String post = service.formatPublicPost(v);
+        assertTrue(post.contains("👉 https://hh.ru/vacancy/1"), post);
+        assertFalse(post.contains("someone@example.com"), post);
+    }
+
     @Test
     void chunkReport_smallBatch_fitsInOneChunk() throws Exception {
         List<Vacancy> vacancies = List.of(vacancy("Продавец", "Хорошо подходит", 80),
