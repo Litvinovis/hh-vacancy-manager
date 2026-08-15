@@ -482,6 +482,40 @@ public class VacancyPipelineService {
         return m.group().replaceAll("[.,;:!?)\\]]+$", "");
     }
 
+    // Fallback "apply here" contact for Path B posts with no first-party job-board link
+    // and no other external URL either — verified live (freelancce channel, "Отклик:
+    // sasha@fond-igra.ru") that the public post's "👉" line otherwise fell back to the
+    // Telegram post's OWN link (v.getUrl() defaults to msg.link() — see discoverFromTelegram),
+    // which just points a reader back at the post they're already reading, not at anywhere
+    // they can actually apply. Tried in order: email is unambiguous on its own; a full
+    // 11-digit RU phone number's format is distinctive enough to need no keyword either;
+    // a personal @username is common enough as an unrelated mention (the channel's own
+    // handle, other posts' employers) that it's only trusted next to an actual "как
+    // откликнуться" style keyword on the same line.
+    private static final java.util.regex.Pattern CONTACT_EMAIL = java.util.regex.Pattern.compile(
+        "[\\w.+-]+@[\\w-]+\\.[a-zA-Z]{2,}");
+    private static final java.util.regex.Pattern CONTACT_PHONE = java.util.regex.Pattern.compile(
+        "(?:\\+7|8)[\\s(-]*\\d{3}[\\s)-]*\\d{3}[\\s-]*\\d{2}[\\s-]*\\d{2}(?!\\d)");
+    private static final java.util.regex.Pattern CONTACT_PERSONAL_USERNAME = java.util.regex.Pattern.compile(
+        "(?:напиши(?:те)?|пишите|отклик|контакт|обращайтесь|связаться|для\\s+связи)\\S*[:\\s].*?(@[a-zA-Z0-9_]{5,})",
+        java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.UNICODE_CASE);
+
+    private record TgContact(String emoji, String display) {}
+
+    private static TgContact extractTgContact(String text) {
+        if (text == null) return null;
+        java.util.regex.Matcher email = CONTACT_EMAIL.matcher(text);
+        if (email.find()) return new TgContact("📧", email.group());
+        java.util.regex.Matcher phone = CONTACT_PHONE.matcher(text);
+        if (phone.find()) return new TgContact("📞", phone.group().trim());
+        java.util.regex.Matcher personal = CONTACT_PERSONAL_USERNAME.matcher(text);
+        if (personal.find()) return new TgContact("💬", "https://t.me/" + personal.group(1).substring(1));
+        return null;
+    }
+
+    private static final java.util.regex.Pattern TG_SELF_LINK = java.util.regex.Pattern.compile(
+        "^https?://t\\.me/[^/]+/\\d+$", java.util.regex.Pattern.CASE_INSENSITIVE);
+
     private static Integer parseSalaryNumber(String raw) {
         if (raw == null) return null;
         try {
@@ -1855,8 +1889,20 @@ public class VacancyPipelineService {
         if (noveltyEmoji != null && v.getNoveltyNote() != null && !v.getNoveltyNote().isBlank()) {
             sb.append(String.format("%s %s\n", noveltyEmoji, escapeHtml(capitalize(v.getNoveltyNote()))));
         }
-        sb.append(String.format("👉 %s\n", v.getUrl()));
+        sb.append(formatApplyLine(v));
         return sb.toString();
+    }
+
+    /** The "👉 <url>" line — falls back to an email/phone/personal-contact extracted from
+     *  the description when the stored url is just the Telegram post's own self-link (see
+     *  extractTgContact's javadoc for why that's otherwise a dead end for the reader). */
+    private static String formatApplyLine(Vacancy v) {
+        String url = v.getUrl();
+        if (url != null && TG_SELF_LINK.matcher(url).matches()) {
+            TgContact contact = extractTgContact(v.getDescription());
+            if (contact != null) return String.format("%s %s\n", contact.emoji(), contact.display());
+        }
+        return url != null && !url.isBlank() ? String.format("👉 %s\n", url) : "";
     }
 
     private static String capitalize(String s) {
