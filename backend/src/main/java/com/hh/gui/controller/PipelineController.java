@@ -4,6 +4,7 @@ import com.hh.gui.ai.AiProviderManager;
 import com.hh.gui.config.RuntimeConfig;
 import com.hh.gui.model.SearchJob;
 import com.hh.gui.model.User;
+import com.hh.gui.service.ChannelEngagementTracker;
 import com.hh.gui.service.PipelineJobRunner;
 import com.hh.gui.service.SearchProfileFactory;
 import com.hh.gui.service.VacancyPipelineService;
@@ -33,6 +34,7 @@ public class PipelineController {
     private final RuntimeConfig runtimeConfig;
     private final AiProviderManager aiProvider;
     private final PipelineJobRunner jobRunner;
+    private final ChannelEngagementTracker engagementTracker;
 
     @Autowired
     public PipelineController(VacancyPipelineService pipelineService,
@@ -40,13 +42,14 @@ public class PipelineController {
                                SearchProfileFactory profileFactory,
                                RuntimeConfig runtimeConfig,
                                AiProviderManager aiProvider,
-                               PipelineJobRunner jobRunner) {
+                               PipelineJobRunner jobRunner, ChannelEngagementTracker engagementTracker) {
         this.pipelineService = pipelineService;
         this.vacancyRepo = vacancyRepo;
         this.profileFactory = profileFactory;
         this.runtimeConfig = runtimeConfig;
         this.aiProvider = aiProvider;
         this.jobRunner = jobRunner;
+        this.engagementTracker = engagementTracker;
     }
 
     /**
@@ -416,8 +419,8 @@ public class PipelineController {
     @PostMapping("/pipeline/channel-subscribers-check")
     public ResponseEntity<Map<String, Object>> channelSubscribersCheck(@RequestAttribute("currentUser") User currentUser) {
         if (!currentUser.isAdmin()) return ResponseEntity.status(403).body(Map.of("error", "Требуются права администратора"));
-        pipelineService.checkChannelSubscribers();
-        pipelineService.checkOwnChannelEngagement();
+        engagementTracker.checkSubscribers();
+        engagementTracker.checkOwnChannels();
         return ResponseEntity.ok(Map.of("status", "ok"));
     }
 

@@ -80,8 +80,10 @@ class VacancyPipelineServiceTest {
             // Wired the same way production is, so a test that does reach the public-format
             // path gets real publishing behaviour rather than a null collaborator.
             ChannelPublisher publisher = new ChannelPublisher(repo, searchRepo, notifier, tgMetrics, config);
+            ChannelEngagementTracker engagement =
+                new ChannelEngagementTracker(searchRepo, telegram, notifier, tgMetrics);
             return new VacancyPipelineService(null, scraper, telegram, analyzer, repo, notifier,
-                config, aiMetrics, new FeatureFlags(), searchRepo, null, tgMetrics, publisher);
+                config, aiMetrics, new FeatureFlags(), searchRepo, null, tgMetrics, publisher, engagement);
         }
     }
 
@@ -940,7 +942,7 @@ class VacancyPipelineServiceTest {
 
         ConcurrencyProbe(RuntimeConfig config) {
             super(null, null, null, null, null, null, config, null, new FeatureFlags(), null, null,
-                new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()), null);
+                new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()), null, null);
         }
 
         @Override
@@ -1444,100 +1446,4 @@ class VacancyPipelineServiceTest {
     // ── публикация батчами + динамический темп + окно 07:00–23:00 ──
 
 
-    private static class FakeSearchRepo extends com.hh.gui.repository.SearchRepository {
-        List<com.hh.gui.model.SearchConfig> enabled = new ArrayList<>();
-        java.util.Map<Long, com.hh.gui.model.SearchConfig> byId = new java.util.HashMap<>();
-        FakeSearchRepo() { super(null); }
-        @Override
-        public List<com.hh.gui.model.SearchConfig> findAllEnabled() { return enabled; }
-        @Override
-        public java.util.Optional<com.hh.gui.model.SearchConfig> findById(Long id) {
-            return java.util.Optional.ofNullable(byId.get(id));
-        }
-    }
-
-
-    private static class FakeSubscriberCountNotifier extends TelegramNotifier {
-        final List<String> queriedChatIds = new ArrayList<>();
-        final java.util.Map<String, Integer> counts;
-        java.util.Map<String, String> usernames = java.util.Map.of();
-        FakeSubscriberCountNotifier(java.util.Map<String, Integer> counts) { this.counts = counts; }
-        @Override
-        public Integer getChatMemberCount(String targetChatId) {
-            queriedChatIds.add(targetChatId);
-            return counts.get(targetChatId);
-        }
-        @Override
-        public String getChatUsername(String targetChatId) {
-            return usernames.get(targetChatId);
-        }
-    }
-
-    private static com.hh.gui.model.SearchConfig searchWithChatId(String chatId) {
-        com.hh.gui.model.SearchConfig s = new com.hh.gui.model.SearchConfig();
-        s.setChatId(chatId);
-        return s;
-    }
-
-    @Test
-    void checkChannelSubscribers_dedupesSharedChatId_pollsOncePerDistinctChannel() {
-        FakeSearchRepo searchRepo = new FakeSearchRepo();
-        searchRepo.enabled = List.of(searchWithChatId("-100111"), searchWithChatId("-100111"), searchWithChatId("-100222"));
-        FakeSubscriberCountNotifier notifier = new FakeSubscriberCountNotifier(java.util.Map.of("-100111", 42, "-100222", 7));
-        io.micrometer.core.instrument.simple.SimpleMeterRegistry registry = new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
-        VacancyPipelineService svc = service().notifier(notifier).searchRepo(searchRepo).metricsRegistry(registry).build();
-
-        svc.checkChannelSubscribers();
-
-        assertEquals(2, notifier.queriedChatIds.size(), "два поиска на один и тот же chat_id должны опросить его только один раз");
-        assertEquals(42.0, registry.find("telegram_channel_subscribers").tag("channel", "-100111").gauge().value());
-        assertEquals(7.0, registry.find("telegram_channel_subscribers").tag("channel", "-100222").gauge().value());
-    }
-
-    @Test
-    void checkChannelSubscribers_blankChatId_skipped() {
-        FakeSearchRepo searchRepo = new FakeSearchRepo();
-        searchRepo.enabled = List.of(searchWithChatId(""), searchWithChatId(null));
-        FakeSubscriberCountNotifier notifier = new FakeSubscriberCountNotifier(java.util.Map.of());
-        VacancyPipelineService svc = service().notifier(notifier).searchRepo(searchRepo).build();
-
-        svc.checkChannelSubscribers();
-
-        assertTrue(notifier.queriedChatIds.isEmpty());
-    }
-
-    @Test
-    void checkOwnChannelEngagement_recordsUnderChannelsOwnUsername_notSourceChannels() {
-        // User correction: "просмотры и реакции МОЕГО канала вакансий, а не источников" —
-        // this must land under the OUTPUT channel's own username tag, distinct from
-        // whatever discoverFromTelegram already records for the source channels.
-        FakeSearchRepo searchRepo = new FakeSearchRepo();
-        searchRepo.enabled = List.of(searchWithChatId("-1004333110303"));
-        FakeSubscriberCountNotifier notifier = new FakeSubscriberCountNotifier(java.util.Map.of());
-        notifier.usernames = java.util.Map.of("-1004333110303", "remotevibe");
-        FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("remotevibe", new TelegramClient.ChannelResult(
-            true, null, List.of(
-                tgMsg("tg_remotevibe_1", "Пост 1", 10, java.util.Map.of("❤", 2)),
-                tgMsg("tg_remotevibe_2", "Пост 2", 15, java.util.Map.of("🔥", 1))))));
-        io.micrometer.core.instrument.simple.SimpleMeterRegistry registry = new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
-        VacancyPipelineService svc = service().telegram(tg).notifier(notifier).searchRepo(searchRepo).metricsRegistry(registry).build();
-
-        svc.checkOwnChannelEngagement();
-
-        assertEquals(25.0, registry.find("telegram_channel_views_recent").tag("channel", "remotevibe").gauge().value());
-        assertEquals(2.0, registry.find("telegram_channel_reactions_recent")
-            .tag("channel", "remotevibe").tag("emoji", "❤").gauge().value());
-    }
-
-    @Test
-    void checkOwnChannelEngagement_noPublicUsername_skippedWithoutError() {
-        FakeSearchRepo searchRepo = new FakeSearchRepo();
-        searchRepo.enabled = List.of(searchWithChatId("-100999"));
-        FakeSubscriberCountNotifier notifier = new FakeSubscriberCountNotifier(java.util.Map.of());
-        notifier.usernames = java.util.Map.of(); // private channel, no public username resolved
-        FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of());
-        VacancyPipelineService svc = service().telegram(tg).notifier(notifier).searchRepo(searchRepo).build();
-
-        assertDoesNotThrow(svc::checkOwnChannelEngagement);
-    }
 }

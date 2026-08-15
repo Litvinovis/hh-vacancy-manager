@@ -59,6 +59,7 @@ public class VacancyPipelineService {
     private final AiMetrics metrics;
     private final TelegramMetrics telegramMetrics;
     private final ChannelPublisher channelPublisher;
+    private final ChannelEngagementTracker engagementTracker;
     private final FeatureFlags featureFlags;
     private final SearchRepository searchRepo;
     private final SubscriptionService subscriptionService;
@@ -81,7 +82,8 @@ public class VacancyPipelineService {
                                    VacancyRepository vacancyRepo, TelegramNotifier telegramNotifier,
                                    RuntimeConfig runtimeConfig, AiMetrics metrics, FeatureFlags featureFlags,
                                    SearchRepository searchRepo, SubscriptionService subscriptionService,
-                                   TelegramMetrics telegramMetrics, ChannelPublisher channelPublisher) {
+                                   TelegramMetrics telegramMetrics, ChannelPublisher channelPublisher,
+                                   ChannelEngagementTracker engagementTracker) {
         this.hhApiClient = hhApiClient;
         this.scraperClient = scraperClient;
         this.telegramClient = telegramClient;
@@ -95,6 +97,7 @@ public class VacancyPipelineService {
         this.searchRepo = searchRepo;
         this.telegramMetrics = telegramMetrics;
         this.channelPublisher = channelPublisher;
+        this.engagementTracker = engagementTracker;
     }
 
     public boolean isNotificationsEnabled() { return runtimeConfig.isNotificationsEnabled(); }
@@ -446,7 +449,7 @@ public class VacancyPipelineService {
             // scheduled re-visit (not just at discovery), so already-known posts' growing
             // view/reaction counts still show up in Grafana even though they're skipped
             // below for candidate insertion.
-            recordChannelEngagement(channel, result.items());
+            engagementTracker.recordFrom(channel, result.items());
 
             for (TelegramClient.TelegramMessage msg : result.items()) {
                 if (msg.text() == null || msg.text().isBlank()) continue;
@@ -1416,76 +1419,9 @@ public class VacancyPipelineService {
 
 
 
-    /**
-     * Polls the subscriber count of every distinct chat_id currently configured as a
-     * search's public-post destination (see PipelineScheduler's SUBSCRIBER_COUNT_CHECK_INTERVAL)
-     * and records it as a gauge — Grafana computes day/week deltas from the retained
-     * time series via delta(), so nothing is persisted on this side. Distinct chat_ids
-     * only: several searches can publish to the same channel, and polling it once per
-     * search would just be redundant Bot API calls for an identical answer.
-     */
-    public void checkChannelSubscribers() {
-        for (String chatId : distinctPublishChatIds()) {
-            Integer count = telegramNotifier.getChatMemberCount(chatId);
-            if (count != null) {
-                telegramMetrics.recordSubscribers(chatId, count);
-            }
-        }
-    }
 
-    /** Distinct chat_ids currently configured as SOME enabled search's public-post
-     *  destination — several searches can share one channel, so callers that poll per
-     *  chat_id (checkChannelSubscribers, checkOwnChannelEngagement) only do it once each. */
-    private Set<String> distinctPublishChatIds() {
-        Set<String> chatIds = new HashSet<>();
-        for (SearchConfig search : searchRepo.findAllEnabled()) {
-            if (search.getChatId() != null && !search.getChatId().isBlank()) {
-                chatIds.add(search.getChatId());
-            }
-        }
-        return chatIds;
-    }
 
-    /**
-     * Reads recent posts from the app's OWN output channel(s) — the ones searches
-     * actually publish to — via the same tg-scraper sidecar used for source channels,
-     * and records their views/reactions. Distinct from the per-SOURCE-channel snapshot
-     * discoverFromTelegram already takes (see recordChannelEngagement's other call site):
-     * that one tracks engagement on the channels vacancies are FOUND on, this one tracks
-     * engagement on the channel this app actually PUBLISHES to — the SMM question a
-     * reader of the dashboard actually cares about. The channel tag (its own username)
-     * is what tells the two apart in Grafana; no separate metric name needed.
-     *
-     * tg-scraper's /channel endpoint takes a username, not a numeric chat_id, so this
-     * resolves one via Bot API getChat first — a channel with no public username (fully
-     * private) can't be read this way and is silently skipped, same fail-open style as
-     * checkChannelSubscribers.
-     */
-    public void checkOwnChannelEngagement() {
-        for (String chatId : distinctPublishChatIds()) {
-            String username = telegramNotifier.getChatUsername(chatId);
-            if (username == null) continue;
-            TelegramClient.ChannelResult result = telegramClient.fetchChannel(username, 100);
-            if (!result.ok()) {
-                log.warn("Свой канал @{} недоступен для чтения вовлечённости: {}", username, result.reason());
-                continue;
-            }
-            recordChannelEngagement(username, result.items());
-        }
-    }
 
-    private void recordChannelEngagement(String channel, List<TelegramClient.TelegramMessage> messages) {
-        int totalViews = 0;
-        Map<String, Integer> totalReactions = new HashMap<>();
-        for (TelegramClient.TelegramMessage msg : messages) {
-            if (msg.views() != null) totalViews += msg.views();
-            if (msg.reactions() != null) {
-                msg.reactions().forEach((emoji, count) -> totalReactions.merge(emoji, count, Integer::sum));
-            }
-        }
-        telegramMetrics.recordViews(channel, totalViews);
-        telegramMetrics.recordReactions(channel, totalReactions);
-    }
 
 
     /** Exposed for PipelineController's publish-queue preview endpoint — renders exactly

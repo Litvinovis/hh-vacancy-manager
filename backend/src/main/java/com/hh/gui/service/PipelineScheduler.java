@@ -64,6 +64,7 @@ public class PipelineScheduler implements SchedulingConfigurer {
     private final SchemaMigrator schemaMigrator;
     private final SubscriptionService subscriptionService;
     private final ChannelPublisher channelPublisher;
+    private final ChannelEngagementTracker engagementTracker;
 
     // How often to check for approved vacancies whose delayed_publish_at has arrived
     // (see ChannelPublisher.publishDueDelayed). A 5-minute delay needs a check
@@ -86,14 +87,15 @@ public class PipelineScheduler implements SchedulingConfigurer {
     private static final int QUEUED_PUBLISH_BATCH_PER_TICK = 50;
 
     // Subscriber count only needs to move slowly enough for day/week deltas in Grafana
-    // (see VacancyPipelineService.checkChannelSubscribers) — every few minutes would be
+    // (see ChannelEngagementTracker.checkSubscribers) — every few minutes would be
     // pure Bot API noise for a number that changes a handful of times a day at most.
     private static final Duration SUBSCRIBER_COUNT_CHECK_INTERVAL = Duration.ofHours(6);
 
     public PipelineScheduler(VacancyPipelineService pipelineService, SearchProfileFactory profileFactory,
                               RuntimeConfig runtimeConfig, VacancyAiAnalyzer aiAnalyzer, SearchRepository searchRepo,
                               FreeModelUpdater freeModelUpdater, FeatureFlags featureFlags, SchemaMigrator schemaMigrator,
-                              SubscriptionService subscriptionService, ChannelPublisher channelPublisher) {
+                              SubscriptionService subscriptionService, ChannelPublisher channelPublisher,
+                              ChannelEngagementTracker engagementTracker) {
         this.pipelineService = pipelineService;
         this.profileFactory = profileFactory;
         this.runtimeConfig = runtimeConfig;
@@ -104,6 +106,7 @@ public class PipelineScheduler implements SchedulingConfigurer {
         this.schemaMigrator = schemaMigrator;
         this.subscriptionService = subscriptionService;
         this.channelPublisher = channelPublisher;
+        this.engagementTracker = engagementTracker;
     }
 
     @Override
@@ -164,8 +167,8 @@ public class PipelineScheduler implements SchedulingConfigurer {
     private void runChannelSubscriberCheck() {
         if (schemaNotReady()) return;
         try {
-            pipelineService.checkChannelSubscribers();
-            pipelineService.checkOwnChannelEngagement();
+            engagementTracker.checkSubscribers();
+            engagementTracker.checkOwnChannels();
         } catch (Exception e) {
             log.error("Опрос числа подписчиков канала завершился ошибкой: {}", e.getMessage(), e);
         }
