@@ -1565,7 +1565,10 @@ public class VacancyPipelineService {
     /** Single-vacancy public post: no internal scoring/routing info, just what a subscriber needs. */
     private static final Map<String, String> NOVELTY_EMOJI = Map.of("red", "🔴", "yellow", "🟡", "green", "🟢");
 
-    private String formatPublicPost(Vacancy v) {
+    /** Exposed for PipelineController's publish-queue preview endpoint — renders exactly
+     *  what sendPublicPosts/publishDueQueued would actually send, so a queued item can be
+     *  inspected before its queued_publish_at elapses instead of waiting for it. */
+    public String formatPublicPost(Vacancy v) {
         String salary = SalaryFormatter.forReport(v);
         String company = v.getCompany() != null && !v.getCompany().isEmpty() ? escapeHtml(v.getCompany()) : "компания не указана";
         String title = truncate(v.getTitle(), 150);

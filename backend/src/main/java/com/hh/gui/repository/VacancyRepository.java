@@ -79,6 +79,7 @@ public class VacancyRepository {
             v.setDedupKey(rs.getString("dedup_key"));
             v.setLastCheckedAt(rs.getString("last_checked_at"));
             v.setClosedAt(rs.getString("closed_at"));
+            v.setQueuedPublishAt(rs.getString("queued_publish_at"));
             return v;
         };
     }
@@ -556,6 +557,28 @@ public class VacancyRepository {
             "SELECT * FROM vacancies WHERE queued_publish_at IS NOT NULL AND queued_publish_at <= ? " +
             "AND notified = 0 AND closed_at IS NULL ORDER BY queued_publish_at LIMIT ?",
             rowMapper, nowIso, limit);
+    }
+
+    /**
+     * Full upcoming queue for one search, due or not — lets a caller preview what's
+     * about to be posted (and exactly when) without waiting for queued_publish_at to
+     * actually elapse. findDueQueuedPublications above is scoped to "ready right now,
+     * across all searches" (what the publish scheduler itself drains); this is scoped
+     * to "everything queued for this search" (what an operator/admin wants to inspect).
+     */
+    public List<Vacancy> findQueuedForSearch(Long searchId, int limit) {
+        return jdbc.query(
+            "SELECT * FROM vacancies WHERE search_id = ? AND queued_publish_at IS NOT NULL " +
+            "AND notified = 0 AND closed_at IS NULL ORDER BY queued_publish_at LIMIT ?",
+            rowMapper, searchId, limit);
+    }
+
+    /** Most recently actually-sent public posts for one search — newest first. */
+    public List<Vacancy> findRecentlyPublished(Long searchId, int limit) {
+        return jdbc.query(
+            "SELECT * FROM vacancies WHERE search_id = ? AND notified = 1 " +
+            "ORDER BY updated_at DESC LIMIT ?",
+            rowMapper, searchId, limit);
     }
 
     /**
