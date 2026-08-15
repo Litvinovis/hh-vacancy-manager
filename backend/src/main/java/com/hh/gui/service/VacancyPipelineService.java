@@ -377,23 +377,73 @@ public class VacancyPipelineService {
     // link (see discoverFromTelegram) — mirrors the legacy collector/tg_parser.py
     // heuristic. Channel posts rarely label the field explicitly; when they don't,
     // the channel itself becomes the "employer" for dedup purposes (see below).
+    // The colon is required (not just optional whitespace): verified live that without
+    // it, this matched ordinary sentences that merely contain the word "компания" —
+    // e.g. "Компания развивает собственные бренды..." — and captured whatever followed
+    // as the "employer", nonsense unrelated to who's actually hiring.
     private static final java.util.regex.Pattern TG_EMPLOYER_PATTERN =
-        java.util.regex.Pattern.compile("(?:компания|организация|фирма|работодатель)[\\s:]*([^\\n,]{2,60})",
+        java.util.regex.Pattern.compile("(?:компания|организация|фирма|работодатель)\\s*:\\s*([^\\n,]{2,60})",
             java.util.regex.Pattern.CASE_INSENSITIVE);
 
-    private static String extractTgEmployer(String text, String channel) {
+    // Verified live: most titles that DO name an employer follow "Роль в/для
+    // КомпанияName" ("Брендинг-дизайнер в Emerging Travel Group", "SMM Manager в
+    // GipsyTeam") — a trailing capitalized run after "в"/"для" is a much better bet
+    // than the raw "@channel" fallback, which is what readers used to see as the
+    // "employer" for every Path B post regardless of whether the title clearly named one.
+    // Requiring a capital first letter is what keeps this from misfiring on ordinary
+    // lowercase phrases ("для международных проектов", "для долгосрочного сотрудничества").
+    private static final java.util.regex.Pattern TITLE_TRAILING_EMPLOYER =
+        java.util.regex.Pattern.compile("(?:\\sв|\\sдля)\\s+([A-ZА-ЯЁ][\\w\\-&+./]*(?:\\s[A-ZА-ЯЁ0-9][\\w\\-&+./]*)*)\\s*$",
+            java.util.regex.Pattern.UNICODE_CASE);
+
+    // "Роль в Telegram" / "для YouTube-проекта" name the PLATFORM the work happens on,
+    // not who's hiring — TITLE_TRAILING_EMPLOYER can't distinguish that from a real
+    // company name syntactically, so reject a capture that starts with one of these.
+    private static final java.util.regex.Pattern PLATFORM_NOT_EMPLOYER = java.util.regex.Pattern.compile(
+        "^(?:Telegram|Instagram|YouTube|TikTok|VK|WhatsApp|Facebook|Zoom|LinkedIn)\\b", java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    private static String extractTgEmployer(String text, String title, String channel) {
         java.util.regex.Matcher m = TG_EMPLOYER_PATTERN.matcher(text);
         if (m.find()) return m.group(1).trim();
+        java.util.regex.Matcher titleMatch = TITLE_TRAILING_EMPLOYER.matcher(title);
+        if (titleMatch.find() && !PLATFORM_NOT_EMPLOYER.matcher(titleMatch.group(1)).find()) {
+            return titleMatch.group(1).trim();
+        }
         // No dedup key can be computed without SOME employer value (see DedupKeys) —
         // falling back to the channel keeps same-channel reposts/duplicates catchable
         // even though it can't catch the same posting cross-channel.
         return "@" + channel;
     }
 
+    // Verified live: many channels (e.g. frilanser_vacansii) open every post with a
+    // hashtag line (#вакансия #smm #удаленно) before the actual role name on the next
+    // non-empty line — without skipping it, every such vacancy's title was literally
+    // its hashtags, not a job title.
+    private static final java.util.regex.Pattern HASHTAG_ONLY_LINE =
+        java.util.regex.Pattern.compile("^(?:#\\S+\\s*)+$");
+    // Some channels format the title line as a markdown heading with a generic
+    // "Вакансия:" prefix ("### Вакансия: Асессор") — strip both so the title is just
+    // the role name, matching how every other channel's plain-text title line reads.
+    // CASE_INSENSITIVE alone only folds US-ASCII case in Java — Cyrillic needs
+    // UNICODE_CASE too, or "Вакансия" (capital В) silently fails to match "вакансия"
+    // and only the "###" heading gets stripped, leaving the prefix behind.
+    private static final java.util.regex.Pattern MD_HEADING_AND_VACANCY_PREFIX =
+        java.util.regex.Pattern.compile("^#{1,6}\\s*(?:вакансия\\s*:?\\s*)?",
+            java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.UNICODE_CASE);
+    // Telegram's rich-text editor prepends a zero-width space to some posts (styling
+    // artifact, not visible in the app) — String.strip() doesn't treat it as whitespace,
+    // so left alone it silently survives into the title/description.
+    private static String stripTgArtifacts(String s) {
+        return s.replace("​", "").strip();
+    }
+
     private static String extractTgTitle(String text) {
         for (String line : text.split("\n")) {
-            String t = line.strip();
-            if (!t.isEmpty()) return t.length() > 150 ? t.substring(0, 147) + "..." : t;
+            String t = stripTgArtifacts(line);
+            if (t.isEmpty() || HASHTAG_ONLY_LINE.matcher(t).matches()) continue;
+            t = MD_HEADING_AND_VACANCY_PREFIX.matcher(t).replaceFirst("").strip();
+            if (t.isEmpty()) continue;
+            return t.length() > 150 ? t.substring(0, 147) + "..." : t;
         }
         return text.length() > 150 ? text.substring(0, 147) + "..." : text;
     }
@@ -490,9 +540,10 @@ public class VacancyPipelineService {
                     // wording anywhere downstream except AI analysis input; the public
                     // post text this pipeline eventually sends out is AI-generated from
                     // extracted facts, not a copy (see VacancyAiAnalyzer/sendPublicPosts).
-                    String employer = extractTgEmployer(msg.text(), channel);
+                    String title = extractTgTitle(msg.text());
+                    String employer = extractTgEmployer(msg.text(), title, channel);
                     v.setHhId(msg.id());
-                    v.setTitle(extractTgTitle(msg.text()));
+                    v.setTitle(title);
                     v.setCompany(employer);
                     v.setDescription(msg.text());
                     v.setSource("telegram");
