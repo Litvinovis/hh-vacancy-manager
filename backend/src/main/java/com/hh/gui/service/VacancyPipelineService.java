@@ -628,6 +628,21 @@ public class VacancyPipelineService {
                 log.warn("Telegram-канал @{} ({} · {}) недоступен: {}", channel, job.personName, job.searchName, result.reason());
                 continue;
             }
+            // SMM engagement snapshot for this channel — summed across whatever's currently
+            // visible in the scrape, refreshed on every scheduled re-visit (not just at
+            // discovery), so already-known posts' growing view/reaction counts still show up
+            // in Grafana even though they're skipped below for candidate insertion.
+            int totalViews = 0;
+            Map<String, Integer> totalReactions = new HashMap<>();
+            for (TelegramClient.TelegramMessage msg : result.items()) {
+                if (msg.views() != null) totalViews += msg.views();
+                if (msg.reactions() != null) {
+                    msg.reactions().forEach((emoji, count) -> totalReactions.merge(emoji, count, Integer::sum));
+                }
+            }
+            telegramMetrics.recordViews(channel, totalViews);
+            telegramMetrics.recordReactions(channel, totalReactions);
+
             for (TelegramClient.TelegramMessage msg : result.items()) {
                 if (msg.text() == null || msg.text().isBlank()) continue;
 
@@ -1756,6 +1771,29 @@ public class VacancyPipelineService {
             if (dueForSearch.size() > sent) {
                 log.info("Очередь публикации (search_id={}): просрочено {} постов, отправлено {} — остальные следующими тиками",
                     entry.getKey(), dueForSearch.size(), sent);
+            }
+        }
+    }
+
+    /**
+     * Polls the subscriber count of every distinct chat_id currently configured as a
+     * search's public-post destination (see PipelineScheduler's SUBSCRIBER_COUNT_CHECK_INTERVAL)
+     * and records it as a gauge — Grafana computes day/week deltas from the retained
+     * time series via delta(), so nothing is persisted on this side. Distinct chat_ids
+     * only: several searches can publish to the same channel, and polling it once per
+     * search would just be redundant Bot API calls for an identical answer.
+     */
+    public void checkChannelSubscribers() {
+        Set<String> chatIds = new HashSet<>();
+        for (SearchConfig search : searchRepo.findAllEnabled()) {
+            if (search.getChatId() != null && !search.getChatId().isBlank()) {
+                chatIds.add(search.getChatId());
+            }
+        }
+        for (String chatId : chatIds) {
+            Integer count = telegramNotifier.getChatMemberCount(chatId);
+            if (count != null) {
+                telegramMetrics.recordSubscribers(chatId, count);
             }
         }
     }

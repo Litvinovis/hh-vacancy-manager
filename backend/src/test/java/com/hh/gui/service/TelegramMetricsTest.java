@@ -71,4 +71,52 @@ class TelegramMetricsTest {
 
         assertEquals(2.0, registry.find("telegram_published_total").tag("channel", "Udalenka7").counter().count());
     }
+
+    @Test
+    void recordViews_setsGaugeToLatestValue_notAccumulating() {
+        // A gauge, not a counter: the second scrape's total should REPLACE the first,
+        // not add to it — each scrape reports the channel's current state, not a delta.
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        TelegramMetrics metrics = new TelegramMetrics(registry);
+
+        metrics.recordViews("kadrout", 100);
+        assertEquals(100.0, registry.find("telegram_channel_views_recent").tag("channel", "kadrout").gauge().value());
+
+        metrics.recordViews("kadrout", 150);
+        assertEquals(150.0, registry.find("telegram_channel_views_recent").tag("channel", "kadrout").gauge().value());
+    }
+
+    @Test
+    void recordReactions_taggedByEmojiIndependently() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        TelegramMetrics metrics = new TelegramMetrics(registry);
+
+        metrics.recordReactions("remotevibe", java.util.Map.of("❤", 3, "🔥", 1));
+
+        assertEquals(3.0, registry.find("telegram_channel_reactions_recent")
+            .tag("channel", "remotevibe").tag("emoji", "❤").gauge().value());
+        assertEquals(1.0, registry.find("telegram_channel_reactions_recent")
+            .tag("channel", "remotevibe").tag("emoji", "🔥").gauge().value());
+    }
+
+    @Test
+    void recordReactions_nullOrEmptyMap_doesNotThrow() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        TelegramMetrics metrics = new TelegramMetrics(registry);
+
+        assertDoesNotThrow(() -> metrics.recordReactions("remotevibe", null));
+        assertDoesNotThrow(() -> metrics.recordReactions("remotevibe", java.util.Map.of()));
+    }
+
+    @Test
+    void recordSubscribers_setsGaugeToLatestValue() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        TelegramMetrics metrics = new TelegramMetrics(registry);
+
+        metrics.recordSubscribers("-1004333110303", 4);
+        assertEquals(4.0, registry.find("telegram_channel_subscribers").tag("channel", "-1004333110303").gauge().value());
+
+        metrics.recordSubscribers("-1004333110303", 7);
+        assertEquals(7.0, registry.find("telegram_channel_subscribers").tag("channel", "-1004333110303").gauge().value());
+    }
 }

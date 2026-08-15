@@ -38,8 +38,13 @@ public class TelegramClient {
 
     private final ObjectMapper mapper = new ObjectMapper();
 
+    /** @param views total view count at scrape time, null if unavailable (see collectMessages
+     *                in tg-scraper/server.js — read via Telegram Web K's own internal message
+     *                cache, best-effort and can legitimately be absent).
+     *  @param reactions emoji -> count, empty map if none; same best-effort caveat as views. */
     public record TelegramMessage(
-        String id, String text, String publishedAt, String link, String channel, String source) {}
+        String id, String text, String publishedAt, String link, String channel, String source,
+        Integer views, java.util.Map<String, Integer> reactions) {}
 
     public record ChannelResult(boolean ok, String reason, List<TelegramMessage> items) {
         static ChannelResult failure(String reason) {
@@ -79,7 +84,8 @@ public class TelegramClient {
             for (Map<String, Object> item : rawItems) {
                 items.add(new TelegramMessage(
                     str(item.get("id")), str(item.get("text")), str(item.get("publishedAt")),
-                    str(item.get("link")), str(item.get("channel")), str(item.get("source"))));
+                    str(item.get("link")), str(item.get("channel")), str(item.get("source")),
+                    views(item.get("views")), reactions(item.get("reactions"))));
             }
             log.debug("Telegram-канал @{}: {} сообщений", username, items.size());
             return new ChannelResult(true, null, items);
@@ -91,5 +97,19 @@ public class TelegramClient {
 
     private static String str(Object o) {
         return o != null ? o.toString() : null;
+    }
+
+    private static Integer views(Object o) {
+        return o instanceof Number n ? n.intValue() : null;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static java.util.Map<String, Integer> reactions(Object o) {
+        if (!(o instanceof Map)) return java.util.Map.of();
+        java.util.Map<String, Integer> result = new java.util.LinkedHashMap<>();
+        for (var e : ((Map<String, Object>) o).entrySet()) {
+            if (e.getValue() instanceof Number n) result.put(e.getKey(), n.intValue());
+        }
+        return result;
     }
 }

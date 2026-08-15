@@ -84,6 +84,11 @@ public class PipelineScheduler implements SchedulingConfigurer {
     private static final Duration QUEUED_PUBLISH_CHECK_INTERVAL = Duration.ofMinutes(1);
     private static final int QUEUED_PUBLISH_BATCH_PER_TICK = 50;
 
+    // Subscriber count only needs to move slowly enough for day/week deltas in Grafana
+    // (see VacancyPipelineService.checkChannelSubscribers) — every few minutes would be
+    // pure Bot API noise for a number that changes a handful of times a day at most.
+    private static final Duration SUBSCRIBER_COUNT_CHECK_INTERVAL = Duration.ofHours(6);
+
     public PipelineScheduler(VacancyPipelineService pipelineService, SearchProfileFactory profileFactory,
                               RuntimeConfig runtimeConfig, VacancyAiAnalyzer aiAnalyzer, SearchRepository searchRepo,
                               FreeModelUpdater freeModelUpdater, FeatureFlags featureFlags, SchemaMigrator schemaMigrator,
@@ -115,6 +120,7 @@ public class PipelineScheduler implements SchedulingConfigurer {
         registrar.addTriggerTask(this::runFreshnessCheck, freshnessTrigger);
         registrar.addTriggerTask(this::runDueDelayedPublications, new PeriodicTrigger(DELAYED_PUBLISH_CHECK_INTERVAL));
         registrar.addTriggerTask(this::runDueQueuedPublications, new PeriodicTrigger(QUEUED_PUBLISH_CHECK_INTERVAL));
+        registrar.addTriggerTask(this::runChannelSubscriberCheck, new PeriodicTrigger(SUBSCRIBER_COUNT_CHECK_INTERVAL));
         registrar.addTriggerTask(this::runSubscriptionExpiry, new PeriodicTrigger(SUBSCRIPTION_EXPIRY_CHECK_INTERVAL));
         registrar.addTriggerTask(this::runRenewalReminders, new PeriodicTrigger(RENEWAL_REMINDER_CHECK_INTERVAL));
     }
@@ -147,6 +153,15 @@ public class PipelineScheduler implements SchedulingConfigurer {
             pipelineService.publishDueQueued(QUEUED_PUBLISH_BATCH_PER_TICK);
         } catch (Exception e) {
             log.error("Публикация из очереди завершилась ошибкой: {}", e.getMessage(), e);
+        }
+    }
+
+    private void runChannelSubscriberCheck() {
+        if (schemaNotReady()) return;
+        try {
+            pipelineService.checkChannelSubscribers();
+        } catch (Exception e) {
+            log.error("Опрос числа подписчиков канала завершился ошибкой: {}", e.getMessage(), e);
         }
     }
 

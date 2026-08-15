@@ -1,7 +1,12 @@
 package com.hh.gui.service;
 
+import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.stereotype.Component;
+
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Per-channel Micrometer metrics for the Telegram vacancy source (Path B of
@@ -22,6 +27,12 @@ import org.springframework.stereotype.Component;
 public class TelegramMetrics {
 
     private final MeterRegistry registry;
+    // Gauge values, unlike counters, need a live mutable reference for Micrometer to
+    // poll — one AtomicInteger per channel (or per channel+emoji), created once and
+    // updated in place on every subsequent call for the same key.
+    private final Map<String, AtomicInteger> viewGauges = new ConcurrentHashMap<>();
+    private final Map<String, AtomicInteger> reactionGauges = new ConcurrentHashMap<>();
+    private final Map<String, AtomicInteger> subscriberGauges = new ConcurrentHashMap<>();
 
     public TelegramMetrics(MeterRegistry registry) {
         this.registry = registry;
@@ -48,5 +59,48 @@ public class TelegramMetrics {
     public void recordPublished(String channel) {
         if (channel == null) return;
         registry.counter("telegram_published_total", "application", "hh-gui", "channel", channel).increment();
+    }
+
+    /** Total views summed across the posts just re-scraped from this channel (see
+     *  VacancyPipelineService.discoverFromTelegram) — a gauge, not a counter: views are a
+     *  snapshot of the channel's current activity level each scrape, not a running total. */
+    public void recordViews(String channel, int totalViews) {
+        if (channel == null) return;
+        viewGauges.computeIfAbsent(channel, ch -> {
+            AtomicInteger value = new AtomicInteger();
+            Gauge.builder("telegram_channel_views_recent", value, AtomicInteger::get)
+                .description("Views summed across this channel's posts as of the latest scrape")
+                .tag("application", "hh-gui").tag("channel", ch).register(registry);
+            return value;
+        }).set(totalViews);
+    }
+
+    /** Reaction counts summed across the posts just re-scraped from this channel, tagged by emoji. */
+    public void recordReactions(String channel, Map<String, Integer> reactionCounts) {
+        if (channel == null || reactionCounts == null) return;
+        for (var entry : reactionCounts.entrySet()) {
+            String key = channel + "|" + entry.getKey();
+            reactionGauges.computeIfAbsent(key, k -> {
+                AtomicInteger value = new AtomicInteger();
+                Gauge.builder("telegram_channel_reactions_recent", value, AtomicInteger::get)
+                    .description("Reaction count summed across this channel's posts as of the latest scrape, by emoji")
+                    .tag("application", "hh-gui").tag("channel", channel).tag("emoji", entry.getKey()).register(registry);
+                return value;
+            }).set(entry.getValue());
+        }
+    }
+
+    /** Current subscriber count of a channel this app publishes to (Bot API getChatMemberCount) —
+     *  a gauge polled periodically; Grafana computes day/week deltas from the retained series
+     *  via delta(), so no separate snapshot table is needed on this side. */
+    public void recordSubscribers(String channel, int count) {
+        if (channel == null) return;
+        subscriberGauges.computeIfAbsent(channel, ch -> {
+            AtomicInteger value = new AtomicInteger();
+            Gauge.builder("telegram_channel_subscribers", value, AtomicInteger::get)
+                .description("Current subscriber count")
+                .tag("application", "hh-gui").tag("channel", ch).register(registry);
+            return value;
+        }).set(count);
     }
 }
