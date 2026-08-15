@@ -37,7 +37,48 @@ class VacancyPipelineServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new VacancyPipelineService(null, null, null, null, null, null, new RuntimeConfig(), null, new FeatureFlags(), null, null, new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+        service = service().build();
+    }
+
+    /**
+     * Builds the service with only the collaborators a given test actually cares about;
+     * everything else stays null, exactly as each call site spelled out by hand before.
+     *
+     * The point is the constructor's 12 arguments were repeated across 45 call sites, so
+     * every new dependency meant 45 mechanical edits — paid three times in one session
+     * (TelegramClient, TelegramMetrics, the AiResult signature), and one of those bulk
+     * edits missed a site and broke the build. Now a 13th dependency changes one line:
+     * {@link Builder#build()}.
+     */
+    private static Builder service() { return new Builder(); }
+
+    private static final class Builder {
+        private ScraperClient scraper;
+        private TelegramClient telegram;
+        private VacancyAiAnalyzer analyzer;
+        private VacancyRepository repo;
+        private TelegramNotifier notifier;
+        private RuntimeConfig config = new RuntimeConfig();
+        private com.hh.gui.ai.AiMetrics aiMetrics;
+        private com.hh.gui.repository.SearchRepository searchRepo;
+        private io.micrometer.core.instrument.MeterRegistry registry =
+            new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+
+        Builder scraper(ScraperClient v) { this.scraper = v; return this; }
+        Builder telegram(TelegramClient v) { this.telegram = v; return this; }
+        Builder analyzer(VacancyAiAnalyzer v) { this.analyzer = v; return this; }
+        Builder repo(VacancyRepository v) { this.repo = v; return this; }
+        Builder notifier(TelegramNotifier v) { this.notifier = v; return this; }
+        Builder config(RuntimeConfig v) { this.config = v; return this; }
+        Builder aiMetrics(com.hh.gui.ai.AiMetrics v) { this.aiMetrics = v; return this; }
+        Builder searchRepo(com.hh.gui.repository.SearchRepository v) { this.searchRepo = v; return this; }
+        /** Only when a test asserts on the recorded metrics and needs the registry back. */
+        Builder metricsRegistry(io.micrometer.core.instrument.MeterRegistry v) { this.registry = v; return this; }
+
+        VacancyPipelineService build() {
+            return new VacancyPipelineService(null, scraper, telegram, analyzer, repo, notifier,
+                config, aiMetrics, new FeatureFlags(), searchRepo, null, new TelegramMetrics(registry));
+        }
     }
 
     private List<List<Vacancy>> chunkReport(List<Vacancy> vacancies, String header) throws Exception {
@@ -430,8 +471,7 @@ class VacancyPipelineServiceTest {
             new ScraperClient.SearchPageResult(true, null, page1, null),
             new ScraperClient.SearchPageResult(true, null, page2, null));
         FakeRepo repo = new FakeRepo(Set.of("901", "902", "903", "904", "905", "906", "907"));
-        VacancyPipelineService svc = new VacancyPipelineService(
-            null, scraper, null, new FakeAnalyzer(config), repo, null, config, null, new FeatureFlags(), null, null, new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+        VacancyPipelineService svc = service().scraper(scraper).analyzer(new FakeAnalyzer(config)).repo(repo).config(config).build();
 
         int saved = svc.discoverFromUrl(urlJob(), "https://hh.ru/search/vacancy?text=x", 3);
 
@@ -506,10 +546,7 @@ class VacancyPipelineServiceTest {
         RuntimeConfig config = new RuntimeConfig();
         FakeAnalyzeRepo repo = new FakeAnalyzeRepo();
         FakeBatchAnalyzer analyzer = new FakeBatchAnalyzer(config);
-        VacancyPipelineService svc = new VacancyPipelineService(
-            null, null, null, analyzer, repo, null, config,
-            new com.hh.gui.ai.AiMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry(), config),
-            new FeatureFlags(), null, null, new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+        VacancyPipelineService svc = service().analyzer(analyzer).repo(repo).config(config).aiMetrics(new com.hh.gui.ai.AiMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry(), config)).build();
 
         List<Vacancy> batch = List.of(
             pendingVacancy("1", "поддержка|т банк"),
@@ -609,8 +646,7 @@ class VacancyPipelineServiceTest {
         }
         FreshnessScraper scraper = new FreshnessScraper(config);
         repo.pending.forEach(v -> scraper.byId.put(v.getHhId(), failResult("http_403")));
-        VacancyPipelineService svc = new VacancyPipelineService(
-            null, scraper, null, new FakeAnalyzer(config), repo, null, config, null, new FeatureFlags(), null, null, new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+        VacancyPipelineService svc = service().scraper(scraper).analyzer(new FakeAnalyzer(config)).repo(repo).config(config).build();
 
         int count = scrapePending(svc, urlJob());
 
@@ -629,8 +665,7 @@ class VacancyPipelineServiceTest {
         }
         FreshnessScraper scraper = new FreshnessScraper(config);
         repo.pending.forEach(v -> scraper.byId.put(v.getHhId(), failResult("http_403")));
-        VacancyPipelineService svc = new VacancyPipelineService(
-            null, scraper, null, new FakeAnalyzer(config), repo, null, config, null, new FeatureFlags(), null, null, new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+        VacancyPipelineService svc = service().scraper(scraper).analyzer(new FakeAnalyzer(config)).repo(repo).config(config).build();
 
         scrapePending(svc, urlJob());
 
@@ -656,8 +691,7 @@ class VacancyPipelineServiceTest {
         // обнаружить порознь в течение одной секунды — каждый вызывал enterScrapeCooldown(),
         // и счётчик страйков прыгал 1→2→3 сразу, разгоняя заморозку до нескольких часов
         // за одно событие вместо честной эскалации после действительно повторной блокировки.
-        VacancyPipelineService svc = new VacancyPipelineService(
-            null, null, null, null, null, null, new RuntimeConfig(), null, new FeatureFlags(), null, null, new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+        VacancyPipelineService svc = service().build();
 
         enterScrapeCooldown(svc);
         enterScrapeCooldown(svc);
@@ -677,8 +711,7 @@ class VacancyPipelineServiceTest {
             null, null, null, null, "Уфа", null, null, null, null, List.of(), false, null, null));
         scraper.byId.put("12", failResult("archived"));
         scraper.byId.put("13", failResult("http_403"));
-        VacancyPipelineService svc = new VacancyPipelineService(
-            null, scraper, null, new FakeAnalyzer(config), repo, null, config, null, new FeatureFlags(), null, null, new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+        VacancyPipelineService svc = service().scraper(scraper).analyzer(new FakeAnalyzer(config)).repo(repo).config(config).build();
 
         VacancyPipelineService.FreshnessResult r = svc.checkVacancyFreshness(5);
 
@@ -697,8 +730,7 @@ class VacancyPipelineServiceTest {
         repo.backlog = VacancyPipelineService.FRESHNESS_MAX_SCRAPE_BACKLOG + 1;
         repo.due = List.of(pendingVacancy("11", null));
         FreshnessScraper scraper = new FreshnessScraper(config);
-        VacancyPipelineService svc = new VacancyPipelineService(
-            null, scraper, null, new FakeAnalyzer(config), repo, null, config, null, new FeatureFlags(), null, null, new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+        VacancyPipelineService svc = service().scraper(scraper).analyzer(new FakeAnalyzer(config)).repo(repo).config(config).build();
 
         VacancyPipelineService.FreshnessResult r = svc.checkVacancyFreshness(5);
 
@@ -716,8 +748,7 @@ class VacancyPipelineServiceTest {
         repo.due = List.of(pendingVacancy("11", null));
         FreshnessScraper scraper = new FreshnessScraper(config);
         scraper.byId.put("11", failResult("archived"));
-        VacancyPipelineService svc = new VacancyPipelineService(
-            null, scraper, null, new FakeAnalyzer(config), repo, null, config, null, new FeatureFlags(), null, null, new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+        VacancyPipelineService svc = service().scraper(scraper).analyzer(new FakeAnalyzer(config)).repo(repo).config(config).build();
 
         VacancyPipelineService.FreshnessResult r = svc.checkVacancyFreshness(5);
 
@@ -740,8 +771,7 @@ class VacancyPipelineServiceTest {
         RuntimeConfig config = new RuntimeConfig();
         config.setNotificationsEnabled(false);
         config.setChannelNotificationsEnabled(false);
-        VacancyPipelineService svc = new VacancyPipelineService(
-            null, null, null, null, null, null, config, null, new FeatureFlags(), null, null, new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+        VacancyPipelineService svc = service().config(config).build();
 
         SearchJob job = new SearchJob();
         job.personName = "Мама";
@@ -761,8 +791,7 @@ class VacancyPipelineServiceTest {
         // до findNotifiedByEmployer.
         RuntimeConfig config = new RuntimeConfig();
         config.setNotificationsEnabled(true);
-        VacancyPipelineService svc = new VacancyPipelineService(
-            null, null, null, null, null, null, config, null, new FeatureFlags(), null, null, new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+        VacancyPipelineService svc = service().config(config).build();
 
         SearchJob job = new SearchJob();
         job.personName = "Мама";
@@ -815,8 +844,7 @@ class VacancyPipelineServiceTest {
         RuntimeConfig config = new RuntimeConfig();
         config.setNotificationsEnabled(true);
         FakeSimilarityRepo repo = new FakeSimilarityRepo();
-        VacancyPipelineService svc = new VacancyPipelineService(
-            null, null, null, null, repo, new RecordingNotifier(), config, null, new FeatureFlags(), null, null, new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+        VacancyPipelineService svc = service().repo(repo).notifier(new RecordingNotifier()).config(config).build();
 
         Vacancy alreadySent = vacancy("Продавец", "Подходит", 80);
         alreadySent.setDescription("Обязанности: продавать\nТребования: опыт");
@@ -846,8 +874,7 @@ class VacancyPipelineServiceTest {
         config.setNotificationsEnabled(true);
         FakeSimilarityRepo repo = new FakeSimilarityRepo();
         RecordingNotifier notifier = new RecordingNotifier();
-        VacancyPipelineService svc = new VacancyPipelineService(
-            null, null, null, null, repo, notifier, config, null, new FeatureFlags(), null, null, new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+        VacancyPipelineService svc = service().repo(repo).notifier(notifier).config(config).build();
 
         Vacancy alreadyQueuedOnOtherChannel = vacancy("Оператор ЕГАИС", "Подходит", 80);
         alreadyQueuedOnOtherChannel.setCompany("@onlinevakansii");
@@ -881,8 +908,7 @@ class VacancyPipelineServiceTest {
         config.setNotificationsEnabled(true);
         FakeSimilarityRepo repo = new FakeSimilarityRepo();
         RecordingNotifier notifier = new RecordingNotifier();
-        VacancyPipelineService svc = new VacancyPipelineService(
-            null, null, null, null, repo, notifier, config, null, new FeatureFlags(), null, null, new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+        VacancyPipelineService svc = service().repo(repo).notifier(notifier).config(config).build();
 
         Vacancy candidate = vacancy("Менеджер по продажам", "Подходит", 75);
         candidate.setId(61L);
@@ -1037,8 +1063,7 @@ class VacancyPipelineServiceTest {
         FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
             true, null, List.of(tgMsg("1", "Менеджер по продажам\nПодробности: https://ufa.hh.ru/vacancy/123456789")))));
         FakeTgRepo repo = new FakeTgRepo(Set.of());
-        VacancyPipelineService svc = new VacancyPipelineService(
-            null, null, tg, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null, new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+        VacancyPipelineService svc = service().telegram(tg).repo(repo).build();
 
         int saved = svc.discoverFromTelegram(tgJob(), List.of("testchan"));
 
@@ -1057,8 +1082,7 @@ class VacancyPipelineServiceTest {
         FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
             true, null, List.of(tgMsg("tg_testchan_42", text)))));
         FakeTgRepo repo = new FakeTgRepo(Set.of());
-        VacancyPipelineService svc = new VacancyPipelineService(
-            null, null, tg, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null, new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+        VacancyPipelineService svc = service().telegram(tg).repo(repo).build();
 
         int saved = svc.discoverFromTelegram(tgJob(), List.of("testchan"));
 
@@ -1079,8 +1103,7 @@ class VacancyPipelineServiceTest {
             true, null, List.of(tgMsg("tg_testchan_42", text)))));
         FakeTgRepo repo = new FakeTgRepo(Set.of());
         io.micrometer.core.instrument.simple.SimpleMeterRegistry registry = new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
-        VacancyPipelineService svc = new VacancyPipelineService(
-            null, null, tg, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null, new TelegramMetrics(registry));
+        VacancyPipelineService svc = service().telegram(tg).repo(repo).metricsRegistry(registry).build();
 
         svc.discoverFromTelegram(tgJob(), List.of("testchan"));
 
@@ -1096,8 +1119,7 @@ class VacancyPipelineServiceTest {
             true, null, List.of(tgMsg("tg_" + channel + "_777", "Оператор чата")))));
         FakeTgRepo repo = new FakeTgRepo(Set.of());
         io.micrometer.core.instrument.simple.SimpleMeterRegistry registry = new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
-        VacancyPipelineService svc = new VacancyPipelineService(
-            null, null, tg, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null, new TelegramMetrics(registry));
+        VacancyPipelineService svc = service().telegram(tg).repo(repo).metricsRegistry(registry).build();
 
         svc.discoverFromTelegram(tgJob(), List.of(channel));
 
@@ -1113,8 +1135,7 @@ class VacancyPipelineServiceTest {
             true, null, List.of(tgMsg("1", "Менеджер по продажам\nПодробности: https://ufa.hh.ru/vacancy/123456789")))));
         FakeTgRepo repo = new FakeTgRepo(Set.of());
         io.micrometer.core.instrument.simple.SimpleMeterRegistry registry = new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
-        VacancyPipelineService svc = new VacancyPipelineService(
-            null, null, tg, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null, new TelegramMetrics(registry));
+        VacancyPipelineService svc = service().telegram(tg).repo(repo).metricsRegistry(registry).build();
 
         svc.discoverFromTelegram(tgJob(), List.of("testchan"));
 
@@ -1129,8 +1150,7 @@ class VacancyPipelineServiceTest {
                 tgMsg("tg_testchan_2", "Оператор чата 2", 15, java.util.Map.of("❤", 1, "🔥", 3))))));
         FakeTgRepo repo = new FakeTgRepo(Set.of());
         io.micrometer.core.instrument.simple.SimpleMeterRegistry registry = new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
-        VacancyPipelineService svc = new VacancyPipelineService(
-            null, null, tg, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null, new TelegramMetrics(registry));
+        VacancyPipelineService svc = service().telegram(tg).repo(repo).metricsRegistry(registry).build();
 
         svc.discoverFromTelegram(tgJob(), List.of("testchan"));
 
@@ -1151,8 +1171,7 @@ class VacancyPipelineServiceTest {
         FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
             true, null, List.of(tgMsg("tg_testchan_99", text)))));
         FakeTgRepo repo = new FakeTgRepo(Set.of());
-        VacancyPipelineService svc = new VacancyPipelineService(
-            null, null, tg, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null, new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+        VacancyPipelineService svc = service().telegram(tg).repo(repo).build();
 
         svc.discoverFromTelegram(tgJob(), List.of("testchan"));
 
@@ -1169,8 +1188,7 @@ class VacancyPipelineServiceTest {
         FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
             true, null, List.of(tgMsg("tg_testchan_100", text)))));
         FakeTgRepo repo = new FakeTgRepo(Set.of());
-        VacancyPipelineService svc = new VacancyPipelineService(
-            null, null, tg, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null, new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+        VacancyPipelineService svc = service().telegram(tg).repo(repo).build();
 
         svc.discoverFromTelegram(tgJob(), List.of("testchan"));
 
@@ -1188,8 +1206,7 @@ class VacancyPipelineServiceTest {
         FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
             true, null, List.of(tgMsg("tg_testchan_55", text)))));
         FakeTgRepo repo = new FakeTgRepo(Set.of());
-        VacancyPipelineService svc = new VacancyPipelineService(
-            null, null, tg, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null, new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+        VacancyPipelineService svc = service().telegram(tg).repo(repo).build();
 
         svc.discoverFromTelegram(tgJob(), List.of("testchan"));
 
@@ -1205,8 +1222,7 @@ class VacancyPipelineServiceTest {
         FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
             true, null, List.of(tgMsg("tg_testchan_56", text)))));
         FakeTgRepo repo = new FakeTgRepo(Set.of());
-        VacancyPipelineService svc = new VacancyPipelineService(
-            null, null, tg, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null, new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+        VacancyPipelineService svc = service().telegram(tg).repo(repo).build();
 
         svc.discoverFromTelegram(tgJob(), List.of("testchan"));
 
@@ -1222,8 +1238,7 @@ class VacancyPipelineServiceTest {
         FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
             true, null, List.of(tgMsg("tg_testchan_57", text)))));
         FakeTgRepo repo = new FakeTgRepo(Set.of());
-        VacancyPipelineService svc = new VacancyPipelineService(
-            null, null, tg, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null, new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+        VacancyPipelineService svc = service().telegram(tg).repo(repo).build();
 
         svc.discoverFromTelegram(tgJob(), List.of("testchan"));
 
@@ -1239,8 +1254,7 @@ class VacancyPipelineServiceTest {
         FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
             true, null, List.of(tgMsg("tg_testchan_58", text)))));
         FakeTgRepo repo = new FakeTgRepo(Set.of());
-        VacancyPipelineService svc = new VacancyPipelineService(
-            null, null, tg, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null, new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+        VacancyPipelineService svc = service().telegram(tg).repo(repo).build();
 
         svc.discoverFromTelegram(tgJob(), List.of("testchan"));
 
@@ -1260,8 +1274,7 @@ class VacancyPipelineServiceTest {
         FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
             true, null, List.of(tgMsg("tg_testchan_61", text1), tgMsg("tg_testchan_62", text2)))));
         FakeTgRepo repo = new FakeTgRepo(Set.of());
-        VacancyPipelineService svc = new VacancyPipelineService(
-            null, null, tg, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null, new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+        VacancyPipelineService svc = service().telegram(tg).repo(repo).build();
 
         svc.discoverFromTelegram(tgJob(), List.of("testchan"));
 
@@ -1281,8 +1294,7 @@ class VacancyPipelineServiceTest {
         FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
             true, null, List.of(tgMsg("tg_testchan_63", text)))));
         FakeTgRepo repo = new FakeTgRepo(Set.of());
-        VacancyPipelineService svc = new VacancyPipelineService(
-            null, null, tg, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null, new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+        VacancyPipelineService svc = service().telegram(tg).repo(repo).build();
 
         svc.discoverFromTelegram(tgJob(), List.of("testchan"));
 
@@ -1296,8 +1308,7 @@ class VacancyPipelineServiceTest {
         FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
             true, null, List.of(tgMsg("tg_testchan_70", text)))));
         FakeTgRepo repo = new FakeTgRepo(Set.of());
-        VacancyPipelineService svc = new VacancyPipelineService(
-            null, null, tg, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null, new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+        VacancyPipelineService svc = service().telegram(tg).repo(repo).build();
 
         svc.discoverFromTelegram(tgJob(), List.of("testchan"));
 
@@ -1313,8 +1324,7 @@ class VacancyPipelineServiceTest {
         FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
             true, null, List.of(tgMsg("tg_testchan_71", text)))));
         FakeTgRepo repo = new FakeTgRepo(Set.of());
-        VacancyPipelineService svc = new VacancyPipelineService(
-            null, null, tg, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null, new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+        VacancyPipelineService svc = service().telegram(tg).repo(repo).build();
 
         svc.discoverFromTelegram(tgJob(), List.of("testchan"));
 
@@ -1333,8 +1343,7 @@ class VacancyPipelineServiceTest {
         FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
             true, null, List.of(tgMsg("tg_testchan_72", text)))));
         FakeTgRepo repo = new FakeTgRepo(Set.of());
-        VacancyPipelineService svc = new VacancyPipelineService(
-            null, null, tg, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null, new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+        VacancyPipelineService svc = service().telegram(tg).repo(repo).build();
 
         svc.discoverFromTelegram(tgJob(), List.of("testchan"));
 
@@ -1349,8 +1358,7 @@ class VacancyPipelineServiceTest {
         FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
             true, null, List.of(tgMsg("tg_testchan_73", text)))));
         FakeTgRepo repo = new FakeTgRepo(Set.of());
-        VacancyPipelineService svc = new VacancyPipelineService(
-            null, null, tg, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null, new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+        VacancyPipelineService svc = service().telegram(tg).repo(repo).build();
 
         svc.discoverFromTelegram(tgJob(), List.of("testchan"));
 
@@ -1364,8 +1372,7 @@ class VacancyPipelineServiceTest {
         FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
             true, null, List.of(tgMsg("1", "Менеджер по продажам\nПодробности: https://ufa.hh.ru/vacancy/123456789")))));
         FakeTgRepo repo = new FakeTgRepo(Set.of());
-        VacancyPipelineService svc = new VacancyPipelineService(
-            null, null, tg, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null, new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+        VacancyPipelineService svc = service().telegram(tg).repo(repo).build();
 
         svc.discoverFromTelegram(tgJob(), List.of("testchan"));
 
@@ -1381,8 +1388,7 @@ class VacancyPipelineServiceTest {
         FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
             true, null, List.of(tgMsg("tg_testchan_80", text)))));
         FakeTgRepo repo = new FakeTgRepo(Set.of());
-        VacancyPipelineService svc = new VacancyPipelineService(
-            null, null, tg, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null, new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+        VacancyPipelineService svc = service().telegram(tg).repo(repo).build();
 
         svc.discoverFromTelegram(tgJob(), List.of("testchan"));
 
@@ -1396,8 +1402,7 @@ class VacancyPipelineServiceTest {
         FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
             true, null, List.of(tgMsg("tg_testchan_81", text)))));
         FakeTgRepo repo = new FakeTgRepo(Set.of());
-        VacancyPipelineService svc = new VacancyPipelineService(
-            null, null, tg, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null, new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+        VacancyPipelineService svc = service().telegram(tg).repo(repo).build();
 
         svc.discoverFromTelegram(tgJob(), List.of("testchan"));
 
@@ -1409,8 +1414,7 @@ class VacancyPipelineServiceTest {
         FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
             true, null, List.of(tgMsg("1", "Риэлтор без опыта, удалённо, доход от 100000")))));
         FakeTgRepo repo = new FakeTgRepo(Set.of());
-        VacancyPipelineService svc = new VacancyPipelineService(
-            null, null, tg, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null, new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+        VacancyPipelineService svc = service().telegram(tg).repo(repo).build();
         SearchJob job = tgJob();
         job.excludeWords = List.of("риэлтор");
 
@@ -1425,8 +1429,7 @@ class VacancyPipelineServiceTest {
         FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
             true, null, List.of(tgMsg("tg_testchan_7", "Продавец-консультант удалённо")))));
         FakeTgRepo repo = new FakeTgRepo(Set.of("tg_testchan_7"));
-        VacancyPipelineService svc = new VacancyPipelineService(
-            null, null, tg, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null, new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+        VacancyPipelineService svc = service().telegram(tg).repo(repo).build();
 
         int saved = svc.discoverFromTelegram(tgJob(), List.of("testchan"));
 
@@ -1535,8 +1538,7 @@ class VacancyPipelineServiceTest {
         // 12 одобренных вакансий должны лечь в очередь по 5 — три группы с тремя разными
         // (не более) queued_publish_at, а не 12 разных моментов времени.
         FakeQueueRepo repo = new FakeQueueRepo();
-        VacancyPipelineService svc = new VacancyPipelineService(
-            null, null, null, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null, new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+        VacancyPipelineService svc = service().repo(repo).build();
         SearchJob job = tgJob();
         job.chatId = "-100123";
         job.publishPaceMinutes = 5;
@@ -1582,8 +1584,7 @@ class VacancyPipelineServiceTest {
         repo.enqueuedIds.addAll(List.of(101L, 102L, 103L, 104L, 105L)); // one full batch of 5, already queued
         for (int i = 0; i < 5; i++) repo.enqueuedPublishAts.add(existingTail);
 
-        VacancyPipelineService svc = new VacancyPipelineService(
-            null, null, null, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null, new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+        VacancyPipelineService svc = service().repo(repo).build();
         SearchJob job = tgJob();
         job.chatId = "-100123";
         job.publishPaceMinutes = 5;
@@ -1666,8 +1667,7 @@ class VacancyPipelineServiceTest {
         RecordingChannelBotNotifier notifier = new RecordingChannelBotNotifier();
         RuntimeConfig config = new RuntimeConfig();
         config.setChannelNotificationsEnabled(true);
-        VacancyPipelineService svc = new VacancyPipelineService(
-            null, null, null, null, repo, notifier, config, null, new FeatureFlags(), searchRepo, null, new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+        VacancyPipelineService svc = service().repo(repo).notifier(notifier).config(config).searchRepo(searchRepo).build();
 
         java.lang.reflect.Method pubM = VacancyPipelineService.class.getDeclaredMethod("doPublishDueQueued", int.class);
         pubM.setAccessible(true);
@@ -1696,8 +1696,7 @@ class VacancyPipelineServiceTest {
         RecordingChannelBotNotifier notifier = new RecordingChannelBotNotifier();
         RuntimeConfig config = new RuntimeConfig();
         config.setChannelNotificationsEnabled(true);
-        VacancyPipelineService svc = new VacancyPipelineService(
-            null, null, null, null, repo, notifier, config, null, new FeatureFlags(), searchRepo, null, new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+        VacancyPipelineService svc = service().repo(repo).notifier(notifier).config(config).searchRepo(searchRepo).build();
 
         java.lang.reflect.Method pubM = VacancyPipelineService.class.getDeclaredMethod("doPublishDueQueued", int.class);
         pubM.setAccessible(true);
@@ -1736,8 +1735,7 @@ class VacancyPipelineServiceTest {
         searchRepo.enabled = List.of(searchWithChatId("-100111"), searchWithChatId("-100111"), searchWithChatId("-100222"));
         FakeSubscriberCountNotifier notifier = new FakeSubscriberCountNotifier(java.util.Map.of("-100111", 42, "-100222", 7));
         io.micrometer.core.instrument.simple.SimpleMeterRegistry registry = new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
-        VacancyPipelineService svc = new VacancyPipelineService(
-            null, null, null, null, null, notifier, new RuntimeConfig(), null, new FeatureFlags(), searchRepo, null, new TelegramMetrics(registry));
+        VacancyPipelineService svc = service().notifier(notifier).searchRepo(searchRepo).metricsRegistry(registry).build();
 
         svc.checkChannelSubscribers();
 
@@ -1751,8 +1749,7 @@ class VacancyPipelineServiceTest {
         FakeSearchRepo searchRepo = new FakeSearchRepo();
         searchRepo.enabled = List.of(searchWithChatId(""), searchWithChatId(null));
         FakeSubscriberCountNotifier notifier = new FakeSubscriberCountNotifier(java.util.Map.of());
-        VacancyPipelineService svc = new VacancyPipelineService(
-            null, null, null, null, null, notifier, new RuntimeConfig(), null, new FeatureFlags(), searchRepo, null, new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+        VacancyPipelineService svc = service().notifier(notifier).searchRepo(searchRepo).build();
 
         svc.checkChannelSubscribers();
 
@@ -1773,8 +1770,7 @@ class VacancyPipelineServiceTest {
                 tgMsg("tg_remotevibe_1", "Пост 1", 10, java.util.Map.of("❤", 2)),
                 tgMsg("tg_remotevibe_2", "Пост 2", 15, java.util.Map.of("🔥", 1))))));
         io.micrometer.core.instrument.simple.SimpleMeterRegistry registry = new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
-        VacancyPipelineService svc = new VacancyPipelineService(
-            null, null, tg, null, null, notifier, new RuntimeConfig(), null, new FeatureFlags(), searchRepo, null, new TelegramMetrics(registry));
+        VacancyPipelineService svc = service().telegram(tg).notifier(notifier).searchRepo(searchRepo).metricsRegistry(registry).build();
 
         svc.checkOwnChannelEngagement();
 
@@ -1790,8 +1786,7 @@ class VacancyPipelineServiceTest {
         FakeSubscriberCountNotifier notifier = new FakeSubscriberCountNotifier(java.util.Map.of());
         notifier.usernames = java.util.Map.of(); // private channel, no public username resolved
         FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of());
-        VacancyPipelineService svc = new VacancyPipelineService(
-            null, null, tg, null, null, notifier, new RuntimeConfig(), null, new FeatureFlags(), searchRepo, null, new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+        VacancyPipelineService svc = service().telegram(tg).notifier(notifier).searchRepo(searchRepo).build();
 
         assertDoesNotThrow(svc::checkOwnChannelEngagement);
     }
