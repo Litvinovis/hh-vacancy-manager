@@ -47,6 +47,7 @@ public class SearchRepository {
         s.setLastRunAt(rs.getString("last_run_at"));
         s.setChatId(rs.getString("chat_id"));
         s.setPublicFormat(rs.getInt("public_format") == 1);
+        s.setKind(com.hh.gui.model.SearchKind.fromDb(rs.getString("search_kind")));
         s.setDelayedChatId(rs.getString("delayed_chat_id"));
         int delayedPublishMinutes = rs.getInt("delayed_publish_minutes");
         s.setDelayedPublishMinutes(rs.wasNull() ? null : delayedPublishMinutes);
