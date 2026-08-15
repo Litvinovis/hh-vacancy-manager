@@ -49,9 +49,7 @@ public class VacancyPipelineService {
         "Шакша", "Калининский", "Орджоникидзевский", "Кировский", "Ленинский",
         "Октябрьский", "Советский", "Демский");
 
-    private final HhApiClient hhApiClient;
     private final ScraperClient scraperClient;
-    private final TelegramClient telegramClient;
     private final VacancyAiAnalyzer aiAnalyzer;
     private final VacancyRepository vacancyRepo;
     private final TelegramNotifier telegramNotifier;
@@ -59,9 +57,9 @@ public class VacancyPipelineService {
     private final AiMetrics metrics;
     private final TelegramMetrics telegramMetrics;
     private final ChannelPublisher channelPublisher;
-    private final ChannelEngagementTracker engagementTracker;
+    private final VacancyDiscovery discovery;
+    private final ScrapeCooldown scrapeCooldown;
     private final FeatureFlags featureFlags;
-    private final SearchRepository searchRepo;
     private final SubscriptionService subscriptionService;
 
     // Used by getBatchSize() below, at actual call time — by then this bean is fully
@@ -77,16 +75,13 @@ public class VacancyPipelineService {
     @Value("${app.pipeline.batch-size:10}")
     private int batchSizeDefault;
 
-    public VacancyPipelineService(HhApiClient hhApiClient, ScraperClient scraperClient, TelegramClient telegramClient,
-                                   VacancyAiAnalyzer aiAnalyzer,
+    public VacancyPipelineService(ScraperClient scraperClient, VacancyAiAnalyzer aiAnalyzer,
                                    VacancyRepository vacancyRepo, TelegramNotifier telegramNotifier,
                                    RuntimeConfig runtimeConfig, AiMetrics metrics, FeatureFlags featureFlags,
-                                   SearchRepository searchRepo, SubscriptionService subscriptionService,
+                                   SubscriptionService subscriptionService,
                                    TelegramMetrics telegramMetrics, ChannelPublisher channelPublisher,
-                                   ChannelEngagementTracker engagementTracker) {
-        this.hhApiClient = hhApiClient;
+                                   VacancyDiscovery discovery, ScrapeCooldown scrapeCooldown) {
         this.scraperClient = scraperClient;
-        this.telegramClient = telegramClient;
         this.aiAnalyzer = aiAnalyzer;
         this.vacancyRepo = vacancyRepo;
         this.telegramNotifier = telegramNotifier;
@@ -94,10 +89,10 @@ public class VacancyPipelineService {
         this.metrics = metrics;
         this.subscriptionService = subscriptionService;
         this.featureFlags = featureFlags;
-        this.searchRepo = searchRepo;
         this.telegramMetrics = telegramMetrics;
         this.channelPublisher = channelPublisher;
-        this.engagementTracker = engagementTracker;
+        this.discovery = discovery;
+        this.scrapeCooldown = scrapeCooldown;
     }
 
     public boolean isNotificationsEnabled() { return runtimeConfig.isNotificationsEnabled(); }
@@ -176,10 +171,10 @@ public class VacancyPipelineService {
         boolean urlOnly = (job.queries == null || job.queries.isEmpty())
             && job.sourceUrl != null && !job.sourceUrl.isBlank();
         if (urlOnly) {
-            discovered = discoverFromUrl(job, job.sourceUrl, MAX_URL_SEARCH_PAGES);
+            discovered = discovery.fromUrl(job, job.sourceUrl, VacancyDiscovery.MAX_URL_SEARCH_PAGES);
             log.info("Шаг 1 по ссылке ({} · {}): {} новых вакансий", job.personName, job.searchName, discovered);
         } else {
-            discovered = discoverNew(job);
+            discovered = discovery.fromRss(job);
             log.info("Шаг 1 ({} · {}): {} новых вакансий", job.personName, job.searchName, discovered);
         }
 
@@ -235,7 +230,7 @@ public class VacancyPipelineService {
     // trigger will walk — each page is a real browser navigation through the sidecar's
     // MIN_DELAY_MS throttle, so an unbounded loop here could turn one click into a
     // multi-minute crawl. Callers can ask for fewer; they can't ask for more.
-    private static final int MAX_URL_SEARCH_PAGES = 10;
+    
 
     /**
      * EXPERIMENTAL, manual-trigger only — discover-then-score a job's candidates
@@ -261,7 +256,7 @@ public class VacancyPipelineService {
     private PipelineResult runFullPipelineFromUrlLocked(SearchJob job, String url, int maxPages) {
         log.info("=== Пайплайн по ссылке: {} · {} ({}) ===", job.personName, job.searchName, url);
 
-        int discovered = discoverFromUrl(job, url, maxPages);
+        int discovered = discovery.fromUrl(job, url, maxPages);
         log.info("Шаг 1 по ссылке ({} · {}): {} новых вакансий", job.personName, job.searchName, discovered);
 
         int scraped = scrapePending(job);
@@ -286,98 +281,6 @@ public class VacancyPipelineService {
         return result;
     }
 
-    /**
-     * Walks search-result pages of a caller-supplied hh.ru URL (see
-     * ScraperClient.searchByUrl), filters excluded titles, prescreens genuinely new
-     * hits (VacancyAiAnalyzer.prescreenHits), and saves each as a scrape-pending stub
-     * (or scrape_status='skipped' if prescreen rejected it, so it still counts as
-     * "seen"). Always walks every requested page up to MAX_URL_SEARCH_PAGES — no
-     * early stop: this listing's known/new hits interleave unpredictably across
-     * pages (mass-reposted clones), so a "saturated" page can't predict the next one.
-     */
-    // No @Transactional: it used to be here and did nothing. Spring's proxy-based
-    // transaction advice only applies to public methods, and both callers of this one
-    // (runFullPipeline / runFullPipelineFromUrl) are in this same class, so the call
-    // never goes through the proxy anyway. Each vacancyRepo.save below therefore
-    // auto-commits on its own — which is also what the per-save try/catch already
-    // assumes, since it deliberately keeps going after one bad row.
-    protected int discoverFromUrl(SearchJob job, String url, int maxPages) {
-        if (isScrapeCoolingDown()) {
-            log.warn("Поиск по ссылке ({} · {}) пропущен — скрейпинг заморожен после блокировки", job.personName, job.searchName);
-            return 0;
-        }
-        int pages = Math.min(Math.max(maxPages, 1), MAX_URL_SEARCH_PAGES);
-        int saved = 0;
-
-        for (int page = 0; page < pages; page++) {
-            ScraperClient.SearchPageResult result = scraperClient.searchByUrl(url, page);
-            if (!result.ok()) {
-                log.warn("Поиск по ссылке ({} · {}) остановлен на странице {}: {}",
-                    job.personName, job.searchName, page, result.reason());
-                break;
-            }
-            if (result.items().isEmpty()) break;
-
-            List<ScraperClient.SearchHit> rawHits = result.items();
-
-            // One IN query per page instead of one exists-lookup per card.
-            Set<String> knownHhIds = vacancyRepo.findExistingHhIds(
-                rawHits.stream().map(ScraperClient.SearchHit::hhId).toList(), job.personName, job.searchName);
-            log.debug("Поиск по ссылке ({} · {}), страница {}: {} карточек, из них уже известных {}",
-                job.personName, job.searchName, page, rawHits.size(), knownHhIds.size());
-
-            List<ScraperClient.SearchHit> newHits = filterExcludedHits(rawHits, job.excludeWords).stream()
-                .filter(hit -> !knownHhIds.contains(hit.hhId()))
-                .toList();
-            if (newHits.isEmpty()) continue;
-
-            Map<String, VacancyAiAnalyzer.AiResult> prescreen = aiAnalyzer.prescreenHits(newHits, job).stream()
-                .collect(Collectors.toMap(VacancyAiAnalyzer.AiResult::hhId, r -> r, (a, b) -> a));
-            long prescreenRejected = prescreen.values().stream().filter(r -> "no".equals(r.verdict())).count();
-            log.debug("Поиск по ссылке ({} · {}), страница {}: новых {}, из них отсеяно прескрином {}",
-                job.personName, job.searchName, page, newHits.size(), prescreenRejected);
-
-            for (ScraperClient.SearchHit hit : newHits) {
-                VacancyAiAnalyzer.AiResult verdict = prescreen.get(hit.hhId());
-                boolean passed = verdict == null || !"no".equals(verdict.verdict());
-
-                Vacancy v = new Vacancy();
-                v.setHhId(hit.hhId());
-                v.setTitle(hit.title());
-                v.setCompany(hit.employerName());
-                v.setUrl(hit.url());
-                v.setStatus("new");
-                v.setCreatedAt(Instant.now().toString());
-                v.setSource("hh");
-                v.setSourceQuery(job.searchName);
-                v.setPerson(job.personName);
-                v.setSearchName(job.searchName);
-                v.setUserId(job.isGlobal ? null : job.userId);
-                v.setSearchId(job.searchId);
-                v.setRemote(job.isRemote());
-                v.setDedupKey(DedupKeys.compute(hit.title(), hit.employerName()));
-
-                if (passed) {
-                    v.setAiVerdict("pending");
-                    v.setAiScore(0);
-                    v.setScrapeStatus("pending");
-                } else {
-                    v.setAiVerdict("no");
-                    v.setAiScore(0);
-                    v.setAiReason("Прескрининг: " + verdict.reason());
-                    v.setScrapeStatus("skipped");
-                }
-
-                try {
-                    vacancyRepo.save(v);
-                    saved++;
-                } catch (Exception e) {
-                    log.warn("Не удалось сохранить {} ({} · {}): {}", hit.hhId(), job.personName, job.searchName, e.getMessage());
-                }
-            }
-        }
-        return saved;
-    }
 
     /**
      * EXPERIMENTAL, manual-trigger only (see runFullPipelineFromUrl for the analogous
@@ -404,7 +307,7 @@ public class VacancyPipelineService {
             return new PipelineResult();
         }
         try {
-            int discovered = discoverFromTelegram(job, channels);
+            int discovered = discovery.fromTelegram(job, channels);
             log.info("Шаг 1 Telegram ({} · {}): {} новых кандидатов", job.personName, job.searchName, discovered);
 
             int scraped = scrapePending(job);
@@ -432,219 +335,6 @@ public class VacancyPipelineService {
         }
     }
 
-    // No @Transactional — see discoverFromUrl above for why it was a no-op here.
-    protected int discoverFromTelegram(SearchJob job, List<String> channels) {
-        if (channels == null || channels.isEmpty()) return 0;
-
-        List<Vacancy> candidates = new ArrayList<>();
-        for (String channel : channels) {
-            TelegramClient.ChannelResult result = telegramClient.fetchChannel(channel, 100);
-            if (!result.ok()) {
-                log.warn("Telegram-канал @{} ({} · {}) недоступен: {}", channel, job.personName, job.searchName, result.reason());
-                continue;
-            }
-            // SMM engagement snapshot for this SOURCE channel (where vacancies are found,
-            // not the app's own output channel — see checkOwnChannelEngagement for that) —
-            // summed across whatever's currently visible in the scrape, refreshed on every
-            // scheduled re-visit (not just at discovery), so already-known posts' growing
-            // view/reaction counts still show up in Grafana even though they're skipped
-            // below for candidate insertion.
-            engagementTracker.recordFrom(channel, result.items());
-
-            for (TelegramClient.TelegramMessage msg : result.items()) {
-                if (msg.text() == null || msg.text().isBlank()) continue;
-
-                TelegramPostParser.HhLink hhLink = TelegramPostParser.hhLink(msg.text());
-                Vacancy v = new Vacancy();
-                v.setCreatedAt(Instant.now().toString());
-                v.setPerson(job.personName);
-                v.setSearchName(job.searchName);
-                v.setUserId(job.isGlobal ? null : job.userId);
-                v.setSearchId(job.searchId);
-                v.setRemote(job.isRemote());
-                v.setSourceQuery(job.searchName);
-                v.setUrl(msg.link());
-
-                if (hhLink != null) {
-                    // Path A: reuse the normal hh.ru pipeline — this Telegram post was
-                    // just how the hh_id was discovered. The link readers get is the real
-                    // hh.ru vacancy URL (matches how RSS/URL discovery set it), not the
-                    // Telegram post it happened to be found in.
-                    v.setUrl(hhLink.url());
-                    v.setHhId(hhLink.hhId());
-                    v.setTitle(TelegramPostParser.title(msg.text()));
-                    v.setSource("hh");
-                    v.setStatus("new");
-                    v.setScrapeStatus("pending");
-                    v.setDedupKey(DedupKeys.compute(v.getTitle(), null));
-                } else {
-                    // Path B: the post itself is the only source — never write its own
-                    // wording anywhere downstream except AI analysis input; the public
-                    // post text this pipeline eventually sends out is AI-generated from
-                    // extracted facts, not a copy (see VacancyAiAnalyzer/sendPublicPosts).
-                    // Some channels (e.g. kadrout) are themselves aggregators posting only a
-                    // teaser with a link to the full listing on their own site — verified
-                    // live, that link (not a job board we have a scraper for, so still Path
-                    // B) is a far more useful "read more" destination for readers than the
-                    // truncated Telegram post itself, so prefer it as the URL when present.
-                    String externalUrl = TelegramPostParser.externalUrl(msg.text());
-                    if (externalUrl != null) v.setUrl(externalUrl);
-                    String title = TelegramPostParser.title(msg.text());
-                    String employer = TelegramPostParser.employer(msg.text(), title, channel);
-                    v.setHhId(msg.id());
-                    v.setTitle(title);
-                    v.setCompany(employer);
-                    v.setDescription(msg.text());
-                    TelegramPostParser.Salary salary = TelegramPostParser.salary(msg.text());
-                    if (salary != null) {
-                        v.setSalaryFrom(salary.from());
-                        v.setSalaryTo(salary.to());
-                        v.setCurrency(salary.currency());
-                    }
-                    v.setSource("telegram");
-                    v.setStatus("new");
-                    v.setScrapeStatus("ok");
-                    v.setAiVerdict("pending");
-                    v.setAiScore(0);
-                    // Verified live: description-hash dedup missed repeat postings of the
-                    // SAME job on the SAME channel — a vacancy-bot channel re-generates its
-                    // wording (different intro line, different markdown structure) each time
-                    // it re-posts, so real line-similarity between copies measured ~0.53, well
-                    // under dedupeBySimilarity's 0.85 threshold; 12 copies of one "Асессор"
-                    // posting all got approved separately. Without a real extracted employer,
-                    // the description hash was the only differentiator — falling back to the
-                    // title+employer key here (same two-arg form RSS discovery already uses
-                    // pre-scrape) makes repeats on the same channel share one key instead.
-                    // Only applied when employer IS the channel fallback ("@channel"): once a
-                    // real employer is extracted, different postings from it deserve their own
-                    // description-hash keys as normal.
-                    v.setDedupKey(employer.startsWith("@")
-                        ? DedupKeys.compute(v.getTitle(), employer)
-                        : DedupKeys.compute(v.getTitle(), employer, msg.text()));
-                }
-                candidates.add(v);
-            }
-        }
-        if (candidates.isEmpty()) return 0;
-
-        List<Vacancy> filtered = filterExcluded(candidates, job.excludeWords);
-        Set<String> knownHhIds = vacancyRepo.findExistingHhIds(
-            filtered.stream().map(Vacancy::getHhId).toList(), job.personName, job.searchName);
-        List<Vacancy> fresh = filtered.stream().filter(v -> !knownHhIds.contains(v.getHhId())).toList();
-
-        int saved = 0;
-        for (Vacancy v : fresh) {
-            try {
-                vacancyRepo.save(v);
-                saved++;
-                telegramMetrics.recordCollected(TelegramPostParser.channelFromHhId(v.getHhId()));
-            } catch (Exception e) {
-                log.warn("Не удалось сохранить Telegram-кандидата {} ({} · {}): {}",
-                    v.getHhId(), job.personName, job.searchName, e.getMessage());
-            }
-        }
-        return saved;
-    }
-
-    private List<ScraperClient.SearchHit> filterExcludedHits(List<ScraperClient.SearchHit> hits, List<String> excludeWords) {
-        if (excludeWords == null || excludeWords.isEmpty()) return hits;
-        List<String> lower = excludeWords.stream().map(String::toLowerCase).toList();
-        List<ScraperClient.SearchHit> result = new ArrayList<>();
-        for (ScraperClient.SearchHit h : hits) {
-            String title = h.title() != null ? h.title().toLowerCase() : "";
-            // Some listings hide the excluded trade behind a generic title ("Менеджер /
-            // Помощник руководителя") and only give it away in the employer name (e.g.
-            // "Агентство Недвижимости ..." recruiting under a vague title) — title alone
-            // missed those.
-            String employer = h.employerName() != null ? h.employerName().toLowerCase() : "";
-            if (lower.stream().noneMatch(w -> title.contains(w) || employer.contains(w))) result.add(h);
-        }
-        return result;
-    }
-
-    /**
-     * RSS-discover new hh_ids for this job's queries, drop obviously-excluded
-     * titles before ever scraping them, and save the rest as scrape-pending stubs.
-     *
-     * Genuinely new hits go through the same cheap AI prescreen the URL-discovery
-     * path uses (title-only here — RSS carries no employer/salary/address) so a
-     * title the exclude-words filter can't catch still skips the full browser
-     * scrape + real AI analysis. Fails OPEN like the URL path: any prescreen
-     * problem means everything passes through unfiltered.
-     */
-    // No @Transactional — see discoverFromUrl above for why it was a no-op here.
-    protected int discoverNew(SearchJob job) {
-        if (job.queries == null || job.queries.isEmpty()) {
-            log.warn("Поисковые запросы не настроены для {} · {}", job.personName, job.searchName);
-            return 0;
-        }
-
-        Map<String, Vacancy> seen = new LinkedHashMap<>();
-        for (String query : job.queries) {
-            for (Vacancy v : hhApiClient.fetchRss(query, job.area, job.schedule, job.salaryMin)) {
-                seen.putIfAbsent(v.getHhId(), v);
-            }
-        }
-
-        List<Vacancy> filtered = filterExcluded(new ArrayList<>(seen.values()), job.excludeWords);
-        Set<String> knownHhIds = vacancyRepo.findExistingHhIds(
-            filtered.stream().map(Vacancy::getHhId).toList(), job.personName, job.searchName);
-        List<Vacancy> fresh = filtered.stream().filter(v -> !knownHhIds.contains(v.getHhId())).toList();
-        if (fresh.isEmpty()) return 0;
-
-        Map<String, VacancyAiAnalyzer.AiResult> prescreen = aiAnalyzer.prescreenHits(
-            fresh.stream()
-                .map(v -> new ScraperClient.SearchHit(v.getHhId(), v.getTitle(), null, null, null, null, v.getUrl()))
-                .toList(), job).stream()
-            .collect(Collectors.toMap(VacancyAiAnalyzer.AiResult::hhId, r -> r, (a, b) -> a));
-
-        int saved = 0;
-        for (Vacancy v : fresh) {
-            VacancyAiAnalyzer.AiResult verdict = prescreen.get(v.getHhId());
-            boolean passed = verdict == null || !"no".equals(verdict.verdict());
-            v.setPerson(job.personName);
-            v.setSearchName(job.searchName);
-            v.setUserId(job.isGlobal ? null : job.userId);
-            v.setSearchId(job.searchId);
-            v.setRemote(job.isRemote());
-            v.setSourceQuery(job.searchName);
-            if (passed) {
-                v.setScrapeStatus("pending");
-            } else {
-                // Saved anyway so it counts as "already seen" on future runs — just
-                // never scraped or fully analyzed (mirrors discoverFromUrl).
-                v.setAiVerdict("no");
-                v.setAiScore(0);
-                v.setAiReason("Прескрининг: " + verdict.reason());
-                v.setScrapeStatus("skipped");
-            }
-            try {
-                vacancyRepo.save(v);
-                saved++;
-            } catch (Exception e) {
-                log.warn("Не удалось сохранить {} ({} · {}): {}", v.getHhId(), job.personName, job.searchName, e.getMessage());
-            }
-        }
-        return saved;
-    }
-
-    /**
-     * Drop candidates whose title or employer name contains an excluded word — before
-     * scraping, not just before AI. Checks the employer too (see filterExcludedHits):
-     * some listings hide the excluded trade behind a generic title and only give it
-     * away in who's hiring.
-     */
-    private List<Vacancy> filterExcluded(List<Vacancy> vacancies, List<String> excludeWords) {
-        if (excludeWords == null || excludeWords.isEmpty()) return vacancies;
-        List<String> lower = excludeWords.stream().map(String::toLowerCase).toList();
-        List<Vacancy> result = new ArrayList<>();
-        for (Vacancy v : vacancies) {
-            String title = v.getTitle() != null ? v.getTitle().toLowerCase() : "";
-            String employer = rawEmployer(v).toLowerCase();
-            if (lower.stream().noneMatch(w -> title.contains(w) || employer.contains(w))) result.add(v);
-        }
-        return result;
-    }
 
     // Failure reasons about just THAT one vacancy, not the rest of the batch: "not_found"/
     // "archived" (posting gone), "no_job_posting_data" (page didn't render as expected),
@@ -671,34 +361,13 @@ public class VacancyPipelineService {
     // for a while instead of hammering again on the very next 10-minute run — from an
     // anti-bot's perspective, retrying a blocked session on a fixed short interval is
     // exactly what a bot does. Backoff doubles per consecutive bail-out, capped.
-    private static final long SCRAPE_COOLDOWN_BASE_MS = 30L * 60 * 1000;
-    private static final long SCRAPE_COOLDOWN_MAX_MS = 4L * 60 * 60 * 1000;
-    private volatile long scrapeCooldownUntil = 0;
-    private int scrapeCooldownStrikes = 0;
 
     private static boolean isSiteWideFailure(String reason) {
         return reason != null && !PER_VACANCY_FAILURE_REASONS.contains(reason);
     }
 
-    public boolean isScrapeCoolingDown() {
-        return System.currentTimeMillis() < scrapeCooldownUntil;
-    }
 
-    private synchronized void enterScrapeCooldown() {
-        // Different searches run concurrently (see runFullPipeline's per-job lock), so
-        // one real hh.ru block can be discovered independently by several in-flight runs
-        // within the same second — without this guard each of them struck the counter,
-        // jumping straight to a multi-hour freeze for what was a single event.
-        if (isScrapeCoolingDown()) return;
-        scrapeCooldownStrikes++;
-        long cooldown = Math.min(SCRAPE_COOLDOWN_BASE_MS << (scrapeCooldownStrikes - 1), SCRAPE_COOLDOWN_MAX_MS);
-        scrapeCooldownUntil = System.currentTimeMillis() + cooldown;
-        log.warn("Скрейпинг заморожен на {} мин (подряд блокировок: {})", cooldown / 60000, scrapeCooldownStrikes);
-    }
 
-    private synchronized void onScrapeSuccess() {
-        scrapeCooldownStrikes = 0;
-    }
 
     /**
      * Scrape full content for rows still pending (or previously failed) for this job.
@@ -713,9 +382,9 @@ public class VacancyPipelineService {
      * Unscraped rows are simply left 'pending' and picked up on the next run.
      */
     private int scrapePending(SearchJob job) {
-        if (isScrapeCoolingDown()) {
+        if (scrapeCooldown.isCoolingDown()) {
             log.info("Скрейпинг ({} · {}) пропущен — заморожен после блокировки ещё {} мин",
-                job.personName, job.searchName, Math.max(0, (scrapeCooldownUntil - System.currentTimeMillis()) / 60000));
+                job.personName, job.searchName, scrapeCooldown.remainingMinutes());
             return 0;
         }
         int count = 0;
@@ -727,7 +396,7 @@ public class VacancyPipelineService {
             // The cooldown may have been engaged by a PARALLEL run (scheduler vs manual
             // trigger) after this loop already started — the entry check above won't
             // catch that, and this thread would keep hammering a blocked session.
-            if (isScrapeCoolingDown()) {
+            if (scrapeCooldown.isCoolingDown()) {
                 log.info("Скрейпинг ({} · {}) прерван — другой запуск словил блокировку, осталось {} вакансий",
                     job.personName, job.searchName, pending.size() - count);
                 break;
@@ -750,7 +419,7 @@ public class VacancyPipelineService {
                 applyScrapeResult(v, r);
                 v.setScrapeStatus("ok");
                 consecutiveFailures = 0;
-                onScrapeSuccess();
+                scrapeCooldown.onSuccess();
             } else {
                 // archived is terminal like not_found — the posting exists but is closed;
                 // retrying the scrape will never make it analyzable.
@@ -776,7 +445,7 @@ public class VacancyPipelineService {
                 if (countsTowardBurst && ++http403InRun >= MAX_HTTP_403_PER_RUN) {
                     vacancyRepo.updateScraped(v);
                     count++;
-                    enterScrapeCooldown();
+                    scrapeCooldown.enter();
                     log.warn("Скрейпинг ({} · {}) остановлен: {} http_403 за один прогон — похоже на rate-limit, оставшиеся {} вакансий останутся в очереди",
                         job.personName, job.searchName, http403InRun, pending.size() - count);
                     break;
@@ -786,7 +455,7 @@ public class VacancyPipelineService {
             count++;
 
             if (consecutiveFailures >= MAX_CONSECUTIVE_SCRAPE_FAILURES) {
-                enterScrapeCooldown();
+                scrapeCooldown.enter();
                 log.warn("Скрейпинг ({} · {}) остановлен после {} подряд ошибок — сайдкар недоступен или hh.ru блокирует запросы, оставшиеся {} вакансий останутся в очереди",
                     job.personName, job.searchName, consecutiveFailures, pending.size() - count);
                 break;
@@ -821,12 +490,12 @@ public class VacancyPipelineService {
      */
     public FreshnessResult checkVacancyFreshness(int limit) {
         FreshnessResult result = new FreshnessResult();
-        if (isScrapeCoolingDown()) return result;
+        if (scrapeCooldown.isCoolingDown()) return result;
         if (vacancyRepo.countUnscrapedNew() > FRESHNESS_MAX_SCRAPE_BACKLOG) return result;
 
         List<Vacancy> due = vacancyRepo.findDueFreshnessCheck(FRESHNESS_RECHECK_DAYS, limit);
         for (Vacancy v : due) {
-            if (isScrapeCoolingDown()) break; // a parallel run may have hit a block mid-loop
+            if (scrapeCooldown.isCoolingDown()) break; // a parallel run may have hit a block mid-loop
             ScrapeResult r = scraperClient.scrape(v.getHhId());
             if (r.ok()) {
                 // Alive — refresh the content too: salary/description edits are common.
@@ -835,7 +504,7 @@ public class VacancyPipelineService {
                 vacancyRepo.updateScraped(v);
                 vacancyRepo.markFreshnessChecked(v.getId());
                 result.alive++;
-                onScrapeSuccess();
+                scrapeCooldown.onSuccess();
             } else if ("archived".equals(r.reason()) || "not_found".equals(r.reason())) {
                 vacancyRepo.markClosed(v.getId());
                 result.closed++;
@@ -1350,7 +1019,7 @@ public class VacancyPipelineService {
 
             if (!duplicate) {
                 List<Vacancy> notified = notifiedByEmployerKey.computeIfAbsent(key,
-                    k -> vacancyRepo.findNotifiedByEmployer(job.personName, job.searchName, rawEmployer(v)));
+                    k -> vacancyRepo.findNotifiedByEmployer(job.personName, job.searchName, v.employerOrCompany()));
                 duplicate = notified.stream().anyMatch(n ->
                     TextSimilarity.lineSimilarity(v.getDescription(), n.getDescription()) >= SIMILAR_DESCRIPTION_THRESHOLD);
             }
@@ -1365,12 +1034,12 @@ public class VacancyPipelineService {
             // per-channel key. Same conservative similarity bar, just not fenced to one
             // @channel — only engaged for this specific unresolved-employer case, so it
             // can't misfire on two different real companies that both merely lack a key.
-            if (!duplicate && rawEmployer(v).startsWith("@")) {
+            if (!duplicate && v.employerOrCompany().startsWith("@")) {
                 if (unresolvedEmployerPool == null) {
                     unresolvedEmployerPool = vacancyRepo.findWithUnresolvedEmployer(job.personName, job.searchName);
                 }
                 List<Vacancy> pool = unresolvedEmployerPool;
-                duplicate = kept.stream().anyMatch(k -> rawEmployer(k).startsWith("@")
+                duplicate = kept.stream().anyMatch(k -> k.employerOrCompany().startsWith("@")
                         && TextSimilarity.lineSimilarity(v.getDescription(), k.getDescription()) >= SIMILAR_DESCRIPTION_THRESHOLD)
                     || pool.stream().anyMatch(n ->
                         TextSimilarity.lineSimilarity(v.getDescription(), n.getDescription()) >= SIMILAR_DESCRIPTION_THRESHOLD);
@@ -1381,14 +1050,8 @@ public class VacancyPipelineService {
         return kept;
     }
 
-    private static String rawEmployer(Vacancy v) {
-        String e = v.getEmployerName();
-        if (e == null || e.isBlank()) e = v.getCompany();
-        return e == null ? "" : e;
-    }
-
     private static String employerKey(Vacancy v) {
-        return DedupKeys.normalize(rawEmployer(v));
+        return DedupKeys.normalize(v.employerOrCompany());
     }
 
     private void sendPersonalReport(List<Vacancy> approved, SearchJob job) {
@@ -1413,25 +1076,12 @@ public class VacancyPipelineService {
     }
 
 
-
-
-
-
-
-
-
-
-
-
-
     /** Exposed for PipelineController's publish-queue preview endpoint — renders exactly
      *  what sendPublicPosts/publishDueQueued would actually send, so a queued item can be
      *  inspected before its queued_publish_at elapses instead of waiting for it. */
     public String formatPublicPost(Vacancy v) {
         return VacancyPostFormatter.publicPost(v);
     }
-
-
 
 
     /** Splits vacancies into groups that each fit under TELEGRAM_MAX_MESSAGE_CHARS once formatted. */
@@ -1465,7 +1115,6 @@ public class VacancyPipelineService {
     private String formatVacancyEntry(Vacancy v) {
         return VacancyPostFormatter.reportEntry(v);
     }
-
 
 
     public static class PipelineResult {
