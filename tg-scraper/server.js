@@ -444,3 +444,23 @@ const server = http.createServer((req, res) => {
 server.listen(PORT, HOST, () => {
   console.log(`tg-scraper listening on ${HOST}:${PORT}, profile dir: ${PROFILE_DIR}`);
 });
+
+// Without this, `systemctl restart` (every deploy) SIGTERMs a process with no
+// handler for it — Node's default action is to die immediately, abandoning
+// Chromium mid-write to the persistent profile's IndexedDB (the logged-in
+// session). Verified live: one deploy left the process unresponsive to SIGTERM
+// for the full 90s stop timeout, and systemd SIGKILLed it — the session
+// happened to survive that time, but an unclean kill of IndexedDB has no such
+// guarantee on the next one. Closing the browser context first lets Playwright
+// flush it properly.
+async function shutdown() {
+  console.log('Shutting down...');
+  server.close();
+  if (contextPromise) {
+    const context = await contextPromise.catch(() => null);
+    if (context) await context.close().catch(() => {});
+  }
+  process.exit(0);
+}
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
