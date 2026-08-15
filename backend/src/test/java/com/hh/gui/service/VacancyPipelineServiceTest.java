@@ -1144,6 +1144,51 @@ class VacancyPipelineServiceTest {
     }
 
     @Test
+    void discoverFromTelegram_pathA_urlIsRealHhVacancyLinkNotTelegramPost() {
+        FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
+            true, null, List.of(tgMsg("1", "Менеджер по продажам\nПодробности: https://ufa.hh.ru/vacancy/123456789")))));
+        FakeTgRepo repo = new FakeTgRepo(Set.of());
+        VacancyPipelineService svc = new VacancyPipelineService(
+            null, null, tg, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null);
+
+        svc.discoverFromTelegram(tgJob(), List.of("testchan"));
+
+        assertEquals("https://ufa.hh.ru/vacancy/123456789", repo.saved.get(0).getUrl());
+    }
+
+    @Test
+    void discoverFromTelegram_pathB_externalLinkPreferredOverTelegramPostLink() {
+        // Живой пример: канал-агрегатор (kadrout) постит только тизер со ссылкой на
+        // полное описание на своём сайте — не job-борд, который мы умеем скрейпить
+        // (остаётся Path B), но ссылка полезнее для читателя, чем усечённый tg-пост.
+        String text = "SEO-копирайтер\n\nОбязанности: ...\n\nПосмотреть вакансию полностью: https://kadrout.ru/vacancies/38184/seo?utm_source=tg.";
+        FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
+            true, null, List.of(tgMsg("tg_testchan_80", text)))));
+        FakeTgRepo repo = new FakeTgRepo(Set.of());
+        VacancyPipelineService svc = new VacancyPipelineService(
+            null, null, tg, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null);
+
+        svc.discoverFromTelegram(tgJob(), List.of("testchan"));
+
+        assertEquals("https://kadrout.ru/vacancies/38184/seo?utm_source=tg", repo.saved.get(0).getUrl(),
+            "внешняя ссылка на первоисточник предпочтительнее ссылки на сам telegram-пост, конечная точка обрезана как пунктуация");
+    }
+
+    @Test
+    void discoverFromTelegram_pathB_noExternalLink_fallsBackToTelegramPostLink() {
+        String text = "Копирайтер\n\nОбязанности: пишет тексты\n\nПишите в лс";
+        FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
+            true, null, List.of(tgMsg("tg_testchan_81", text)))));
+        FakeTgRepo repo = new FakeTgRepo(Set.of());
+        VacancyPipelineService svc = new VacancyPipelineService(
+            null, null, tg, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null);
+
+        svc.discoverFromTelegram(tgJob(), List.of("testchan"));
+
+        assertEquals("https://t.me/testchan/tg_testchan_81", repo.saved.get(0).getUrl());
+    }
+
+    @Test
     void discoverFromTelegram_excludeWordMatch_dropsCandidateBeforeSaving() {
         FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
             true, null, List.of(tgMsg("1", "Риэлтор без опыта, удалённо, доход от 100000")))));
