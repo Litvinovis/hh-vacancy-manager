@@ -56,6 +56,7 @@ public class VacancyPipelineService {
     private final TelegramNotifier telegramNotifier;
     private final RuntimeConfig runtimeConfig;
     private final AiMetrics metrics;
+    private final TelegramMetrics telegramMetrics;
     private final FeatureFlags featureFlags;
     private final SearchRepository searchRepo;
     private final SubscriptionService subscriptionService;
@@ -77,7 +78,8 @@ public class VacancyPipelineService {
                                    VacancyAiAnalyzer aiAnalyzer,
                                    VacancyRepository vacancyRepo, TelegramNotifier telegramNotifier,
                                    RuntimeConfig runtimeConfig, AiMetrics metrics, FeatureFlags featureFlags,
-                                   SearchRepository searchRepo, SubscriptionService subscriptionService) {
+                                   SearchRepository searchRepo, SubscriptionService subscriptionService,
+                                   TelegramMetrics telegramMetrics) {
         this.hhApiClient = hhApiClient;
         this.scraperClient = scraperClient;
         this.telegramClient = telegramClient;
@@ -89,6 +91,7 @@ public class VacancyPipelineService {
         this.subscriptionService = subscriptionService;
         this.featureFlags = featureFlags;
         this.searchRepo = searchRepo;
+        this.telegramMetrics = telegramMetrics;
     }
 
     public boolean isNotificationsEnabled() { return runtimeConfig.isNotificationsEnabled(); }
@@ -429,6 +432,20 @@ public class VacancyPipelineService {
 
     private record TgSalary(Integer from, Integer to, String currency) {}
 
+    // Path B hh_id format is "tg_<channel>_<messageId>" (see tg-scraper/server.js's
+    // `id: tg_${channel}_${realId}`) — channel usernames can themselves contain
+    // underscores (e.g. "rabota_is_doma_vakansii"), so a naive split(_) would misparse;
+    // greedy .+ backing off only enough to satisfy the trailing \d+$ anchor handles that
+    // correctly. Used to tag TelegramMetrics by channel without adding a DB column —
+    // returns null for Path A (real hh.ru numeric ids) or hh.ru-sourced vacancies.
+    private static final java.util.regex.Pattern TG_CHANNEL_FROM_HHID = java.util.regex.Pattern.compile("^tg_(.+)_\\d+$");
+
+    private static String extractTgChannelFromHhId(String hhId) {
+        if (hhId == null) return null;
+        java.util.regex.Matcher m = TG_CHANNEL_FROM_HHID.matcher(hhId);
+        return m.matches() ? m.group(1) : null;
+    }
+
     // Tier 1 (high confidence): an explicit label directly in front of the number(s) —
     // "Заработная плата от 40000 рублей", "Оплата: 80 000 рублей", "З/п 55000 RUR".
     // The label itself is strong enough evidence that a currency token isn't required.
@@ -699,6 +716,7 @@ public class VacancyPipelineService {
             try {
                 vacancyRepo.save(v);
                 saved++;
+                telegramMetrics.recordCollected(extractTgChannelFromHhId(v.getHhId()));
             } catch (Exception e) {
                 log.warn("Не удалось сохранить Telegram-кандидата {} ({} · {}): {}",
                     v.getHhId(), job.personName, job.searchName, e.getMessage());
@@ -1253,6 +1271,7 @@ public class VacancyPipelineService {
             for (var r : results) {
                 vacancyRepo.updateAiResult(r.hhId(), job.personName, job.searchName, r.score(), r.verdict(), r.reason(),
                     r.noveltyColor(), r.noveltyNote(), r.salaryFrom(), r.salaryTo(), r.currency(), r.company(), r.title());
+                telegramMetrics.recordVerdict(extractTgChannelFromHhId(r.hhId()), r.verdict());
                 returnedIds.add(r.hhId());
                 aiAnalyzed++;
                 // Fan the verdict out to this representative's clone group members.
@@ -1262,6 +1281,7 @@ public class VacancyPipelineService {
                     vacancyRepo.updateAiResult(member.getHhId(), job.personName, job.searchName,
                         r.score(), r.verdict(), r.reason(), r.noveltyColor(), r.noveltyNote(),
                         r.salaryFrom(), r.salaryTo(), r.currency(), r.company(), r.title());
+                    telegramMetrics.recordVerdict(extractTgChannelFromHhId(member.getHhId()), r.verdict());
                     deduped++;
                     metrics.recordVacanciesDeduped(1);
                 }
@@ -1713,6 +1733,7 @@ public class VacancyPipelineService {
                 if (sent >= PUBLISH_BATCH_SIZE) break;
                 if (telegramNotifier.sendViaChannelBot(formatPublicPost(v), chatId)) {
                     vacancyRepo.markNotified(List.of(v.getId()));
+                    telegramMetrics.recordPublished(extractTgChannelFromHhId(v.getHhId()));
                     sent++;
                 } else {
                     log.warn("Публикация из очереди не удалась для id={} (search_id={})", v.getId(), entry.getKey());
