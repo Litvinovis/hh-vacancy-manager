@@ -1032,6 +1032,29 @@ class VacancyPipelineServiceTest {
     }
 
     @Test
+    void discoverFromTelegram_sameTitleNoEmployer_sharesDedupKeyAcrossReposts() {
+        // Живой пример: канал-агрегатор репостит одну и ту же вакансию несколько раз,
+        // каждый раз с чуть другой формулировкой (разные markdown-заголовки, вводные
+        // фразы) — line-similarity между копиями измерена ~0.53, ниже порога 0.85, так
+        // что description-hash дедуп их не ловит. Без извлечённого работодателя ключ
+        // должен строиться по title+channel, чтобы такие повторы схлопывались обычным
+        // дедупом (dedupeByKey/findFirstScrapedByDedupKey), как раньше.
+        String text1 = "Асессор\n\nКаждый день миллионы людей смотрят контент...";
+        String text2 = "Асессор\n\nОбязанности:\n- Разметка контента\n- Фильтрация...";
+        FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
+            true, null, List.of(tgMsg("tg_testchan_61", text1), tgMsg("tg_testchan_62", text2)))));
+        FakeTgRepo repo = new FakeTgRepo(Set.of());
+        VacancyPipelineService svc = new VacancyPipelineService(
+            null, null, tg, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null);
+
+        svc.discoverFromTelegram(tgJob(), List.of("testchan"));
+
+        assertEquals(2, repo.saved.size());
+        assertEquals(repo.saved.get(0).getDedupKey(), repo.saved.get(1).getDedupKey(),
+            "разный текст, но тот же заголовок и тот же канал без явного работодателя — один dedup_key");
+    }
+
+    @Test
     void discoverFromTelegram_excludeWordMatch_dropsCandidateBeforeSaving() {
         FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
             true, null, List.of(tgMsg("1", "Риэлтор без опыта, удалённо, доход от 100000")))));
