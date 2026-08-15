@@ -551,7 +551,21 @@ public class VacancyPipelineService {
                     v.setScrapeStatus("ok");
                     v.setAiVerdict("pending");
                     v.setAiScore(0);
-                    v.setDedupKey(DedupKeys.compute(v.getTitle(), employer, msg.text()));
+                    // Verified live: description-hash dedup missed repeat postings of the
+                    // SAME job on the SAME channel — a vacancy-bot channel re-generates its
+                    // wording (different intro line, different markdown structure) each time
+                    // it re-posts, so real line-similarity between copies measured ~0.53, well
+                    // under dedupeBySimilarity's 0.85 threshold; 12 copies of one "Асессор"
+                    // posting all got approved separately. Without a real extracted employer,
+                    // the description hash was the only differentiator — falling back to the
+                    // title+employer key here (same two-arg form RSS discovery already uses
+                    // pre-scrape) makes repeats on the same channel share one key instead.
+                    // Only applied when employer IS the channel fallback ("@channel"): once a
+                    // real employer is extracted, different postings from it deserve their own
+                    // description-hash keys as normal.
+                    v.setDedupKey(employer.startsWith("@")
+                        ? DedupKeys.compute(v.getTitle(), employer)
+                        : DedupKeys.compute(v.getTitle(), employer, msg.text()));
                 }
                 candidates.add(v);
             }
