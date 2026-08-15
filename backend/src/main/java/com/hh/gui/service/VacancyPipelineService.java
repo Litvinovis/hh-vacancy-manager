@@ -1774,6 +1774,14 @@ public class VacancyPipelineService {
     public void publishDueQueued(int limit) {
         if (!runtimeConfig.isChannelNotificationsEnabled()) return;
         if (isOutsidePublishWindow(Instant.now())) return;
+        doPublishDueQueued(limit);
+    }
+
+    /** Split out from publishDueQueued so tests can exercise the batching/sending logic
+     *  without it being at the mercy of the real wall-clock publish window (see
+     *  isOutsidePublishWindow) — a test run outside 07:00–23:00 local would otherwise
+     *  silently no-op regardless of what it's actually asserting. */
+    private void doPublishDueQueued(int limit) {
         List<Vacancy> due = vacancyRepo.findDueQueuedPublications(Instant.now().toString(), limit);
         if (due.isEmpty()) return;
 
@@ -1791,20 +1799,23 @@ public class VacancyPipelineService {
             }
             String chatId = searchOpt.get().getChatId();
             List<Vacancy> dueForSearch = entry.getValue();
-            int sent = 0;
-            for (Vacancy v : dueForSearch) {
-                if (sent >= PUBLISH_BATCH_SIZE) break;
-                if (telegramNotifier.sendViaChannelBot(formatPublicPost(v), chatId)) {
-                    vacancyRepo.markNotified(List.of(v.getId()));
-                    telegramMetrics.recordPublished(extractTgChannelFromHhId(v.getHhId()));
-                    sent++;
-                } else {
-                    log.warn("Публикация из очереди не удалась для id={} (search_id={})", v.getId(), entry.getKey());
-                }
+            // One combined message per tick, not PUBLISH_BATCH_SIZE separate ones — the
+            // whole point of batching was fewer, denser posts (several vacancies per post),
+            // not the same number of posts sent closer together. All-or-nothing send: a
+            // single Telegram message can't partially succeed, so a failure leaves the
+            // whole batch unnotified for the next tick to retry, same fail-open style as
+            // the per-vacancy loop this replaced.
+            List<Vacancy> batch = dueForSearch.size() > PUBLISH_BATCH_SIZE
+                ? dueForSearch.subList(0, PUBLISH_BATCH_SIZE) : dueForSearch;
+            if (telegramNotifier.sendViaChannelBot(formatPublicPostsBatch(batch), chatId)) {
+                vacancyRepo.markNotified(batch.stream().map(Vacancy::getId).toList());
+                for (Vacancy v : batch) telegramMetrics.recordPublished(extractTgChannelFromHhId(v.getHhId()));
+            } else {
+                log.warn("Публикация из очереди не удалась для батча из {} вакансий (search_id={})", batch.size(), entry.getKey());
             }
-            if (dueForSearch.size() > sent) {
-                log.info("Очередь публикации (search_id={}): просрочено {} постов, отправлено {} — остальные следующими тиками",
-                    entry.getKey(), dueForSearch.size(), sent);
+            if (dueForSearch.size() > batch.size()) {
+                log.info("Очередь публикации (search_id={}): просрочено {} постов, отправлено {} одним сообщением — остальные следующими тиками",
+                    entry.getKey(), dueForSearch.size(), batch.size());
             }
         }
     }
@@ -1890,6 +1901,21 @@ public class VacancyPipelineService {
             sb.append(String.format("%s %s\n", noveltyEmoji, escapeHtml(capitalize(v.getNoveltyNote()))));
         }
         sb.append(formatApplyLine(v));
+        return sb.toString();
+    }
+
+    /** Combines up to PUBLISH_BATCH_SIZE vacancies into ONE Telegram message — a
+     *  divider between entries, each formatted exactly like formatPublicPost's single-
+     *  vacancy output. Not chunked against TELEGRAM_MAX_MESSAGE_CHARS: at PUBLISH_BATCH_SIZE=5
+     *  entries, even five maximally-truncated ones (title 150 + reason 300 + the rest) land
+     *  comfortably under Telegram's 4096-char limit — chunkReport's chunking exists for the
+     *  personal report's unbounded batch sizes, which this deliberately small one never needs. */
+    private String formatPublicPostsBatch(List<Vacancy> vacancies) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < vacancies.size(); i++) {
+            if (i > 0) sb.append("➖➖➖➖➖\n\n");
+            sb.append(formatPublicPost(vacancies.get(i)));
+        }
         return sb.toString();
     }
 

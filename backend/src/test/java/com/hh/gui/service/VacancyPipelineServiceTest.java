@@ -1609,9 +1609,103 @@ class VacancyPipelineServiceTest {
 
     private static class FakeSearchRepo extends com.hh.gui.repository.SearchRepository {
         List<com.hh.gui.model.SearchConfig> enabled = new ArrayList<>();
+        java.util.Map<Long, com.hh.gui.model.SearchConfig> byId = new java.util.HashMap<>();
         FakeSearchRepo() { super(null); }
         @Override
         public List<com.hh.gui.model.SearchConfig> findAllEnabled() { return enabled; }
+        @Override
+        public java.util.Optional<com.hh.gui.model.SearchConfig> findById(Long id) {
+            return java.util.Optional.ofNullable(byId.get(id));
+        }
+    }
+
+    private static class FakeDueQueueRepo extends VacancyRepository {
+        List<Vacancy> due = new ArrayList<>();
+        final List<Long> notifiedIds = new ArrayList<>();
+        FakeDueQueueRepo() { super(null); }
+        @Override
+        public List<Vacancy> findDueQueuedPublications(String nowIso, int limit) { return due; }
+        @Override
+        public void markNotified(List<Long> ids) { notifiedIds.addAll(ids); }
+    }
+
+    private static class RecordingChannelBotNotifier extends TelegramNotifier {
+        final List<String> sentMessages = new ArrayList<>();
+        boolean sendResult = true;
+        @Override
+        public boolean sendViaChannelBot(String message, String targetChatId) {
+            if (sendResult) sentMessages.add(message);
+            return sendResult;
+        }
+    }
+
+    private static Vacancy dueVacancy(long id, String hhId, String title) {
+        Vacancy v = new Vacancy();
+        v.setId(id);
+        v.setHhId(hhId);
+        v.setTitle(title);
+        v.setCompany("@testchan");
+        v.setSearchId(10L);
+        v.setAiScore(80);
+        v.setUrl("https://t.me/testchan/" + id);
+        return v;
+    }
+
+    @Test
+    void publishDueQueued_combinesDueVacanciesIntoOneMessage_notOnePerVacancy() throws Exception {
+        FakeDueQueueRepo repo = new FakeDueQueueRepo();
+        repo.due = List.of(
+            dueVacancy(1, "tg_testchan_1", "Оператор чата"),
+            dueVacancy(2, "tg_testchan_2", "Ассистент руководителя"),
+            dueVacancy(3, "tg_testchan_3", "Менеджер маркетплейса"));
+        FakeSearchRepo searchRepo = new FakeSearchRepo();
+        com.hh.gui.model.SearchConfig search = new com.hh.gui.model.SearchConfig();
+        search.setId(10L);
+        search.setChatId("-100999");
+        searchRepo.byId.put(10L, search);
+        RecordingChannelBotNotifier notifier = new RecordingChannelBotNotifier();
+        RuntimeConfig config = new RuntimeConfig();
+        config.setChannelNotificationsEnabled(true);
+        VacancyPipelineService svc = new VacancyPipelineService(
+            null, null, null, null, repo, notifier, config, null, new FeatureFlags(), searchRepo, null, new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+
+        java.lang.reflect.Method pubM = VacancyPipelineService.class.getDeclaredMethod("doPublishDueQueued", int.class);
+        pubM.setAccessible(true);
+        pubM.invoke(svc, 50);
+
+        assertEquals(1, notifier.sentMessages.size(), "три вакансии должны уйти ОДНИМ сообщением, а не тремя");
+        String sent = notifier.sentMessages.get(0);
+        assertTrue(sent.contains("Оператор чата"), sent);
+        assertTrue(sent.contains("Ассистент руководителя"), sent);
+        assertTrue(sent.contains("Менеджер маркетплейса"), sent);
+        assertEquals(List.of(1L, 2L, 3L), repo.notifiedIds);
+    }
+
+    @Test
+    void publishDueQueued_moreThanBatchSizeDue_onlyFirstBatchSentThisTick() throws Exception {
+        FakeDueQueueRepo repo = new FakeDueQueueRepo();
+        repo.due = List.of(
+            dueVacancy(1, "tg_testchan_1", "Вакансия 1"), dueVacancy(2, "tg_testchan_2", "Вакансия 2"),
+            dueVacancy(3, "tg_testchan_3", "Вакансия 3"), dueVacancy(4, "tg_testchan_4", "Вакансия 4"),
+            dueVacancy(5, "tg_testchan_5", "Вакансия 5"), dueVacancy(6, "tg_testchan_6", "Вакансия 6"));
+        FakeSearchRepo searchRepo = new FakeSearchRepo();
+        com.hh.gui.model.SearchConfig search = new com.hh.gui.model.SearchConfig();
+        search.setId(10L);
+        search.setChatId("-100999");
+        searchRepo.byId.put(10L, search);
+        RecordingChannelBotNotifier notifier = new RecordingChannelBotNotifier();
+        RuntimeConfig config = new RuntimeConfig();
+        config.setChannelNotificationsEnabled(true);
+        VacancyPipelineService svc = new VacancyPipelineService(
+            null, null, null, null, repo, notifier, config, null, new FeatureFlags(), searchRepo, null, new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+
+        java.lang.reflect.Method pubM = VacancyPipelineService.class.getDeclaredMethod("doPublishDueQueued", int.class);
+        pubM.setAccessible(true);
+        pubM.invoke(svc, 50);
+
+        assertEquals(1, notifier.sentMessages.size());
+        assertEquals(5, repo.notifiedIds.size(), "не больше PUBLISH_BATCH_SIZE=5 вакансий за один тик");
+        assertFalse(notifier.sentMessages.get(0).contains("Вакансия 6"));
     }
 
     private static class FakeSubscriberCountNotifier extends TelegramNotifier {
