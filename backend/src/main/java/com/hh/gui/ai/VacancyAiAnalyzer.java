@@ -46,7 +46,7 @@ public class VacancyAiAnalyzer {
      * older schema — otherwise a vacancy first analyzed before a field existed would carry that field
      * empty forever, since the criteria hash used to depend only on search settings.
      */
-    private static final String PROMPT_SCHEMA_VERSION = "v3-novelty";
+    private static final String PROMPT_SCHEMA_VERSION = "v4-title";
     private static final int MAX_DESCRIPTION_CHARS = 600;
     private static final int FALLBACK_DESCRIPTION_CHARS = 500;
 
@@ -420,16 +420,19 @@ public class VacancyAiAnalyzer {
           .append("тексте не названа — верни null для всех трёх. Не угадывай и не оценивай \"на глаз\".\n");
         sb.append("Если в поле \"Работодатель\" стоит заглушка вида \"@имя_канала\" (не настоящее название компании), но реальный ")
           .append("работодатель явно назван в ОПИСАНИИ — укажи его в поле company. Иначе (работодатель уже указан по-нормальному, ")
-          .append("или в тексте его действительно нет) верни null.\n\n");
+          .append("или в тексте его действительно нет) верни null.\n");
+        sb.append("Если в поле \"Название\" стоит не короткое название вакансии, а сырое предложение или абзац поста целиком ")
+          .append("(например скопированный первый абзац объявления из Telegram-канала) — сформулируй короткое (до 80 символов) ")
+          .append("название вакансии по сути описания и верни его в поле title. Если название уже нормальное — верни null.\n\n");
 
-        sb.append("Проанализируй каждую вакансию и верни JSON-массив. У КАЖДОГО элемента массива должны быть ВСЕ десять полей ")
-          .append("(id, score, verdict, reason, noveltyColor, noveltyNote, salaryFrom, salaryTo, currency, company) — ")
+        sb.append("Проанализируй каждую вакансию и верни JSON-массив. У КАЖДОГО элемента массива должны быть ВСЕ одиннадцать полей ")
+          .append("(id, score, verdict, reason, noveltyColor, noveltyNote, salaryFrom, salaryTo, currency, company, title) — ")
           .append("noveltyColor/noveltyNote нельзя пропускать или оставлять пустыми, они обязательны так же, как score и verdict; ")
-          .append("salaryFrom/salaryTo/currency/company пишутся как null, когда не найдены, но поле обязано присутствовать. ")
+          .append("salaryFrom/salaryTo/currency/company/title пишутся как null, когда не найдены/не нужны, но поле обязано присутствовать. ")
           .append("Пример одного элемента:\n");
         sb.append("{\"id\": \"12345678\", \"score\": 72, \"verdict\": \"yes\", \"reason\": \"нужна коммуникация с клиентами по телефону\", ")
           .append("\"noveltyColor\": \"yellow\", \"noveltyNote\": \"стандартная работа с откликами по шаблону\", ")
-          .append("\"salaryFrom\": null, \"salaryTo\": null, \"currency\": null, \"company\": null}\n");
+          .append("\"salaryFrom\": null, \"salaryTo\": null, \"currency\": null, \"company\": null, \"title\": null}\n");
         sb.append("Никакого текста до или после массива. Никаких переносов строк внутри \"reason\"/\"noveltyNote\".\n\n");
 
         sb.append("ВАКАНСИИ:\n");
@@ -735,9 +738,12 @@ public class VacancyAiAnalyzer {
             String aiCurrency = currencyVal instanceof String s && !s.isBlank() ? s : null;
             Object companyVal = item.get("company");
             String aiCompany = companyVal instanceof String s && !s.isBlank() ? s : null;
+            Object titleVal = item.get("title");
+            String aiTitle = titleVal instanceof String s && !s.isBlank() ? s : null;
+            if (aiTitle != null && aiTitle.length() > 150) aiTitle = aiTitle.substring(0, 147) + "...";
 
             results.add(new AiResult(id, Math.max(0, Math.min(100, score)), verdict, reason, noveltyColor, noveltyNote,
-                aiSalaryFrom, aiSalaryTo, aiCurrency, aiCompany));
+                aiSalaryFrom, aiSalaryTo, aiCurrency, aiCompany, aiTitle));
         }
         return results;
     }
@@ -793,11 +799,16 @@ public class VacancyAiAnalyzer {
      *                     (see VacancyRepository.updateAiResult's COALESCE), never overriding it.
      * @param company      likewise for a real employer name found in the description when
      *                     "Работодатель" was only a "@channel" placeholder — null otherwise.
+     * @param title        a short, clean vacancy title when "Название" was actually a raw
+     *                     sentence/paragraph copied from the source post — null when the
+     *                     given title was already fine. Same fallback philosophy as company:
+     *                     the model only fills this in when the regex-extracted title needs
+     *                     replacing (see VacancyRepository.updateAiResult).
      */
     public record AiResult(String hhId, int score, String verdict, String reason, String noveltyColor, String noveltyNote,
-                            Integer salaryFrom, Integer salaryTo, String currency, String company) {
+                            Integer salaryFrom, Integer salaryTo, String currency, String company, String title) {
         public AiResult(String hhId, int score, String verdict, String reason, String noveltyColor, String noveltyNote) {
-            this(hhId, score, verdict, reason, noveltyColor, noveltyNote, null, null, null, null);
+            this(hhId, score, verdict, reason, noveltyColor, noveltyNote, null, null, null, null, null);
         }
     }
 }

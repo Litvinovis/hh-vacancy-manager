@@ -455,21 +455,25 @@ public class VacancyRepository {
      *   scrape landing between SELECT and this UPDATE can't get clobbered).
      * - company: only replaced while empty or still the "@channel" placeholder
      *   discoverFromTelegram falls back to when no real employer was extractable.
-     * Any of aiSalaryFrom/aiSalaryTo/aiCurrency/aiCompany may be null (nothing to add).
+     * - title: only replaced when the model decided the existing title needed rewriting
+     *   (see VacancyAiAnalyzer.AiResult#title) — aiTitle is null otherwise, so COALESCE
+     *   is a no-op and the regex-extracted title is left alone.
+     * Any of aiSalaryFrom/aiSalaryTo/aiCurrency/aiCompany/aiTitle may be null (nothing to add).
      */
     public void updateAiResult(String hhId, String person, String searchName, int score, String verdict, String reason,
                                 String noveltyColor, String noveltyNote,
-                                Integer aiSalaryFrom, Integer aiSalaryTo, String aiCurrency, String aiCompany) {
+                                Integer aiSalaryFrom, Integer aiSalaryTo, String aiCurrency, String aiCompany, String aiTitle) {
         String now = Instant.now().toString();
         jdbc.update(
             "UPDATE vacancies SET ai_score=?, ai_verdict=?, ai_reason=?, novelty_color=?, novelty_note=?, updated_at=?, " +
             "salary_from = COALESCE(NULLIF(salary_from, 0), ?), " +
             "salary_to = COALESCE(NULLIF(salary_to, 0), ?), " +
             "currency = COALESCE(NULLIF(currency, ''), ?), " +
-            "company = CASE WHEN company IS NULL OR company = '' OR company LIKE '@%' THEN COALESCE(?, company) ELSE company END " +
+            "company = CASE WHEN company IS NULL OR company = '' OR company LIKE '@%' THEN COALESCE(?, company) ELSE company END, " +
+            "title = COALESCE(?, title) " +
             "WHERE hh_id=? AND person=? AND search_name=?",
             score, verdict, reason, noveltyColor, noveltyNote, now,
-            aiSalaryFrom, aiSalaryTo, aiCurrency, aiCompany,
+            aiSalaryFrom, aiSalaryTo, aiCurrency, aiCompany, aiTitle,
             hhId, person, searchName);
     }
 

@@ -402,7 +402,7 @@ class VacancyPipelineServiceTest {
         @Override
         public void updateAiResult(String hhId, String person, String searchName, int score, String verdict, String reason,
                                     String noveltyColor, String noveltyNote,
-                                    Integer aiSalaryFrom, Integer aiSalaryTo, String aiCurrency, String aiCompany) {
+                                    Integer aiSalaryFrom, Integer aiSalaryTo, String aiCurrency, String aiCompany, String aiTitle) {
             aiResultsFor.add(hhId);
         }
         @Override

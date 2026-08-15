@@ -308,7 +308,7 @@ class VacancyRepositoryTest {
     void updateAiResult_withSalary_appliesWhenNoneWasSet() {
         Vacancy v = saveWithStatus("ai-sal-1", "new"); // salaryFrom/To unset by default
         vacancyRepo.updateAiResult(v.getHhId(), v.getPerson(), v.getSearchName(), 80, "yes", "ok", "", "",
-            60000, 90000, "RUR", null);
+            60000, 90000, "RUR", null, null);
 
         Vacancy found = vacancyRepo.findById(v.getId()).orElseThrow();
         assertEquals(60000, found.getSalaryFrom());
@@ -324,7 +324,7 @@ class VacancyRepositoryTest {
         v.setCurrency("RUR");
         vacancyRepo.updateScraped(v); // simulates the real scrape/regex path having already set it
         vacancyRepo.updateAiResult(v.getHhId(), v.getPerson(), v.getSearchName(), 80, "yes", "ok", "", "",
-            999999, 999999, "USD", null);
+            999999, 999999, "USD", null, null);
 
         Vacancy found = vacancyRepo.findById(v.getId()).orElseThrow();
         assertEquals(50000, found.getSalaryFrom(), "уже известная зарплата не должна перезаписываться догадкой AI");
@@ -338,7 +338,7 @@ class VacancyRepositoryTest {
         v.setCompany("@somechannel");
         vacancyRepo.save(v);
         vacancyRepo.updateAiResult(v.getHhId(), v.getPerson(), v.getSearchName(), 80, "yes", "ok", "", "",
-            null, null, null, "OSNOVA");
+            null, null, null, "OSNOVA", null);
 
         Vacancy found = vacancyRepo.findById(v.getId()).orElseThrow();
         assertEquals("OSNOVA", found.getCompany());
@@ -348,10 +348,32 @@ class VacancyRepositoryTest {
     void updateAiResult_withCompany_doesNotOverrideRealEmployerName() {
         Vacancy v = saveWithStatus("ai-comp-2", "new"); // company="Test", a real (non-@) name
         vacancyRepo.updateAiResult(v.getHhId(), v.getPerson(), v.getSearchName(), 80, "yes", "ok", "", "",
-            null, null, null, "Some Other Guess");
+            null, null, null, "Some Other Guess", null);
 
         Vacancy found = vacancyRepo.findById(v.getId()).orElseThrow();
         assertEquals("Test", found.getCompany(), "уже известный реальный работодатель не должен перезаписываться догадкой AI");
+    }
+
+    @Test
+    void updateAiResult_withTitle_replacesRawSentenceTitle() {
+        Vacancy v = createTestVacancy("ai-title-1", "Мы ищем таргетолога в команду. Работа с личным брендом психолога.", "new");
+        vacancyRepo.save(v);
+        vacancyRepo.updateAiResult(v.getHhId(), v.getPerson(), v.getSearchName(), 80, "yes", "ok", "", "",
+            null, null, null, null, "Таргетолог");
+
+        Vacancy found = vacancyRepo.findById(v.getId()).orElseThrow();
+        assertEquals("Таргетолог", found.getTitle());
+    }
+
+    @Test
+    void updateAiResult_withoutTitle_leavesExistingTitleUntouched() {
+        Vacancy v = createTestVacancy("ai-title-2", "SEO-копирайтер", "new");
+        vacancyRepo.save(v);
+        vacancyRepo.updateAiResult(v.getHhId(), v.getPerson(), v.getSearchName(), 80, "yes", "ok", "", "",
+            null, null, null, null, null);
+
+        Vacancy found = vacancyRepo.findById(v.getId()).orElseThrow();
+        assertEquals("SEO-копирайтер", found.getTitle(), "уже нормальный заголовок не должен затираться null'ом от AI");
     }
 
     // ── Pagination ──
