@@ -1654,8 +1654,22 @@ public class VacancyPipelineService {
         List<Long> ids = new ArrayList<>();
         List<String> publishAts = new ArrayList<>();
         for (int i = 0; i < approved.size(); i++) {
-            if (i > 0 && i % PUBLISH_BATCH_SIZE == 0) {
-                int batchesQueued = (alreadyQueued + i) / PUBLISH_BATCH_SIZE;
+            // Bug fixed live 2026-08-15: this used to gate on the LOCAL loop index i,
+            // so every call that brought fewer than PUBLISH_BATCH_SIZE new items (the
+            // overwhelmingly common case — approvals trickle in a handful at a time,
+            // not in one big burst) never advanced at all and just inherited whatever
+            // cursor findQueueTailTime() returned. With a standing backlog (queue is
+            // essentially never empty), that meant every small call silently piled its
+            // items onto the SAME due time as whatever was already queued there —
+            // observed live as groups of 10 (two 5-item calls landing on one slot)
+            // instead of the intended groups of 5, and the "batch of 5" behavior the
+            // pace/window design depends on effectively never happened. Gating on the
+            // GLOBAL queue position (already-queued count + this call's own index)
+            // instead correctly resumes filling a partially-full batch left by an
+            // earlier call before advancing to a fresh one.
+            int queuePosition = alreadyQueued + i;
+            if (queuePosition > 0 && queuePosition % PUBLISH_BATCH_SIZE == 0) {
+                int batchesQueued = queuePosition / PUBLISH_BATCH_SIZE;
                 long paceMinutes = dynamicPaceMinutes(job.publishPaceMinutes, batchesQueued);
                 cursor = pushPastNightWindow(cursor.plusSeconds(paceMinutes * 60L));
             }

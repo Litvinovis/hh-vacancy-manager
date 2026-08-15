@@ -1416,15 +1416,21 @@ class VacancyPipelineServiceTest {
             "23:30 должно сдвинуться на 07:00 СЛЕДУЮЩЕГО дня");
     }
 
-    /** Captures enqueuePublish calls; findQueueTailTime/countQueued report an empty queue. */
+    /** Captures enqueuePublish calls; findQueueTailTime/countQueued report an empty queue
+     *  by default, but track real state across calls like the live repository does —
+     *  see enqueuePublicPosts_secondCallWithNonEmptyQueue_startsNewBatchInsteadOfMerging,
+     *  which needs that to reproduce the bug a stateless "always empty" fake can't see. */
     private static class FakeQueueRepo extends VacancyRepository {
         final List<Long> enqueuedIds = new ArrayList<>();
         final List<String> enqueuedPublishAts = new ArrayList<>();
         FakeQueueRepo() { super(null); }
         @Override
-        public java.util.Optional<String> findQueueTailTime(Long searchId) { return java.util.Optional.empty(); }
+        public java.util.Optional<String> findQueueTailTime(Long searchId) {
+            return enqueuedPublishAts.isEmpty() ? java.util.Optional.empty()
+                : java.util.Optional.of(enqueuedPublishAts.get(enqueuedPublishAts.size() - 1));
+        }
         @Override
-        public int countQueued(Long searchId) { return 0; }
+        public int countQueued(Long searchId) { return enqueuedIds.size(); }
         @Override
         public void enqueuePublish(List<Long> ids, List<String> publishAts) {
             enqueuedIds.addAll(ids);
@@ -1458,5 +1464,54 @@ class VacancyPipelineServiceTest {
         assertEquals(12, repo.enqueuedIds.size());
         java.util.Set<String> distinctTimes = new java.util.HashSet<>(repo.enqueuedPublishAts);
         assertEquals(3, distinctTimes.size(), "12 вакансий по 5 в батче -> 3 разных момента публикации (5+5+2)");
+    }
+
+    @Test
+    void enqueuePublicPosts_secondCallWithNonEmptyQueue_startsNewBatchInsteadOfMerging() throws Exception {
+        // Live bug (fixed 2026-08-15): with a standing backlog (queue never empties
+        // between pipeline runs — the normal case in production, where the queue's tail
+        // already sits hours in the future from earlier batches), a SECOND call of 5
+        // approved vacancies used to silently merge into the FIRST call's still-open
+        // batch instead of starting a fresh one, because the batch-boundary check only
+        // looked at the local loop index of each call, never at how many were already
+        // queued. Seeding the fake queue with an existing future-dated batch (rather
+        // than starting from empty) is essential here: enqueuePublicPosts falls back to
+        // Instant.now() whenever the queue tail isn't already in the future (see its own
+        // "t.isAfter(Instant.now())" filter) — an empty-start test can't tell a fixed
+        // cursor apart from two calls just landing microseconds apart on their own.
+        FakeQueueRepo repo = new FakeQueueRepo();
+        // Fixed at 14:00 local (today, or tomorrow if 14:00 already passed) — safely mid-
+        // window (07:00-23:00) regardless of when this test actually runs, so
+        // pushPastNightWindow is a guaranteed no-op here and can't be mistaken for the
+        // batch-advance this test is actually checking for.
+        java.time.ZonedDateTime midWindow = java.time.ZonedDateTime.now().withHour(14).withMinute(0).withSecond(0).withNano(0);
+        if (!midWindow.isAfter(java.time.ZonedDateTime.now())) midWindow = midWindow.plusDays(1);
+        String existingTail = midWindow.toInstant().toString();
+        repo.enqueuedIds.addAll(List.of(101L, 102L, 103L, 104L, 105L)); // one full batch of 5, already queued
+        for (int i = 0; i < 5; i++) repo.enqueuedPublishAts.add(existingTail);
+
+        VacancyPipelineService svc = new VacancyPipelineService(
+            null, null, null, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null, new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+        SearchJob job = tgJob();
+        job.chatId = "-100123";
+        job.publishPaceMinutes = 5;
+
+        Method m = VacancyPipelineService.class.getDeclaredMethod("sendPublicPosts", List.class, SearchJob.class);
+        m.setAccessible(true);
+
+        List<Vacancy> newBatch = new ArrayList<>();
+        for (int i = 0; i < 5; i++) {
+            Vacancy v = new Vacancy();
+            v.setId((long) (i + 1));
+            v.setAiScore(80);
+            newBatch.add(v);
+        }
+        m.invoke(svc, newBatch, job);
+
+        assertEquals(5, repo.enqueuedPublishAts.size() - 5, "новые 5 вакансий должны были встать в очередь");
+        List<String> newTimes = repo.enqueuedPublishAts.subList(5, 10);
+        assertEquals(1, new java.util.HashSet<>(newTimes).size(), "новые 5 должны разделять один момент публикации между собой");
+        assertNotEquals(existingTail, newTimes.get(0),
+            "новый батч из 5 не должен слиться с уже стоящим в очереди батчем — у него должен быть свой, более поздний момент");
     }
 }
