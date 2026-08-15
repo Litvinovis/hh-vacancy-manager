@@ -1055,6 +1055,26 @@ class VacancyPipelineServiceTest {
     }
 
     @Test
+    void discoverFromTelegram_organizationAsDutiesSubheading_doesNotMisfireAsEmployer() {
+        // Живой пример: "Организация:" использовано как подзаголовок раздела обязанностей
+        // ("организовывать процесс"), а не как метка "название организации-работодателя".
+        // "организация" убрана из ключевых слов, и на всякий случай ловим ещё и общий
+        // признак — захваченное значение начинается с маркера списка ("—").
+        String text = "Ищу ассистента с навыками создания контента\n\n"
+            + "Обязанности:\n— вести соцсети;\n\nОрганизация:\n— ставить задачи и контролировать выполнение;\n— следить за дедлайнами;";
+        FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
+            true, null, List.of(tgMsg("tg_testchan_63", text)))));
+        FakeTgRepo repo = new FakeTgRepo(Set.of());
+        VacancyPipelineService svc = new VacancyPipelineService(
+            null, null, tg, null, repo, null, new RuntimeConfig(), null, new FeatureFlags(), null, null);
+
+        svc.discoverFromTelegram(tgJob(), List.of("testchan"));
+
+        assertEquals("@testchan", repo.saved.get(0).getCompany(),
+            "не должен принять фрагмент списка обязанностей за название работодателя");
+    }
+
+    @Test
     void discoverFromTelegram_excludeWordMatch_dropsCandidateBeforeSaving() {
         FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
             true, null, List.of(tgMsg("1", "Риэлтор без опыта, удалённо, доход от 100000")))));

@@ -381,9 +381,19 @@ public class VacancyPipelineService {
     // it, this matched ordinary sentences that merely contain the word "компания" —
     // e.g. "Компания развивает собственные бренды..." — and captured whatever followed
     // as the "employer", nonsense unrelated to who's actually hiring.
+    // "организация" dropped from the keyword list: verified live that some posts use it
+    // as a DUTIES sub-heading ("Обязанности: ... Организация:\n— ставить задачи...") —
+    // meaning "organizing work", not "the hiring organization" — and the colon-required
+    // rule above doesn't disambiguate that usage from a real "Организация: ООО Ромашка"
+    // label, so this word is inherently unsafe as a label keyword here.
     private static final java.util.regex.Pattern TG_EMPLOYER_PATTERN =
-        java.util.regex.Pattern.compile("(?:компания|организация|фирма|работодатель)\\s*:\\s*([^\\n,]{2,60})",
+        java.util.regex.Pattern.compile("(?:компания|фирма|работодатель)\\s*:\\s*([^\\n,]{2,60})",
             java.util.regex.Pattern.CASE_INSENSITIVE);
+    // A labeled value that's actually a bullet-list start ("Организация:\n— ставить
+    // задачи...") begins with a list marker on the captured text — reject those even
+    // for the three keywords kept above, as a general safety net.
+    private static final java.util.regex.Pattern LIST_MARKER_START =
+        java.util.regex.Pattern.compile("^[\\s]*[-—•*]");
 
     // Verified live: most titles that DO name an employer follow "Роль в/для
     // КомпанияName" ("Брендинг-дизайнер в Emerging Travel Group", "SMM Manager в
@@ -404,7 +414,9 @@ public class VacancyPipelineService {
 
     private static String extractTgEmployer(String text, String title, String channel) {
         java.util.regex.Matcher m = TG_EMPLOYER_PATTERN.matcher(text);
-        if (m.find()) return m.group(1).trim();
+        if (m.find() && !LIST_MARKER_START.matcher(m.group(1)).find()) {
+            return m.group(1).trim();
+        }
         java.util.regex.Matcher titleMatch = TITLE_TRAILING_EMPLOYER.matcher(title);
         if (titleMatch.find() && !PLATFORM_NOT_EMPLOYER.matcher(titleMatch.group(1)).find()) {
             return titleMatch.group(1).trim();
