@@ -482,6 +482,13 @@ public class VacancyRepository {
         return jdbc.query(
             "SELECT * FROM vacancies v1 WHERE person=? AND search_name=? " +
             "AND ai_verdict='yes' AND ai_score >= ? AND notified = 0 AND closed_at IS NULL " +
+            // Already-queued rows (queued_publish_at set) are on their way out via
+            // publishDueQueued regardless of being picked up here again — without this,
+            // every call re-selects the SAME top-`limit` rows by score once they're queued
+            // (queuing doesn't touch notified), so with a large approved backlog and a
+            // small maxApproved, nothing past the first `limit` ever got queued at all:
+            // verified live, 487 approved sat invisible behind the same already-queued 10.
+            "AND queued_publish_at IS NULL " +
             "AND NOT EXISTS (SELECT 1 FROM vacancies v2 WHERE v2.dedup_key = v1.dedup_key " +
             "AND v2.dedup_key != '' AND v2.person = v1.person AND v2.search_name = v1.search_name " +
             "AND v2.notified = 1) " +
