@@ -60,6 +60,7 @@ public class SchemaMigrator implements ApplicationRunner {
         addColumnIfMissing("searches", "last_run_at", "TEXT DEFAULT NULL");
         addColumnIfMissing("searches", "chat_id", "TEXT DEFAULT NULL");
         addColumnIfMissing("searches", "public_format", "INTEGER NOT NULL DEFAULT 0");
+        addColumnIfMissing("searches", "search_kind", "TEXT NOT NULL DEFAULT 'PERSONAL'");
         addColumnIfMissing("searches", "delayed_chat_id", "TEXT DEFAULT NULL");
         addColumnIfMissing("searches", "delayed_publish_minutes", "INTEGER DEFAULT NULL");
         addColumnIfMissing("searches", "subscriber_feed", "INTEGER NOT NULL DEFAULT 0");
@@ -97,6 +98,7 @@ public class SchemaMigrator implements ApplicationRunner {
             + "ON vacancies(person, search_name, ai_verdict, notified, ai_score DESC)");
 
         backfillDedupKeys();
+        backfillSearchKind();
         // The database shipped with no sqlite_stat1 at all, so every plan was chosen from
         // SQLite's built-in guesses. With stats the dedup_key subquery in
         // findUnnotifiedApproved switches from idx_vac_notified to idx_vac_dedup_key —
@@ -115,6 +117,24 @@ public class SchemaMigrator implements ApplicationRunner {
      * cross-match unrelated companies sharing a generic title (DedupKeys.compute now
      * returns "" for those). No-op on every boot after the first.
      */
+    /**
+     * Existing channel searches predate SearchKind — they were told apart only by
+     * public_format, which describes how posts are FORMATTED, not what question the
+     * search asks. One-time backfill so the distinction starts out matching reality;
+     * from here on the two are set independently.
+     */
+    private void backfillSearchKind() {
+        try {
+            int updated = jdbc.update(
+                "UPDATE searches SET search_kind = 'EDITORIAL' WHERE public_format = 1 AND search_kind = 'PERSONAL'");
+            if (updated > 0) {
+                log.info("Миграция данных: {} поисков с публичным форматом помечены как EDITORIAL", updated);
+            }
+        } catch (Exception e) {
+            log.error("Миграция данных: бэкфилл search_kind не удался: {}", e.getMessage());
+        }
+    }
+
     private void backfillDedupKeys() {
         try {
             var rows = jdbc.queryForList(

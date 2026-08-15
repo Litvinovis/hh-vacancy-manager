@@ -99,6 +99,7 @@ public class SearchProfileFactory {
         job.lastRunAt = search.getLastRunAt();
         job.chatId = search.getChatId();
         job.publicFormat = search.isPublicFormat();
+        job.kind = search.getKind();
         job.delayedChatId = search.getDelayedChatId();
         job.delayedPublishMinutes = search.getDelayedPublishMinutes();
         job.subscriberFeed = search.isSubscriberFeed();

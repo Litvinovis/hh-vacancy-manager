@@ -31,6 +31,7 @@ public class SearchJob {
     public String lastRunAt;
     public String chatId;
     public boolean publicFormat;
+    public SearchKind kind = SearchKind.PERSONAL;
     public String delayedChatId;
     public Integer delayedPublishMinutes;
     public boolean subscriberFeed;

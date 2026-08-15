@@ -31,6 +31,7 @@ public class SearchConfig {
     private String lastRunAt;
     private String chatId;
     private boolean publicFormat;
+    private SearchKind kind = SearchKind.PERSONAL;
     private String delayedChatId;
     private Integer delayedPublishMinutes;
     private boolean subscriberFeed;
@@ -109,6 +110,9 @@ public class SearchConfig {
 
     public boolean isPublicFormat() { return publicFormat; }
     public void setPublicFormat(boolean publicFormat) { this.publicFormat = publicFormat; }
+
+    public SearchKind getKind() { return kind; }
+    public void setKind(SearchKind kind) { this.kind = kind; }
 
     public String getDelayedChatId() { return delayedChatId; }
     public void setDelayedChatId(String delayedChatId) { this.delayedChatId = delayedChatId; }

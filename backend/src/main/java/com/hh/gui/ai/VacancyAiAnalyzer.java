@@ -382,8 +382,8 @@ public class VacancyAiAnalyzer {
         return parseResponse(response, vacancies);
     }
 
-    private String buildPrompt(List<Vacancy> vacancies, SearchJob job) {
-        StringBuilder sb = new StringBuilder();
+    /** Personal search: judged against a real candidate — their city, commute, floor, background. */
+    private void appendPersonalBrief(StringBuilder sb, SearchJob job) {
         sb.append("Ты — аналитик вакансий. Помогаешь ").append(job.personName)
           .append(" с поиском \"").append(job.searchName).append("\".\n\n");
 
@@ -407,6 +407,41 @@ public class VacancyAiAnalyzer {
         sb.append("КАК ОЦЕНИВАТЬ \"ИНТЕРЕСНОСТЬ\" РАБОТЫ (общий ориентир — вес зависит от заметки ниже):\n");
         sb.append("- Интересно: аналитическое мышление, коммуникация, разнообразие задач, непредсказуемый процесс\n");
         sb.append("- Скучно: монотонная обработка однотипных заявок/тикетов, прямые продажи, транскрибация в потоке, жёсткий скрипт\n\n");
+    }
+
+    /**
+     * Editorial search: there is no candidate to fit. Asking the personal brief here was
+     * the bug this split fixes — a channel search has no city, no background and a 0₽
+     * floor, so the model was judging "does this suit a person" against empty fields.
+     */
+    private void appendEditorialBrief(StringBuilder sb, SearchJob job) {
+        sb.append("Ты — редактор Telegram-канала с вакансиями. Решаешь, что публиковать в канале \"")
+          .append(job.searchName).append("\".\n\n");
+
+        sb.append("КОГО ТЫ ОБСЛУЖИВАЕШЬ:\n");
+        sb.append("Читатели канала — незнакомые люди, которые ищут работу. Конкретного кандидата нет: ")
+          .append("не оценивай \"подойдёт ли это человеку\", у тебя нет ни его города, ни опыта, ни ожиданий по деньгам.\n\n");
+
+        sb.append("КАК СТАВИТЬ score (насколько вакансия хороша КАК ПУБЛИКАЦИЯ):\n");
+        sb.append("- 80-100: понятно, что за работа и что делать дальше — есть задачи, условия и куда откликаться\n");
+        sb.append("- 60-79: суть ясна, но чего-то важного не хватает (нет зарплаты ИЛИ размыты задачи)\n");
+        sb.append("- 40-59: слабое объявление — общие слова, почти нет конкретики\n");
+        sb.append("- 0-39: публиковать нечего: ни задач, ни условий, ни контакта\n");
+        sb.append("verdict=\"no\" — если публиковать не стоит; verdict=\"yes\" — если стоит.\n");
+        sb.append("Публикация уходит незнакомым людям, поэтому к обману ниже относись строже, ")
+          .append("чем если бы советовал одному знакомому: сомнительное лучше не публиковать.\n\n");
+    }
+
+    private String buildPrompt(List<Vacancy> vacancies, SearchJob job) {
+        StringBuilder sb = new StringBuilder();
+        // Two different questions, two different briefs — see SearchKind. Everything
+        // after the brief (novelty colour, fraud check, extraction rules, output schema)
+        // is identical for both, because it describes the vacancy rather than who's asking.
+        if (job.kind != null && job.kind.isEditorial()) {
+            appendEditorialBrief(sb, job);
+        } else {
+            appendPersonalBrief(sb, job);
+        }
 
         sb.append("ЦВЕТ ПО РУТИННОСТИ/НЕОБЫЧНОСТИ РАБОТЫ (noveltyColor) — отдельная, независимая от score оценка:\n");
         sb.append("это про саму суть работы саму по себе, а не про то, насколько она подходит под этот конкретный поиск.\n");
@@ -416,7 +451,9 @@ public class VacancyAiAnalyzer {
         sb.append("Сомневаешься между двумя соседними — выбирай менее крайний (yellow вместо red или green). ")
           .append("noveltyNote — до 8 слов, что именно так решил, свободной формулировкой (например: \"строгий скрипт разговора\", \"нестандартный формат, полная свобода действий\").\n\n");
 
-        sb.append("ЗАМЕТКА ДЛЯ ЭТОГО ПОИСКА (учитывай в первую очередь, она важнее общих ориентиров выше):\n");
+        sb.append(job.kind != null && job.kind.isEditorial()
+            ? "РЕДАКЦИОННАЯ ПОЛИТИКА КАНАЛА (главный критерий — важнее общих ориентиров выше):\n"
+            : "ЗАМЕТКА ДЛЯ ЭТОГО ПОИСКА (учитывай в первую очередь, она важнее общих ориентиров выше):\n");
         sb.append(job.aiNotes != null && !job.aiNotes.isBlank() ? truncatePromptField(job.aiNotes.trim(), 1000) : "Нет особых заметок.").append("\n\n");
 
         sb.append("ПРОВЕРКА НА ОБМАН:\n");
@@ -494,6 +531,9 @@ public class VacancyAiAnalyzer {
     public String computeCriteriaHash(SearchJob job) {
         String normalized = String.join("|",
             PROMPT_SCHEMA_VERSION,
+            // Two searches with identical criteria but different kinds are NOT
+            // scoring-equivalent — they're asked different questions entirely.
+            String.valueOf(job.kind),
             // searchName is quoted verbatim into the prompt ("с поиском \"X\"") — two
             // searches with identical criteria but different names could otherwise share
             // a cached verdict computed while the model was told a different search name.
