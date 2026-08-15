@@ -447,6 +447,33 @@ public class VacancyRepository {
     }
 
     /**
+     * Same as the 8-arg overload, plus the AI's own best-effort salary/employer read
+     * (see VacancyAiAnalyzer.AiResult javadoc) — a FALLBACK layer under whatever
+     * scraping/regex extraction already found, never overriding it:
+     * - salary_from/salary_to: only replaced while currently 0 (unset — see Vacancy's
+     *   convention, checked via NULLIF/COALESCE rather than in Java, so a concurrent
+     *   scrape landing between SELECT and this UPDATE can't get clobbered).
+     * - company: only replaced while empty or still the "@channel" placeholder
+     *   discoverFromTelegram falls back to when no real employer was extractable.
+     * Any of aiSalaryFrom/aiSalaryTo/aiCurrency/aiCompany may be null (nothing to add).
+     */
+    public void updateAiResult(String hhId, String person, String searchName, int score, String verdict, String reason,
+                                String noveltyColor, String noveltyNote,
+                                Integer aiSalaryFrom, Integer aiSalaryTo, String aiCurrency, String aiCompany) {
+        String now = Instant.now().toString();
+        jdbc.update(
+            "UPDATE vacancies SET ai_score=?, ai_verdict=?, ai_reason=?, novelty_color=?, novelty_note=?, updated_at=?, " +
+            "salary_from = COALESCE(NULLIF(salary_from, 0), ?), " +
+            "salary_to = COALESCE(NULLIF(salary_to, 0), ?), " +
+            "currency = COALESCE(NULLIF(currency, ''), ?), " +
+            "company = CASE WHEN company IS NULL OR company = '' OR company LIKE '@%' THEN COALESCE(?, company) ELSE company END " +
+            "WHERE hh_id=? AND person=? AND search_name=?",
+            score, verdict, reason, noveltyColor, noveltyNote, now,
+            aiSalaryFrom, aiSalaryTo, aiCurrency, aiCompany,
+            hhId, person, searchName);
+    }
+
+    /**
      * Reset AI score for a specific vacancy (mark for re-analysis).
      */
     public void resetScore(Long id) {

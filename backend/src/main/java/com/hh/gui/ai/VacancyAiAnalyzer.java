@@ -414,11 +414,22 @@ public class VacancyAiAnalyzer {
         sb.append("- \"Доверенный работодатель\" ниже — это подтверждение от hh.ru, весомый плюс к доверию\n");
         sb.append("- Вакансии-скам ставь verdict=\"fraud\" и score=0, но не пропускай их — они остаются в базе, чтобы не анализировать повторно\n\n");
 
-        sb.append("Проанализируй каждую вакансию и верни JSON-массив. У КАЖДОГО элемента массива должны быть ВСЕ шесть полей ")
-          .append("(id, score, verdict, reason, noveltyColor, noveltyNote) — noveltyColor/noveltyNote нельзя пропускать ")
-          .append("или оставлять пустыми, они обязательны так же, как score и verdict. Пример одного элемента:\n");
+        sb.append("Если в поле \"Зарплата\" ниже стоит \"не указана\", но в ОПИСАНИИ явно названа конкретная сумма — укажи её в ")
+          .append("полях salaryFrom/salaryTo (целые числа, без пробелов и валюты; только то, что реально названо — если сказано ")
+          .append("одно число, второе оставь null) и currency (RUR/USD/EUR). Если зарплата уже есть в \"Зарплата\" или нигде в ")
+          .append("тексте не названа — верни null для всех трёх. Не угадывай и не оценивай \"на глаз\".\n");
+        sb.append("Если в поле \"Работодатель\" стоит заглушка вида \"@имя_канала\" (не настоящее название компании), но реальный ")
+          .append("работодатель явно назван в ОПИСАНИИ — укажи его в поле company. Иначе (работодатель уже указан по-нормальному, ")
+          .append("или в тексте его действительно нет) верни null.\n\n");
+
+        sb.append("Проанализируй каждую вакансию и верни JSON-массив. У КАЖДОГО элемента массива должны быть ВСЕ десять полей ")
+          .append("(id, score, verdict, reason, noveltyColor, noveltyNote, salaryFrom, salaryTo, currency, company) — ")
+          .append("noveltyColor/noveltyNote нельзя пропускать или оставлять пустыми, они обязательны так же, как score и verdict; ")
+          .append("salaryFrom/salaryTo/currency/company пишутся как null, когда не найдены, но поле обязано присутствовать. ")
+          .append("Пример одного элемента:\n");
         sb.append("{\"id\": \"12345678\", \"score\": 72, \"verdict\": \"yes\", \"reason\": \"нужна коммуникация с клиентами по телефону\", ")
-          .append("\"noveltyColor\": \"yellow\", \"noveltyNote\": \"стандартная работа с откликами по шаблону\"}\n");
+          .append("\"noveltyColor\": \"yellow\", \"noveltyNote\": \"стандартная работа с откликами по шаблону\", ")
+          .append("\"salaryFrom\": null, \"salaryTo\": null, \"currency\": null, \"company\": null}\n");
         sb.append("Никакого текста до или после массива. Никаких переносов строк внутри \"reason\"/\"noveltyNote\".\n\n");
 
         sb.append("ВАКАНСИИ:\n");
@@ -712,7 +723,21 @@ public class VacancyAiAnalyzer {
                 noveltyNote = "";
             }
 
-            results.add(new AiResult(id, Math.max(0, Math.min(100, score)), verdict, reason, noveltyColor, noveltyNote));
+            // Absent for prescreen responses (different schema, doesn't ask for this) —
+            // null there is correct, not a parsing failure. Same conservative philosophy
+            // as VacancyPipelineService's own regex-based extraction: 0/blank means "the
+            // model didn't find one", not "the salary is zero" — never coerced to 0.
+            Object salaryFromVal = item.get("salaryFrom");
+            Integer aiSalaryFrom = salaryFromVal instanceof Number n && n.intValue() > 0 ? n.intValue() : null;
+            Object salaryToVal = item.get("salaryTo");
+            Integer aiSalaryTo = salaryToVal instanceof Number n && n.intValue() > 0 ? n.intValue() : null;
+            Object currencyVal = item.get("currency");
+            String aiCurrency = currencyVal instanceof String s && !s.isBlank() ? s : null;
+            Object companyVal = item.get("company");
+            String aiCompany = companyVal instanceof String s && !s.isBlank() ? s : null;
+
+            results.add(new AiResult(id, Math.max(0, Math.min(100, score)), verdict, reason, noveltyColor, noveltyNote,
+                aiSalaryFrom, aiSalaryTo, aiCurrency, aiCompany));
         }
         return results;
     }
@@ -761,6 +786,18 @@ public class VacancyAiAnalyzer {
      * @param noveltyColor red/yellow/green — how routine vs. unusual the work itself is
      *                     (see buildPrompt); "" for prescreen results, which don't judge this.
      * @param noveltyNote  short human-readable reason for the color, "" if not judged.
+     * @param salaryFrom/salaryTo/currency  the model's own read of a salary mentioned in the
+     *                     description but not already in the structured "Зарплата" field it
+     *                     was given — null unless explicitly stated (see buildPrompt); a
+     *                     fallback layered UNDER whatever regex-based extraction already found
+     *                     (see VacancyRepository.updateAiResult's COALESCE), never overriding it.
+     * @param company      likewise for a real employer name found in the description when
+     *                     "Работодатель" was only a "@channel" placeholder — null otherwise.
      */
-    public record AiResult(String hhId, int score, String verdict, String reason, String noveltyColor, String noveltyNote) {}
+    public record AiResult(String hhId, int score, String verdict, String reason, String noveltyColor, String noveltyNote,
+                            Integer salaryFrom, Integer salaryTo, String currency, String company) {
+        public AiResult(String hhId, int score, String verdict, String reason, String noveltyColor, String noveltyNote) {
+            this(hhId, score, verdict, reason, noveltyColor, noveltyNote, null, null, null, null);
+        }
+    }
 }

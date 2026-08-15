@@ -400,6 +400,12 @@ class VacancyPipelineServiceTest {
             aiResultsFor.add(hhId);
         }
         @Override
+        public void updateAiResult(String hhId, String person, String searchName, int score, String verdict, String reason,
+                                    String noveltyColor, String noveltyNote,
+                                    Integer aiSalaryFrom, Integer aiSalaryTo, String aiCurrency, String aiCompany) {
+            aiResultsFor.add(hhId);
+        }
+        @Override
         public void incrementAiAttemptsBatch(List<Long> ids) {}
         @Override
         public int markAiExhausted(String person, String searchName, int maxAttempts) { return 0; }
