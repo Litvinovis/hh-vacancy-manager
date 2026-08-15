@@ -156,6 +156,17 @@ public class Vacancy {
     public String getSearchName() { return searchName; }
     public void setSearchName(String searchName) { this.searchName = searchName; }
 
+    /**
+     * Who's hiring, from whichever field actually holds it: hh.ru fills employer_name,
+     * while Telegram-sourced vacancies only ever get company. Never null — callers
+     * compare and normalize this, and a null here used to mean a guard at every use.
+     */
+    public String employerOrCompany() {
+        String e = employerName;
+        if (e == null || e.isBlank()) e = company;
+        return e == null ? "" : e;
+    }
+
     public String getEmployerName() { return employerName; }
     public void setEmployerName(String employerName) { this.employerName = employerName; }
 
