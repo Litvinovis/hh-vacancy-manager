@@ -63,9 +63,10 @@ public class PipelineScheduler implements SchedulingConfigurer {
     private final FeatureFlags featureFlags;
     private final SchemaMigrator schemaMigrator;
     private final SubscriptionService subscriptionService;
+    private final ChannelPublisher channelPublisher;
 
     // How often to check for approved vacancies whose delayed_publish_at has arrived
-    // (see VacancyPipelineService.publishDueDelayed). A 5-minute delay needs a check
+    // (see ChannelPublisher.publishDueDelayed). A 5-minute delay needs a check
     // interval well under that to actually land close to on time.
     private static final Duration DELAYED_PUBLISH_CHECK_INTERVAL = Duration.ofMinutes(1);
     private static final int DELAYED_PUBLISH_BATCH_PER_TICK = 50;
@@ -92,7 +93,7 @@ public class PipelineScheduler implements SchedulingConfigurer {
     public PipelineScheduler(VacancyPipelineService pipelineService, SearchProfileFactory profileFactory,
                               RuntimeConfig runtimeConfig, VacancyAiAnalyzer aiAnalyzer, SearchRepository searchRepo,
                               FreeModelUpdater freeModelUpdater, FeatureFlags featureFlags, SchemaMigrator schemaMigrator,
-                              SubscriptionService subscriptionService) {
+                              SubscriptionService subscriptionService, ChannelPublisher channelPublisher) {
         this.pipelineService = pipelineService;
         this.profileFactory = profileFactory;
         this.runtimeConfig = runtimeConfig;
@@ -102,6 +103,7 @@ public class PipelineScheduler implements SchedulingConfigurer {
         this.featureFlags = featureFlags;
         this.schemaMigrator = schemaMigrator;
         this.subscriptionService = subscriptionService;
+        this.channelPublisher = channelPublisher;
     }
 
     @Override
@@ -137,7 +139,7 @@ public class PipelineScheduler implements SchedulingConfigurer {
     private void runDueDelayedPublications() {
         if (schemaNotReady() || !featureFlags.isDelayedPublishEnabled()) return;
         try {
-            pipelineService.publishDueDelayed(DELAYED_PUBLISH_BATCH_PER_TICK);
+            channelPublisher.publishDueDelayed(DELAYED_PUBLISH_BATCH_PER_TICK);
         } catch (Exception e) {
             log.error("Отложенная публикация завершилась ошибкой: {}", e.getMessage(), e);
         }
@@ -150,7 +152,7 @@ public class PipelineScheduler implements SchedulingConfigurer {
     private void runDueQueuedPublications() {
         if (schemaNotReady()) return;
         try {
-            pipelineService.publishDueQueued(QUEUED_PUBLISH_BATCH_PER_TICK);
+            channelPublisher.publishDueQueued(QUEUED_PUBLISH_BATCH_PER_TICK);
         } catch (Exception e) {
             log.error("Публикация из очереди завершилась ошибкой: {}", e.getMessage(), e);
         }
