@@ -44,6 +44,41 @@ function enqueue(task) {
   return result;
 }
 
+// This is a real logged-in account, not an anonymous scraper — verified live
+// that opening several channels back-to-back with zero delay works fine
+// technically, but it's exactly the mechanical, perfectly-serialized request
+// pattern behavioral anti-abuse detection looks for. Same reasoning and
+// constants as ../scraper/server.js's hh.ru pacing.
+const CHANNEL_DELAY_MS = parseInt(process.env.TG_SCRAPE_DELAY_MS || '3000', 10);
+const CHANNEL_JITTER_MS = parseInt(process.env.TG_SCRAPE_JITTER_MS || '4000', 10);
+let lastPacedActionAt = 0;
+
+function nextChannelDelayMs() {
+  let delay = CHANNEL_DELAY_MS + Math.random() * CHANNEL_JITTER_MS;
+  // Occasionally take a much longer "reading" pause — a person doesn't click
+  // through channel after channel at a steady cadence for minutes on end.
+  if (Math.random() < 0.07) delay += 15000 + Math.random() * 30000;
+  return delay;
+}
+
+/** Same serialization as enqueue, plus a human-paced delay since the last
+ *  channel read/search — NOT applied to /login/*, which is interactive,
+ *  inherently rare, and already as slow as a person typing a code. */
+function enqueuePaced(task) {
+  return enqueue(async () => {
+    const elapsed = Date.now() - lastPacedActionAt;
+    const delay = nextChannelDelayMs();
+    if (elapsed < delay) {
+      await new Promise((r) => setTimeout(r, delay - elapsed));
+    }
+    try {
+      return await task();
+    } finally {
+      lastPacedActionAt = Date.now();
+    }
+  });
+}
+
 async function getContext() {
   if (!contextPromise) {
     contextPromise = (async () => {
@@ -422,7 +457,7 @@ const server = http.createServer((req, res) => {
     if (!channel) return sendJson(res, 400, { ok: false, reason: 'missing_username' });
 
     const started = Date.now();
-    enqueue(() => scrapeChannel(channel, { limit }))
+    enqueuePaced(() => scrapeChannel(channel, { limit }))
       .then((result) => {
         console.log(`[channel] ${channel} ${result.ok ? `ok items=${result.items.length}` : `fail:${result.reason}`} ${Date.now() - started}ms`);
         sendJson(res, result.ok ? 200 : 502, result);
@@ -440,7 +475,7 @@ const server = http.createServer((req, res) => {
     if (!query) return sendJson(res, 400, { ok: false, reason: 'missing_q' });
 
     const started = Date.now();
-    enqueue(() => searchChannels(query))
+    enqueuePaced(() => searchChannels(query))
       .then((result) => {
         console.log(`[search-channels] "${query}" ${result.ok ? `ok items=${result.items.length}` : `fail:${result.reason}`} ${Date.now() - started}ms`);
         sendJson(res, result.ok ? 200 : 502, result);
