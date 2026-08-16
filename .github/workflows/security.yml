@@ -22,7 +22,10 @@ jobs:
           cache: maven
 
       - name: Run SpotBugs
-        run: cd backend && mvn spotbugs:check -Dmaven.test.skip=true --no-transfer-progress
+        # spotbugs:check as a standalone goal doesn't trigger compile first, so it
+        # had nothing to analyze ("No files found to run spotbugs") and always
+        # passed trivially. compile has to run in the same Maven invocation first.
+        run: cd backend && mvn compile spotbugs:check -Dmaven.test.skip=true --no-transfer-progress
         continue-on-error: true
 
       - name: Upload SpotBugs report
