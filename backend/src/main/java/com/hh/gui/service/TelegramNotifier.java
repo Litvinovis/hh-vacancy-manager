@@ -19,7 +19,11 @@ import java.nio.charset.StandardCharsets;
 public class TelegramNotifier {
 
     private static final Logger log = LoggerFactory.getLogger(TelegramNotifier.class);
-    private static final String TG_API = "https://api.telegram.org/bot%s/sendMessage";
+
+    // Overridable so tests can point this at a local HttpServer instead of the real
+    // Bot API — same pattern TelegramClient already uses for app.tgscraper.url.
+    @Value("${app.telegram.api-base-url:https://api.telegram.org}")
+    private String apiBaseUrl;
 
     @Value("${app.telegram.bot-token:}")
     private String botToken;
@@ -67,7 +71,7 @@ public class TelegramNotifier {
         if (channelBotToken == null || channelBotToken.isEmpty()) return null;
         if (targetChatId == null || targetChatId.isBlank()) return null;
         try {
-            String url = "https://api.telegram.org/bot" + channelBotToken + "/getChatMemberCount?chat_id="
+            String url = apiBaseUrl + "/bot" + channelBotToken + "/getChatMemberCount?chat_id="
                 + URLEncoder.encode(targetChatId, StandardCharsets.UTF_8);
             HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
             conn.setRequestMethod("GET");
@@ -98,7 +102,7 @@ public class TelegramNotifier {
         if (channelBotToken == null || channelBotToken.isEmpty()) return null;
         if (targetChatId == null || targetChatId.isBlank()) return null;
         try {
-            String url = "https://api.telegram.org/bot" + channelBotToken + "/getChat?chat_id="
+            String url = apiBaseUrl + "/bot" + channelBotToken + "/getChat?chat_id="
                 + URLEncoder.encode(targetChatId, StandardCharsets.UTF_8);
             HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
             conn.setRequestMethod("GET");
@@ -132,7 +136,7 @@ public class TelegramNotifier {
         }
 
         try {
-            String url = String.format(TG_API, token);
+            String url = apiBaseUrl + "/bot" + token + "/sendMessage";
             HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
             conn.setRequestMethod("POST");
             conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
