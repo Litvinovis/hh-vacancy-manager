@@ -54,11 +54,12 @@ public class VacancyDiscovery {
     private final TelegramMetrics telegramMetrics;
     private final ChannelEngagementTracker engagementTracker;
     private final ScrapeCooldown scrapeCooldown;
+    private final com.hh.gui.ai.AiMetrics metrics;
 
     public VacancyDiscovery(HhApiClient hhApiClient, ScraperClient scraperClient, TelegramClient telegramClient,
                             VacancyAiAnalyzer aiAnalyzer, VacancyRepository vacancyRepo,
                             TelegramMetrics telegramMetrics, ChannelEngagementTracker engagementTracker,
-                            ScrapeCooldown scrapeCooldown) {
+                            ScrapeCooldown scrapeCooldown, com.hh.gui.ai.AiMetrics metrics) {
         this.hhApiClient = hhApiClient;
         this.scraperClient = scraperClient;
         this.telegramClient = telegramClient;
@@ -67,6 +68,7 @@ public class VacancyDiscovery {
         this.telegramMetrics = telegramMetrics;
         this.engagementTracker = engagementTracker;
         this.scrapeCooldown = scrapeCooldown;
+        this.metrics = metrics;
     }
 
     /**
@@ -132,6 +134,7 @@ public class VacancyDiscovery {
                 log.warn("Не удалось сохранить {} ({} · {}): {}", v.getHhId(), job.personName, job.searchName, e.getMessage());
             }
         }
+        metrics.recordVacanciesCollected("hh.ru", saved);
         return saved;
     }
 
@@ -225,6 +228,7 @@ public class VacancyDiscovery {
                 }
             }
         }
+        metrics.recordVacanciesCollected("hh.ru", saved);
         return saved;
     }
 
