@@ -72,13 +72,31 @@ class VacancyPostFormatterTest {
     }
 
     @Test
-    void reportEntry_realUrl_keepsPlainLinkMarker() {
-        assertTrue(VacancyPostFormatter.reportEntry(hhLinked()).contains("🔗 https://hh.ru/vacancy/136268015"));
+    void reportEntry_realUrl_keepsLinkMarker_wrappedAsAnchor() {
+        String entry = VacancyPostFormatter.reportEntry(hhLinked());
+        assertTrue(entry.contains("🔗 <a href=\"https://hh.ru/vacancy/136268015\">Откликнуться</a>"), entry);
     }
 
     @Test
-    void publicPost_realUrl_keepsArrowMarker() {
-        assertTrue(VacancyPostFormatter.publicPost(hhLinked()).contains("👉 https://hh.ru/vacancy/136268015"));
+    void publicPost_realUrl_keepsArrowMarker_wrappedAsAnchor() {
+        String post = VacancyPostFormatter.publicPost(hhLinked());
+        assertTrue(post.contains("👉 <a href=\"https://hh.ru/vacancy/136268015\">Откликнуться</a>"), post);
+    }
+
+    @Test
+    void publicPost_longCyrillicUrl_hiddenInsideAnchorNotShownAsText() {
+        // Live bug: kadrout.ru links with percent-encoded Cyrillic slugs ran past 300
+        // characters — printed inline, that's a wall of "%D0%9A..." instead of a clean
+        // line. The raw URL now only appears inside the href, never as visible text.
+        Vacancy v = hhLinked();
+        String uglyUrl = "https://kadrout.ru/vacancies/38030/%D0%BC%D0%B0%D1%80%D0%BA%D0%B5%D1%82%D0%BE%D0%BB%D0%BE%D0%B3?utm_source=tg";
+        v.setUrl(uglyUrl);
+
+        String post = VacancyPostFormatter.publicPost(v);
+        assertTrue(post.contains("href=\"" + uglyUrl + "\""), post);
+        assertTrue(post.contains("👉 <a href="), post);
+        assertFalse(post.replaceAll("href=\"[^\"]*\"", "").contains("%D0"),
+            "сырой URL не должен встречаться нигде, кроме href");
     }
 
     @Test
@@ -107,6 +125,20 @@ class VacancyPostFormatterTest {
     }
 
     @Test
+    void channelHandlePlaceholderCompany_treatedAsMissingNotShownVerbatim() {
+        // Live bug: TelegramPostParser.employer() falls back to "@channel" when no real
+        // employer is found — printed as-is, a reader sees "🏢 @vacancysmm" as if that
+        // were the hiring company, which reads as a bug (you can't apply to an
+        // @-handle). Same placeholder text as a genuinely missing company.
+        Vacancy v = hhLinked();
+        v.setCompany("@vacancysmm");
+
+        String post = VacancyPostFormatter.publicPost(v);
+        assertTrue(post.contains("компания не указана"), post);
+        assertFalse(post.contains("@vacancysmm"), post);
+    }
+
+    @Test
     void htmlInFieldsEscaped_soTelegramParseModeCannotBreak() {
         Vacancy v = hhLinked();
         v.setTitle("Разработчик <script>alert(1)</script>");
@@ -122,6 +154,13 @@ class VacancyPostFormatterTest {
         v.setUrl("");
         assertFalse(VacancyPostFormatter.publicPost(v).contains("👉"));
         assertFalse(VacancyPostFormatter.reportEntry(v).contains("🔗"));
+    }
+
+    @Test
+    void personalUsernameContact_alsoWrappedAsAnchor_notRawTMeLink() {
+        Vacancy v = telegramSelfLinked("Для связи пишите: @some_recruiter");
+        String post = VacancyPostFormatter.publicPost(v);
+        assertTrue(post.contains("💬 <a href=\"https://t.me/some_recruiter\">Откликнуться</a>"), post);
     }
 
     @Test

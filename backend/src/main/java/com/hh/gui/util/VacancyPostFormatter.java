@@ -32,9 +32,16 @@ public final class VacancyPostFormatter {
     private record Fields(String title, String company, String salary, String reason) {}
 
     private static Fields fields(Vacancy v) {
+        // A leading "@" means employer() (see TelegramPostParser) never found a real
+        // employer and fell back to the source channel's own handle — verified live
+        // that showing that handle as the "company" reads as a bug to a reader (an
+        // @-handle isn't something you can apply to), so it's treated the same as no
+        // company at all rather than printed as if it meant something.
+        String company = v.getCompany();
+        boolean hasRealCompany = company != null && !company.isEmpty() && !company.startsWith("@");
         return new Fields(
             truncate(v.getTitle(), MAX_TITLE_CHARS),
-            v.getCompany() != null && !v.getCompany().isEmpty() ? escapeHtml(v.getCompany()) : "компания не указана",
+            hasRealCompany ? escapeHtml(company) : "компания не указана",
             SalaryFormatter.forReport(v),
             truncate(v.getAiReason(), MAX_REASON_CHARS));
     }
@@ -86,10 +93,23 @@ public final class VacancyPostFormatter {
         if (TelegramPostParser.isSelfLink(url)) {
             TelegramPostParser.Contact contact = TelegramPostParser.contact(v.getDescription());
             if (contact != null) {
-                return String.format("%s%s %s\n", indent, contact.emoji(), contact.display());
+                // A t.me link (💬) is a raw URL exactly like the plain case below —
+                // wrap it the same way. Email/phone (📧/📞) are already short and
+                // self-explanatory, and Telegram auto-linkifies them from plain text
+                // on its own, so those are left as-is.
+                String shown = "💬".equals(contact.emoji())
+                    ? String.format("<a href=\"%s\">Откликнуться</a>", escapeHtml(contact.display()))
+                    : contact.display();
+                return String.format("%s%s %s\n", indent, contact.emoji(), shown);
             }
         }
-        return url != null && !url.isBlank() ? String.format("%s%s %s\n", indent, urlEmoji, url) : "";
+        if (url == null || url.isBlank()) return "";
+        // Verified live (kadrout.ru): percent-encoded Cyrillic slugs push some URLs past
+        // 300 characters — printed as plain text, that's a wall of "%D0%9A..." inline
+        // instead of a clean line. HTML parse_mode is already in use for this message
+        // (see TelegramNotifier), so the ugly part becomes the anchor's href instead of
+        // the visible text.
+        return String.format("%s%s <a href=\"%s\">Откликнуться</a>\n", indent, urlEmoji, escapeHtml(url));
     }
 
     public static String truncate(String s, int maxChars) {
