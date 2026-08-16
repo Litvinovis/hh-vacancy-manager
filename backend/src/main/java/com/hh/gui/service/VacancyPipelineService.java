@@ -152,7 +152,9 @@ public class VacancyPipelineService {
         java.util.concurrent.locks.ReentrantLock lock = lockFor(job);
         if (!lock.tryLock()) {
             log.info("Пайплайн {} · {} уже выполняется — параллельный запуск пропущен", job.personName, job.searchName);
-            return new PipelineResult();
+            PipelineResult skippedResult = new PipelineResult();
+            skippedResult.skipped = true;
+            return skippedResult;
         }
         try {
             return runFullPipelineLocked(job, deferSmallAiBatches);
@@ -246,7 +248,9 @@ public class VacancyPipelineService {
         if (!lock.tryLock()) {
             log.info("Поиск по ссылке {} · {} уже выполняется — параллельный запуск пропущен",
                 job.personName, job.searchName);
-            return new PipelineResult();
+            PipelineResult skippedResult = new PipelineResult();
+            skippedResult.skipped = true;
+            return skippedResult;
         }
         try {
             return runFullPipelineFromUrlLocked(job, url, maxPages);
@@ -306,7 +310,9 @@ public class VacancyPipelineService {
         if (!lock.tryLock()) {
             log.info("Telegram-поиск {} · {} уже выполняется — параллельный запуск пропущен",
                 job.personName, job.searchName);
-            return new PipelineResult();
+            PipelineResult skippedResult = new PipelineResult();
+            skippedResult.skipped = true;
+            return skippedResult;
         }
         try {
             int discovered = discovery.fromTelegram(job, channels);
@@ -1124,6 +1130,11 @@ public class VacancyPipelineService {
         public int newVacancies;
         public int analyzed;
         public int approved;
+        // True when this call didn't run at all — another run for the same job held the
+        // lock. Callers that stamp a "last attempted at" timestamp (see PipelineScheduler's
+        // due-search checks) need this to avoid stamping a run that never happened, which
+        // would otherwise delay the real retry until the next full scheduling interval.
+        public boolean skipped;
     }
 
     public static class ReanalyzeResult {

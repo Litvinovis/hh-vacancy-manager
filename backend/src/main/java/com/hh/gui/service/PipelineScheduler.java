@@ -92,6 +92,15 @@ public class PipelineScheduler implements SchedulingConfigurer {
     // (see ChannelEngagementTracker.checkSubscribers) — every few minutes would be
     // pure Bot API noise for a number that changes a handful of times a day at most.
     private static final Duration SUBSCRIBER_COUNT_CHECK_INTERVAL = Duration.ofHours(6);
+    // Without an initial delay, a PeriodicTrigger's first firing happens immediately at
+    // registration — which on every deploy restart races schemaNotReady() (see its
+    // javadoc): that very first tick gets silently skipped, and Spring reschedules the
+    // NEXT one a full SUBSCRIBER_COUNT_CHECK_INTERVAL later rather than retrying soon
+    // ("skipping one tick is free" only holds for short-period triggers). Net effect:
+    // every restart left the subscribers/views/reactions gauges reporting "no data" in
+    // Grafana for up to 6h. Same fix as FREE_MODEL_REFRESH_INITIAL_DELAY/RETENTION_INITIAL_DELAY —
+    // push the first real attempt past the boot-time schema-migration window instead.
+    private static final Duration SUBSCRIBER_COUNT_INITIAL_DELAY = Duration.ofMinutes(5);
 
     // Retention: every vacancy row older than this is deleted outright, decided-or-not
     // (see VacancyRepository.deleteOlderThan) — a daily sweep is precise enough for a
@@ -140,7 +149,9 @@ public class PipelineScheduler implements SchedulingConfigurer {
         registrar.addTriggerTask(this::runFreshnessCheck, freshnessTrigger);
         registrar.addTriggerTask(this::runDueDelayedPublications, new PeriodicTrigger(DELAYED_PUBLISH_CHECK_INTERVAL));
         registrar.addTriggerTask(this::runDueQueuedPublications, new PeriodicTrigger(QUEUED_PUBLISH_CHECK_INTERVAL));
-        registrar.addTriggerTask(this::runChannelSubscriberCheck, new PeriodicTrigger(SUBSCRIBER_COUNT_CHECK_INTERVAL));
+        PeriodicTrigger subscriberTrigger = new PeriodicTrigger(SUBSCRIBER_COUNT_CHECK_INTERVAL);
+        subscriberTrigger.setInitialDelay(SUBSCRIBER_COUNT_INITIAL_DELAY);
+        registrar.addTriggerTask(this::runChannelSubscriberCheck, subscriberTrigger);
         registrar.addTriggerTask(this::runSubscriptionExpiry, new PeriodicTrigger(SUBSCRIPTION_EXPIRY_CHECK_INTERVAL));
         registrar.addTriggerTask(this::runRenewalReminders, new PeriodicTrigger(RENEWAL_REMINDER_CHECK_INTERVAL));
         PeriodicTrigger retentionTrigger = new PeriodicTrigger(RETENTION_CHECK_INTERVAL);
@@ -329,18 +340,27 @@ public class PipelineScheduler implements SchedulingConfigurer {
             SearchJob job = jobOpt.get();
 
             String now = Instant.now().toString();
+            boolean skippedByLock = false;
             try {
                 log.info("=== Автозапуск поиска по ссылке: {} · {} ===", job.personName, job.searchName);
                 VacancyPipelineService.PipelineResult result =
                     pipelineService.runFullPipelineFromUrl(job, job.sourceUrl, URL_SEARCH_SCHEDULED_MAX_PAGES);
-                log.info("Поиск по ссылке {} · {} завершён: собрано={}, проанализировано={}, одобрено={}",
-                    job.personName, job.searchName, result.collected, result.analyzed, result.approved);
+                skippedByLock = result.skipped;
+                if (!skippedByLock) {
+                    log.info("Поиск по ссылке {} · {} завершён: собрано={}, проанализировано={}, одобрено={}",
+                        job.personName, job.searchName, result.collected, result.analyzed, result.approved);
+                }
             } catch (Exception e) {
                 log.error("Поиск по ссылке {} · {} завершился ошибкой: {}", job.personName, job.searchName, e.getMessage(), e);
             } finally {
                 // Stamped even on failure — a search whose URL/sidecar is broken shouldn't be
                 // retried every 5-minute check tick, only once per its own configured interval.
-                searchRepo.updateLastRunAt(search.getId(), now);
+                // NOT stamped when skipped by lock contention with a concurrently running
+                // pipeline for the same search — that isn't "this search is broken," it's
+                // "try again on the next 5-minute tick," not the full run_interval_hours later.
+                if (!skippedByLock) {
+                    searchRepo.updateLastRunAt(search.getId(), now);
+                }
             }
         }
     }
@@ -368,16 +388,25 @@ public class PipelineScheduler implements SchedulingConfigurer {
             SearchJob job = jobOpt.get();
 
             String now = Instant.now().toString();
+            boolean skippedByLock = false;
             try {
                 log.info("=== Автозапуск Telegram-поиска: {} · {} ===", job.personName, job.searchName);
                 VacancyPipelineService.PipelineResult result =
                     pipelineService.runFullPipelineFromTelegram(job, job.telegramChannels);
-                log.info("Telegram-поиск {} · {} завершён: собрано={}, проанализировано={}, одобрено={}",
-                    job.personName, job.searchName, result.collected, result.analyzed, result.approved);
+                skippedByLock = result.skipped;
+                if (!skippedByLock) {
+                    log.info("Telegram-поиск {} · {} завершён: собрано={}, проанализировано={}, одобрено={}",
+                        job.personName, job.searchName, result.collected, result.analyzed, result.approved);
+                }
             } catch (Exception e) {
                 log.error("Telegram-поиск {} · {} завершился ошибкой: {}", job.personName, job.searchName, e.getMessage(), e);
             } finally {
-                searchRepo.updateLastRunAt(search.getId(), now);
+                // NOT stamped when skipped by lock contention with a concurrently running
+                // pipeline for the same search (see runDueUrlSearches for the same fix and
+                // full reasoning) — retried on the next 5-minute tick instead of 3h later.
+                if (!skippedByLock) {
+                    searchRepo.updateLastRunAt(search.getId(), now);
+                }
             }
         }
     }
