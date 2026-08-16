@@ -3,6 +3,7 @@ name: Security Scan
 on:
   schedule:
     - cron: '0 2 * * 1'  # Еженедельно в понедельник в 02:00 UTC
+  workflow_dispatch:
 
 jobs:
   sast:
