@@ -102,6 +102,11 @@ public final class VacancyPostFormatter {
                     : contact.display();
                 return String.format("%s%s %s\n", indent, contact.emoji(), shown);
             }
+            // Self-link with no extractable contact either — found live (18% of sent
+            // Telegram-sourced posts): falling through below would print the exact
+            // dead self-link this check exists to avoid, right back as "Откликнуться".
+            // Genuinely nothing worth pointing the reader to, same as a blank url.
+            return "";
         }
         if (url == null || url.isBlank()) return "";
         // Verified live (kadrout.ru): percent-encoded Cyrillic slugs push some URLs past

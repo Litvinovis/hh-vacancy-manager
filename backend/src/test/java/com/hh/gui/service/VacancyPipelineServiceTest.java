@@ -167,17 +167,24 @@ class VacancyPipelineServiceTest {
     @Test
     void formatPublicPost_atMentionWithoutContactKeyword_notTreatedAsContact() {
         // A bare @channel mention unrelated to "how to apply" (e.g. crediting where the
-        // post came from) must not be misread as the reader's contact.
+        // post came from) must not be misread as the reader's contact. No usable contact
+        // means no apply line at all (see selfLinkNoContactFound below) — the self-link
+        // itself is never shown either way.
         String post = service.formatPublicPost(telegramSelfLinkVacancy(
             "Репост из @somechannel, вакансия интересная."));
-        assertTrue(post.contains("t.me/freelancce/15611"), post);
+        assertFalse(post.contains("t.me/freelancce/15611"), post);
+        assertFalse(post.contains("t.me/somechannel"), post);
     }
 
     @Test
-    void formatPublicPost_selfLinkNoContactFound_fallsBackToTheLinkAsBefore() {
+    void formatPublicPost_selfLinkNoContactFound_omitsApplyLineRatherThanShowingDeadLink() {
+        // Found live: 65 of 359 sent Telegram-sourced posts had this exact shape and
+        // fell back to printing the self-link as "Откликнуться" — a link to another
+        // channel's post, exactly what the self-link check exists to prevent.
         String post = service.formatPublicPost(telegramSelfLinkVacancy(
             "Просто описание без каких-либо контактов."));
-        assertTrue(post.contains("👉 <a href=\"https://t.me/freelancce/15611\">Откликнуться</a>"), post);
+        assertFalse(post.contains("t.me/freelancce/15611"), post);
+        assertFalse(post.contains("👉"), post);
     }
 
     @Test
