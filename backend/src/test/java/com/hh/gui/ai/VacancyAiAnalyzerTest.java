@@ -365,6 +365,32 @@ class VacancyAiAnalyzerTest {
         assertNull(extractJsonArray("User Safety: safe"));
     }
 
+    // ── extractBareResultObject (single-item batch returned unwrapped) ──
+
+    private String extractBareResultObject(String content) throws Exception {
+        var method = VacancyAiAnalyzer.class.getDeclaredMethod("extractBareResultObject", String.class);
+        method.setAccessible(true);
+        return (String) method.invoke(null, content);
+    }
+
+    @Test
+    void extractBareResultObject_verdictObject_returnsIt() throws Exception {
+        String content = "{\"id\":\"1\",\"score\":85,\"verdict\":\"yes\",\"reason\":\"ok\"}";
+        assertEquals(content, extractBareResultObject(content));
+    }
+
+    @Test
+    void extractBareResultObject_unrelatedObject_returnsNull() throws Exception {
+        // No "verdict" key — don't guess that this is a result object just because
+        // it's the first balanced {...} in the text.
+        assertNull(extractBareResultObject("{\"note\":\"я не уверен, вот мои мысли\"}"));
+    }
+
+    @Test
+    void extractBareResultObject_noObjectAtAll_returnsNull() throws Exception {
+        assertNull(extractBareResultObject("thinking out loud, no JSON here"));
+    }
+
     @SuppressWarnings("unchecked")
     private List<VacancyAiAnalyzer.AiResult> parseResponseOk(String json) throws Exception {
         var method = VacancyAiAnalyzer.class.getDeclaredMethod("parseResponse", String.class, List.class);
@@ -393,6 +419,19 @@ class VacancyAiAnalyzerTest {
         List<VacancyAiAnalyzer.AiResult> results = parseResponseOk(json);
         assertEquals(1, results.size());
         assertEquals("134846192", results.get(0).hhId());
+    }
+
+    @Test
+    void parseResponse_bareVerdictObjectInsteadOfArray_stillParsed() throws Exception {
+        // Observed live 2026-08-15 on a 1-item batch: the model returned the verdict
+        // object directly with no surrounding `[...]`, which failed all 3 retries
+        // every time since the identical prompt kept getting the identical shape back.
+        String json = "{\"choices\":[{\"message\":{\"content\":"
+            + "\"{\\\"id\\\":\\\"136188396\\\",\\\"score\\\":85,\\\"verdict\\\":\\\"yes\\\",\\\"reason\\\":\\\"ок\\\"}\"}}]}";
+        List<VacancyAiAnalyzer.AiResult> results = parseResponseOk(json);
+        assertEquals(1, results.size());
+        assertEquals("136188396", results.get(0).hhId());
+        assertEquals("yes", results.get(0).verdict());
     }
 
     @Test
