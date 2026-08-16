@@ -54,12 +54,18 @@ public class ChannelEngagementTracker {
      * time series via delta(), so nothing is persisted on this side. Distinct chat_ids
      * only: several searches can publish to the same channel, and polling it once per
      * search would just be redundant Bot API calls for an identical answer.
+     *
+     * Tagged by resolved @username, same as {@link #checkOwnChannels}'s views/reactions
+     * gauges — falls back to the raw chat_id only when the channel has no public
+     * username, so a reader can actually tell which channel a series is without cross
+     * referencing numeric chat_ids.
      */
     public void checkSubscribers() {
         for (String chatId : distinctPublishChatIds()) {
             Integer count = telegramNotifier.getChatMemberCount(chatId);
             if (count != null) {
-                telegramMetrics.recordSubscribers(chatId, count);
+                String username = telegramNotifier.getChatUsername(chatId);
+                telegramMetrics.recordSubscribers(username != null ? username : chatId, count);
             }
         }
     }
