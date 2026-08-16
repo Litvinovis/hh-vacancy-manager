@@ -80,15 +80,21 @@ class VacancyPipelineServiceTest {
 
         VacancyPipelineService build() {
             TelegramMetrics tgMetrics = new TelegramMetrics(registry);
+            // Most tests never set .aiMetrics(...) explicitly — falling back to a real
+            // (if unasserted-on) instance instead of null, now that VacancyDiscovery
+            // unconditionally records collected-vacancy counts through it on every
+            // fromRss/fromUrl call.
+            com.hh.gui.ai.AiMetrics resolvedAiMetrics = aiMetrics != null
+                ? aiMetrics : new com.hh.gui.ai.AiMetrics(registry, new RuntimeConfig());
             // Wired the same way production is, so a test that does reach the public-format
             // path gets real publishing behaviour rather than a null collaborator.
             ChannelPublisher publisher = new ChannelPublisher(repo, searchRepo, notifier, tgMetrics, config);
             ChannelEngagementTracker engagement =
                 new ChannelEngagementTracker(searchRepo, telegram, notifier, tgMetrics);
             VacancyDiscovery discovery = new VacancyDiscovery(null, scraper, telegram, analyzer, repo,
-                tgMetrics, engagement, cooldown);
+                tgMetrics, engagement, cooldown, resolvedAiMetrics);
             return new VacancyPipelineService(scraper, analyzer, repo, notifier,
-                config, aiMetrics, new FeatureFlags(), null, tgMetrics, publisher, discovery, cooldown);
+                config, resolvedAiMetrics, new FeatureFlags(), null, tgMetrics, publisher, discovery, cooldown);
         }
     }
 

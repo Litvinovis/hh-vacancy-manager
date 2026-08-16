@@ -99,6 +99,15 @@ public class AiMetrics {
         registry.counter("ai_vacancies_analyzed_total", "application", "hh-gui").increment(count);
     }
 
+    /** New vacancies saved by a discovery pass, tagged by where they came from
+     *  (e.g. "hh.ru") — the Telegram side of this already has its own per-channel
+     *  counter (TelegramMetrics.recordCollected); this is the equivalent for
+     *  everything else, so a Grafana panel can show total volume by source. */
+    public void recordVacanciesCollected(String source, long count) {
+        if (count <= 0) return;
+        registry.counter("vacancies_collected_total", "application", "hh-gui", "source", source).increment(count);
+    }
+
     /** Ties a gauge to live bean state (e.g. AiProviderManager.isInCooldown()) without holding a strong reference cycle. */
     public <T> void gauge(String name, String description, T obj, ToDoubleFunction<T> valueFunction) {
         Gauge.builder(name, obj, valueFunction)

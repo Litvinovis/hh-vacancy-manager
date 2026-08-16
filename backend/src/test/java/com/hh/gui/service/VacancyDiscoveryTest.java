@@ -47,7 +47,8 @@ class VacancyDiscoveryTest {
         VacancyDiscovery build() {
             TelegramMetrics tgMetrics = new TelegramMetrics(registry);
             ChannelEngagementTracker engagement = new ChannelEngagementTracker(null, telegram, null, tgMetrics);
-            return new VacancyDiscovery(null, scraper, telegram, analyzer, repo, tgMetrics, engagement, new ScrapeCooldown());
+            com.hh.gui.ai.AiMetrics aiMetrics = new com.hh.gui.ai.AiMetrics(registry, new RuntimeConfig());
+            return new VacancyDiscovery(null, scraper, telegram, analyzer, repo, tgMetrics, engagement, new ScrapeCooldown(), aiMetrics);
         }
     }
 
@@ -583,6 +584,24 @@ class VacancyDiscoveryTest {
         assertEquals(2, saved, "новые вакансии и до, и после полностью известной страницы должны сохраниться");
         assertEquals(List.of("101", "102"), repo.saved.stream().map(Vacancy::getHhId).toList());
         assertEquals(3, scraper.calls, "должны быть запрошены все 3 страницы, включая ту, что идёт после 100%-известной");
+    }
+
+    @Test
+    void fromUrl_recordsCollectedMetric_taggedHhRu() {
+        // Grafana wants "how many vacancies came from hh.ru" — this is the counter
+        // that answers it (TelegramMetrics.recordCollected is the equivalent for
+        // Telegram source channels, tracked separately since it's a different question).
+        RuntimeConfig config = new RuntimeConfig();
+        io.micrometer.core.instrument.MeterRegistry registry = new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+        FakeScraper scraper = new FakeScraper(config,
+            new ScraperClient.SearchPageResult(true, null, List.of(hit("201"), hit("202")), null));
+        FakeRepo repo = new FakeRepo(Set.of());
+        VacancyDiscovery discovery = discovery().scraper(scraper).analyzer(new FakeAnalyzer(config))
+            .repo(repo).metricsRegistry(registry).build();
+
+        discovery.fromUrl(urlJob(), "https://hh.ru/search/vacancy?text=x", 1);
+
+        assertEquals(2.0, registry.find("vacancies_collected_total").tag("source", "hh.ru").counter().count());
     }
 
     // ── filterExcludedHits (URL-discovery's title-exclusion filter — mirrors filterExcluded) ──
