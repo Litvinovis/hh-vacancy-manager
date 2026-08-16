@@ -811,6 +811,7 @@ class VacancyPipelineServiceTest {
         assertEquals(1, svc.bodyRuns.get(), "тело пайплайна должно выполниться ровно один раз");
         assertEquals(1, svc.maxInFlight.get(), "два прогона одного поиска не должны пересекаться");
         assertEquals(0, skipped.approved, "пропущенный запуск возвращает пустой результат");
+        assertTrue(skipped.skipped, "пропущенный запуск должен быть помечен как skipped — иначе вызывающий планировщик решит, что поиск реально выполнился");
     }
 
     @Test

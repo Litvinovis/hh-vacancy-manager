@@ -48,6 +48,8 @@ class PipelineSchedulerTest {
         int freshnessChecks = 0;
         /** Search names that should blow up when run, to test error isolation. */
         final List<String> failOn = new ArrayList<>();
+        /** Search names that should report "skipped by lock contention" — see skippedByLock handling. */
+        final List<String> skipOn = new ArrayList<>();
 
         RecordingPipeline(RuntimeConfig config) {
             super(null, null, null, null, config, null, new FeatureFlags(), null,
@@ -56,23 +58,28 @@ class PipelineSchedulerTest {
         private void maybeFail(SearchJob job) {
             if (failOn.contains(job.searchName)) throw new IllegalStateException("сломался поиск " + job.searchName);
         }
+        private PipelineResult result(SearchJob job) {
+            PipelineResult result = new PipelineResult();
+            result.skipped = skipOn.contains(job.searchName);
+            return result;
+        }
         @Override
         public PipelineResult runFullPipeline(SearchJob job, boolean deferSmallAiBatches) {
             fullRuns.add(job.searchName);
             maybeFail(job);
-            return new PipelineResult();
+            return result(job);
         }
         @Override
         public PipelineResult runFullPipelineFromUrl(SearchJob job, String url, int maxPages) {
             urlRuns.add(job.searchName);
             maybeFail(job);
-            return new PipelineResult();
+            return result(job);
         }
         @Override
         public PipelineResult runFullPipelineFromTelegram(SearchJob job, List<String> channels) {
             telegramRuns.add(job.searchName);
             maybeFail(job);
-            return new PipelineResult();
+            return result(job);
         }
         @Override
         public int analyzeAllPending(SearchJob job) { analyzedAll.add(job.searchName); return 0; }
@@ -444,6 +451,34 @@ class PipelineSchedulerTest {
     }
 
     @Test
+    void lockSkippedUrlSearch_doesNotStampLastRunAt() {
+        // Регрессия: поиск по ссылке и обычный HH-пайплайн для того же person+searchName
+        // делят одну блокировку. Раньше last_run_at штамповался даже когда прогон
+        // реально не состоялся из-за этой блокировки — следующая попытка откладывалась
+        // на полный run_interval_hours (часы) вместо ближайшего пятиминутного тика.
+        pipeline.skipOn.add("Занят");
+        profiles.jobs = List.of(job("Занят", 7L, "оператор"));
+        searchRepo.urlSearches = List.of(scheduled(7L, null, 6));
+
+        runAllTasks();
+
+        assertEquals(List.of("Занят"), pipeline.urlRuns, "попытка запуска всё равно происходит");
+        assertTrue(searchRepo.stamped.isEmpty(), "пропуск из-за блокировки не должен откладывать следующую попытку на весь интервал");
+    }
+
+    @Test
+    void lockSkippedTelegramSearch_doesNotStampLastRunAt() {
+        pipeline.skipOn.add("Занят");
+        profiles.jobs = List.of(job("Занят", 7L, "оператор"));
+        searchRepo.telegramSearches = List.of(scheduled(7L, null, 6));
+
+        runAllTasks();
+
+        assertEquals(List.of("Занят"), pipeline.telegramRuns, "попытка запуска всё равно происходит");
+        assertTrue(searchRepo.stamped.isEmpty(), "пропуск из-за блокировки не должен откладывать следующую попытку на весь интервал");
+    }
+
+    @Test
     void aTaskThrowing_neverEscapesToTheScheduler() {
         // Исключение, вылетевшее из задачи, отменяет её ПОВТОРНЫЕ запуски в Spring —
         // то есть один сбой навсегда убил бы этот триггер.
@@ -490,5 +525,28 @@ class PipelineSchedulerTest {
 
         assertNotNull(next, "cron из настроек должен давать следующее срабатывание");
         assertTrue(next.isAfter(completed));
+    }
+
+    @Test
+    void subscriberTrigger_firstExecutionIsDelayedPastTheSchemaMigrationWindow() {
+        // Регрессия: БЕЗ initialDelay первое срабатывание PeriodicTrigger происходит
+        // немедленно при регистрации (см. PeriodicTrigger.nextExecution: при пустом
+        // TriggerContext, если initialDelay не задан, возвращается clock.instant() —
+        // то есть "сейчас") — то есть до того, как SchemaMigrator успевает завершиться
+        // при старте. Этот самый первый тик молча пропускается schemaNotReady(), а
+        // Spring планирует СЛЕДУЮЩИЙ через полный SUBSCRIBER_COUNT_CHECK_INTERVAL (6ч)
+        // от него, а не скоро — на каждом рестарте (а деплоев в день много) подписчики/
+        // просмотры/реакции в Grafana показывали "No data" до 6 часов. Проверяем, что
+        // первое срабатывание сдвинуто на initialDelay (~5 мин), а не на "сейчас".
+        Trigger trigger = tasks().get(8).getTrigger();
+        Instant now = Instant.now();
+        SimpleTriggerContext freshContext = new SimpleTriggerContext(); // как сразу после регистрации, ничего ещё не выполнялось
+
+        Instant firstExecution = trigger.nextExecution(freshContext);
+
+        assertTrue(firstExecution.isAfter(now.plus(Duration.ofMinutes(2))),
+            "первое срабатывание должно быть отложено на initialDelay, а не происходить немедленно ('сейчас' попадает точно в окно миграции схемы при старте)");
+        assertTrue(firstExecution.isBefore(now.plus(Duration.ofMinutes(10))),
+            "и не отложено на полный 6-часовой интервал");
     }
 }
