@@ -8,6 +8,7 @@ import com.hh.gui.config.SchemaMigrator;
 import com.hh.gui.model.SearchConfig;
 import com.hh.gui.model.SearchJob;
 import com.hh.gui.repository.SearchRepository;
+import com.hh.gui.repository.VacancyRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Configuration;
@@ -65,6 +66,7 @@ public class PipelineScheduler implements SchedulingConfigurer {
     private final SubscriptionService subscriptionService;
     private final ChannelPublisher channelPublisher;
     private final ChannelEngagementTracker engagementTracker;
+    private final VacancyRepository vacancyRepo;
 
     // How often to check for approved vacancies whose delayed_publish_at has arrived
     // (see ChannelPublisher.publishDueDelayed). A 5-minute delay needs a check
@@ -91,11 +93,23 @@ public class PipelineScheduler implements SchedulingConfigurer {
     // pure Bot API noise for a number that changes a handful of times a day at most.
     private static final Duration SUBSCRIBER_COUNT_CHECK_INTERVAL = Duration.ofHours(6);
 
+    // Retention: every vacancy row older than this is deleted outright, decided-or-not
+    // (see VacancyRepository.deleteOlderThan) — a daily sweep is precise enough for a
+    // 30-day window. Deliberately unconditional on status/closed_at: a stray hh.ru
+    // vacancy still open past 30 days gets re-collected as "new" on its next RSS
+    // appearance rather than being tracked forever — an accepted tradeoff for keeping
+    // the retention rule simple.
+    private static final Duration RETENTION_MAX_AGE = Duration.ofDays(30);
+    private static final Duration RETENTION_CHECK_INTERVAL = Duration.ofDays(1);
+    // Avoids running the sweep on every deploy restart (this app redeploys far more
+    // than once a day) — same reasoning as FREE_MODEL_REFRESH_INITIAL_DELAY.
+    private static final Duration RETENTION_INITIAL_DELAY = Duration.ofMinutes(10);
+
     public PipelineScheduler(VacancyPipelineService pipelineService, SearchProfileFactory profileFactory,
                               RuntimeConfig runtimeConfig, VacancyAiAnalyzer aiAnalyzer, SearchRepository searchRepo,
                               FreeModelUpdater freeModelUpdater, FeatureFlags featureFlags, SchemaMigrator schemaMigrator,
                               SubscriptionService subscriptionService, ChannelPublisher channelPublisher,
-                              ChannelEngagementTracker engagementTracker) {
+                              ChannelEngagementTracker engagementTracker, VacancyRepository vacancyRepo) {
         this.pipelineService = pipelineService;
         this.profileFactory = profileFactory;
         this.runtimeConfig = runtimeConfig;
@@ -107,6 +121,7 @@ public class PipelineScheduler implements SchedulingConfigurer {
         this.subscriptionService = subscriptionService;
         this.channelPublisher = channelPublisher;
         this.engagementTracker = engagementTracker;
+        this.vacancyRepo = vacancyRepo;
     }
 
     @Override
@@ -128,6 +143,9 @@ public class PipelineScheduler implements SchedulingConfigurer {
         registrar.addTriggerTask(this::runChannelSubscriberCheck, new PeriodicTrigger(SUBSCRIBER_COUNT_CHECK_INTERVAL));
         registrar.addTriggerTask(this::runSubscriptionExpiry, new PeriodicTrigger(SUBSCRIPTION_EXPIRY_CHECK_INTERVAL));
         registrar.addTriggerTask(this::runRenewalReminders, new PeriodicTrigger(RENEWAL_REMINDER_CHECK_INTERVAL));
+        PeriodicTrigger retentionTrigger = new PeriodicTrigger(RETENTION_CHECK_INTERVAL);
+        retentionTrigger.setInitialDelay(RETENTION_INITIAL_DELAY);
+        registrar.addTriggerTask(this::runRetentionCleanup, retentionTrigger);
     }
 
     /**
@@ -189,6 +207,19 @@ public class PipelineScheduler implements SchedulingConfigurer {
             subscriptionService.sendDueRenewalReminders();
         } catch (Exception e) {
             log.error("Напоминание о продлении подписки завершилось ошибкой: {}", e.getMessage(), e);
+        }
+    }
+
+    private void runRetentionCleanup() {
+        if (schemaNotReady()) return;
+        try {
+            String cutoff = Instant.now().minus(RETENTION_MAX_AGE).toString();
+            int deleted = vacancyRepo.deleteOlderThan(cutoff);
+            if (deleted > 0) {
+                log.info("Retention: удалено {} вакансий старше {} дней", deleted, RETENTION_MAX_AGE.toDays());
+            }
+        } catch (Exception e) {
+            log.error("Retention-очистка завершилась ошибкой: {}", e.getMessage(), e);
         }
     }
 

@@ -979,6 +979,15 @@ public class VacancyRepository {
             now, person, searchName);
     }
 
+    /**
+     * Deletes every vacancy created before the given cutoff, regardless of status —
+     * daily retention sweep (see PipelineScheduler.runRetentionCleanup). Returns the
+     * number of rows removed.
+     */
+    public int deleteOlderThan(String cutoffCreatedAt) {
+        return jdbc.update("DELETE FROM vacancies WHERE created_at < ?", cutoffCreatedAt);
+    }
+
     public List<Map<String, Object>> topDistricts(int limit, Long userId) {
         String sql = "SELECT district, COUNT(*) as cnt FROM vacancies WHERE district != ''"
             + (userId != null ? " AND " + USER_SCOPE_CLAUSE : "") + " GROUP BY district ORDER BY cnt DESC LIMIT ?";

@@ -9,6 +9,7 @@ import com.hh.gui.config.SchemaMigrator;
 import com.hh.gui.model.SearchConfig;
 import com.hh.gui.model.SearchJob;
 import com.hh.gui.repository.SearchRepository;
+import com.hh.gui.repository.VacancyRepository;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -154,6 +155,17 @@ class PipelineSchedulerTest {
         public void checkOwnChannels() { ownChannelChecks++; }
     }
 
+    static class FakeVacancyRepository extends VacancyRepository {
+        final List<String> deleteCutoffs = new ArrayList<>();
+        int deleteReturns = 0;
+        FakeVacancyRepository() { super(null); }
+        @Override
+        public int deleteOlderThan(String cutoffCreatedAt) {
+            deleteCutoffs.add(cutoffCreatedAt);
+            return deleteReturns;
+        }
+    }
+
     static class TogglableFlags extends FeatureFlags {
         boolean delayedPublish = true;
         boolean subscriptions = true;
@@ -176,6 +188,7 @@ class PipelineSchedulerTest {
     private FakePublisher publisher;
     private FakeEngagement engagement;
     private TogglableFlags flags;
+    private FakeVacancyRepository vacancyRepo;
     private PipelineScheduler scheduler;
 
     @BeforeEach
@@ -192,8 +205,9 @@ class PipelineSchedulerTest {
         publisher = new FakePublisher();
         engagement = new FakeEngagement();
         flags = new TogglableFlags();
+        vacancyRepo = new FakeVacancyRepository();
         scheduler = new PipelineScheduler(pipeline, profiles, config, analyzer, searchRepo,
-            freeModels, flags, schema, subscriptions, publisher, engagement);
+            freeModels, flags, schema, subscriptions, publisher, engagement, vacancyRepo);
     }
 
     private List<TriggerTask> tasks() {
@@ -233,7 +247,7 @@ class PipelineSchedulerTest {
 
     @Test
     void configureTasks_registersEveryTrigger() {
-        assertEquals(11, tasks().size(),
+        assertEquals(12, tasks().size(),
             "все триггеры должны быть зарегистрированы — молча пропавший = молча не работающая функция");
     }
 
@@ -254,6 +268,7 @@ class PipelineSchedulerTest {
         assertEquals(0, publisher.queuedTicks);
         assertEquals(0, engagement.subscriberChecks);
         assertEquals(0, subscriptions.expiries);
+        assertTrue(vacancyRepo.deleteCutoffs.isEmpty(), "retention-очистка не должна стартовать до готовности схемы");
         assertEquals(1, freeModels.refreshes,
             "обновление списка free-моделей к БД не обращается — единственная задача без этой защиты");
     }
@@ -295,6 +310,35 @@ class PipelineSchedulerTest {
         assertTrue(pipeline.telegramRuns.isEmpty());
         assertTrue(pipeline.analyzedAll.isEmpty());
         assertEquals(1, publisher.queuedTicks, "публикация модель не зовёт и продолжается");
+    }
+
+    // ── retention ──
+
+    @Test
+    void retentionCleanup_deletesWithA30DayCutoff() {
+        Duration maxAge = Duration.ofDays(30);
+        Instant before = Instant.now().minus(maxAge);
+
+        runAllTasks();
+
+        assertEquals(1, vacancyRepo.deleteCutoffs.size());
+        Instant cutoff = Instant.parse(vacancyRepo.deleteCutoffs.get(0));
+        Instant after = Instant.now().minus(maxAge);
+        assertFalse(cutoff.isBefore(before), "срез не должен быть раньше 30 дней назад на момент старта теста");
+        assertFalse(cutoff.isAfter(after.plusSeconds(1)), "срез должен быть примерно 'сейчас минус 30 дней'");
+    }
+
+    @Test
+    void retentionCleanup_runsRegardlessOfPipelineToggleOrRateLimit() {
+        // В отличие от сбора/AI-анализа, чистка старых данных не завязана ни на
+        // общий выключатель пайплайна, ни на охлаждение модели — это обслуживание БД,
+        // а не сбор/анализ вакансий.
+        config.setPipelineEnabled(false);
+        analyzer.rateLimited = true;
+
+        runAllTasks();
+
+        assertEquals(1, vacancyRepo.deleteCutoffs.size());
     }
 
     // ── флаги функций ──
@@ -408,7 +452,7 @@ class PipelineSchedulerTest {
             @Override public void publishDueDelayed(int limit) { throw new IllegalStateException("бум"); }
         };
         scheduler = new PipelineScheduler(pipeline, profiles, config, analyzer, searchRepo,
-            freeModels, flags, schema, subscriptions, exploding, engagement);
+            freeModels, flags, schema, subscriptions, exploding, engagement, vacancyRepo);
 
         assertDoesNotThrow(this::runAllTasks);
     }
