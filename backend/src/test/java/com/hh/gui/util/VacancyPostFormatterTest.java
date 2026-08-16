@@ -157,6 +157,21 @@ class VacancyPostFormatterTest {
     }
 
     @Test
+    void selfLinkUrlAndNoContact_alsoProducesNoApplyLine_notTheDeadSelfLink() {
+        // Found live: 65 of 359 sent Telegram-sourced posts had this exact shape (a
+        // t.me self-link url, description with no extractable contact — e.g. "Исполнитель
+        // найден в этом канале"). Unlike the blank-url case above, a non-blank self-link
+        // url fell through past the contact check to the plain-url branch, printing
+        // "Откликнуться" pointing at another channel's post — precisely the "links to
+        // other channels" the self-link check exists to prevent in the first place.
+        Vacancy v = telegramSelfLinked("Исполнитель найден в этом канале");
+        String post = VacancyPostFormatter.publicPost(v);
+        assertFalse(post.contains("t.me/freelancce"), post);
+        assertFalse(post.contains("👉"), post);
+        assertFalse(VacancyPostFormatter.reportEntry(v).contains("🔗"));
+    }
+
+    @Test
     void personalUsernameContact_alsoWrappedAsAnchor_notRawTMeLink() {
         Vacancy v = telegramSelfLinked("Для связи пишите: @some_recruiter");
         String post = VacancyPostFormatter.publicPost(v);
