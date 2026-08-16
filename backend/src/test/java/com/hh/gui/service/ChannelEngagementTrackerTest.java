@@ -85,6 +85,36 @@ class ChannelEngagementTrackerTest {
     }
 
     @Test
+    void checkSubscribers_recordsUnderChannelsUsername_notChatId() {
+        // Same tagging convention as checkOwnChannels' views/reactions gauges — a reader
+        // of the dashboard should see "remotevibe", not a numeric chat_id, for the same channel.
+        FakeSearchRepo searchRepo = new FakeSearchRepo();
+        searchRepo.enabled = List.of(searchWithChatId("-1004333110303"));
+        FakeNotifier notifier = new FakeNotifier(Map.of("-1004333110303", 4));
+        notifier.usernames = Map.of("-1004333110303", "remotevibe");
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+
+        new ChannelEngagementTracker(searchRepo, new FakeTelegramClient(Map.of()), notifier, new TelegramMetrics(registry))
+            .checkSubscribers();
+
+        assertEquals(4.0, registry.find("telegram_channel_subscribers").tag("channel", "remotevibe").gauge().value());
+        assertNull(registry.find("telegram_channel_subscribers").tag("channel", "-1004333110303").gauge());
+    }
+
+    @Test
+    void checkSubscribers_noPublicUsername_fallsBackToChatId() {
+        FakeSearchRepo searchRepo = new FakeSearchRepo();
+        searchRepo.enabled = List.of(searchWithChatId("-100999"));
+        FakeNotifier notifier = new FakeNotifier(Map.of("-100999", 3)); // приватный канал, username не резолвится
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+
+        new ChannelEngagementTracker(searchRepo, new FakeTelegramClient(Map.of()), notifier, new TelegramMetrics(registry))
+            .checkSubscribers();
+
+        assertEquals(3.0, registry.find("telegram_channel_subscribers").tag("channel", "-100999").gauge().value());
+    }
+
+    @Test
     void checkSubscribers_apiReturnsNothing_gaugeNotRecordedRatherThanZero() {
         // A failed poll must leave the previous value standing, not overwrite it with 0 —
         // a dashboard reading "0 subscribers" would be a lie about the channel.
