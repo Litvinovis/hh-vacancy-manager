@@ -753,8 +753,19 @@ public class VacancyAiAnalyzer {
 
         String jsonArray = extractJsonArray(content);
         if (jsonArray == null) {
-            throw new LlmException(LlmException.Kind.BAD_RESPONSE, 200, "JSON-массив не найден в ответе AI: "
-                + content.substring(0, Math.min(200, content.length())));
+            // For a single-vacancy batch the model sometimes returns the one verdict
+            // object directly instead of wrapping it in an array (observed live on
+            // 1-item batches: content == {"id":...,"verdict":"yes",...} with no `[`
+            // anywhere) — previously that failed all 3 retries every time since retrying
+            // the identical prompt got the identical shape back. Wrap it instead of
+            // rejecting it.
+            String bareObject = extractBareResultObject(content);
+            if (bareObject != null) {
+                jsonArray = "[" + bareObject + "]";
+            } else {
+                throw new LlmException(LlmException.Kind.BAD_RESPONSE, 200, "JSON-массив не найден в ответе AI: "
+                    + content.substring(0, Math.min(200, content.length())));
+            }
         }
         List<?> items = mapper.readValue(jsonArray, List.class);
 
@@ -862,6 +873,54 @@ public class VacancyAiAnalyzer {
             }
         }
         return null; // never closed — truncated response
+    }
+
+    /**
+     * Finds the outermost balanced JSON object in the model's response text (same
+     * bracket/string-tracking approach as extractJsonArray) and returns it only if it
+     * parses and has a "verdict" key — i.e. it actually looks like a single AiResult,
+     * not some unrelated object the model wrote into its response. Used as a fallback
+     * when extractJsonArray finds no array at all: a single-item batch occasionally
+     * comes back as the bare result object instead of a 1-element array.
+     */
+    static String extractBareResultObject(String content) {
+        int startIdx = content.indexOf('{');
+        if (startIdx < 0) return null;
+
+        boolean inString = false;
+        boolean escaped = false;
+        int depth = 0;
+        for (int i = startIdx; i < content.length(); i++) {
+            char c = content.charAt(i);
+            if (escaped) {
+                escaped = false;
+                continue;
+            }
+            if (c == '\\' && inString) {
+                escaped = true;
+                continue;
+            }
+            if (c == '"') {
+                inString = !inString;
+                continue;
+            }
+            if (inString) continue;
+
+            if (c == '{') depth++;
+            else if (c == '}') {
+                depth--;
+                if (depth == 0) {
+                    String candidate = content.substring(startIdx, i + 1);
+                    try {
+                        Map<?, ?> parsed = new tools.jackson.databind.ObjectMapper().readValue(candidate, Map.class);
+                        return parsed.containsKey("verdict") ? candidate : null;
+                    } catch (Exception e) {
+                        return null;
+                    }
+                }
+            }
+        }
+        return null; // never closed
     }
 
     /**
