@@ -75,6 +75,12 @@ jobs:
           ignore-unfixed: true
           vuln-type: 'library'
           severity: 'CRITICAL,HIGH'
+          # Without this, Trivy resolves pom.xml's parent/dependency versions by
+          # walking Maven Central live — every scheduled run for the past month
+          # failed with "429 Too Many Requests" from repo.maven.apache.org, not
+          # an actual vulnerability finding. --offline-scan makes it rely only on
+          # what's already in the repo/lockfiles.
+          offline-scan: true
 
       - name: Upload Trivy results
         if: always()
