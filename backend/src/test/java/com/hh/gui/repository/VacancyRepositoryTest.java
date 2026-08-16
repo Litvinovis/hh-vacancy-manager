@@ -537,6 +537,47 @@ class VacancyRepositoryTest {
         assertEquals(1, vacancyRepo.countByStatus(null).get("closed"));
     }
 
+    // ── Retention: deleteOlderThan ──
+
+    @Test
+    void deleteOlderThan_removesOnlyRowsBeforeTheCutoff_regardlessOfStatus() {
+        String cutoff = java.time.Instant.now().minusSeconds(30L * 24 * 3600).toString();
+        String old = java.time.Instant.now().minusSeconds(40L * 24 * 3600).toString();
+        String recent = java.time.Instant.now().minusSeconds(5L * 24 * 3600).toString();
+
+        Vacancy oldPending = createTestVacancy("ret-old-pending", "Old pending", "new");
+        oldPending.setCreatedAt(old);
+        Long oldPendingId = vacancyRepo.save(oldPending).getId();
+
+        Vacancy oldApproved = createTestVacancy("ret-old-approved", "Old approved", "new");
+        oldApproved.setAiVerdict("yes");
+        oldApproved.setCreatedAt(old);
+        Long oldApprovedId = vacancyRepo.save(oldApproved).getId();
+
+        Vacancy recentVacancy = createTestVacancy("ret-recent", "Recent", "new");
+        recentVacancy.setCreatedAt(recent);
+        Long recentId = vacancyRepo.save(recentVacancy).getId();
+
+        int deleted = vacancyRepo.deleteOlderThan(cutoff);
+
+        assertEquals(2, deleted);
+        assertTrue(vacancyRepo.findById(oldPendingId).isEmpty(), "старая pending-запись удалена — retention не смотрит на verdict");
+        assertTrue(vacancyRepo.findById(oldApprovedId).isEmpty(), "старая одобренная запись удалена тоже");
+        assertTrue(vacancyRepo.findById(recentId).isPresent(), "свежая запись (моложе среза) должна остаться");
+    }
+
+    @Test
+    void deleteOlderThan_nothingToDelete_returnsZero() {
+        Vacancy recentVacancy = createTestVacancy("ret-only-recent", "Recent", "new");
+        recentVacancy.setCreatedAt(java.time.Instant.now().toString());
+        vacancyRepo.save(recentVacancy);
+
+        String cutoff = java.time.Instant.now().minusSeconds(30L * 24 * 3600).toString();
+        int deleted = vacancyRepo.deleteOlderThan(cutoff);
+
+        assertEquals(0, deleted);
+    }
+
     private Vacancy createTestVacancy(String hhId, String title, String status) {
         Vacancy v = new Vacancy();
         v.setHhId(hhId);
