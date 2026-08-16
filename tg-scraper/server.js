@@ -265,7 +265,19 @@ async function collectMessages(page, channel) {
         cleanMessageEl = messageEl.cloneNode(true);
         cleanMessageEl.querySelectorAll('reactions-element').forEach((el) => el.remove());
       }
-      const text = cleanMessageEl ? cleanMessageEl.innerText || '' : '';
+      let text = cleanMessageEl ? cleanMessageEl.innerText || '' : '';
+      // A second copy of the views/time badge — same info the comment above already
+      // strips via <reactions-element>, but verified live (10+ posts, several
+      // channels) rendered a SECOND time OUTSIDE that element too, for reasons not
+      // fully understood (a hover/interactive duplicate Telegram Web K leaves in the
+      // DOM, going by the icon-font glyph it's built from). Shape: "<digits><PUA icon
+      // glyph><H:MM>", back-to-back with itself, e.g. "6314:126314:12".
+      // Matched via an exact-duplicate backreference rather than "one or more of this
+      // shape" — a plain repeat-count match wrongly ate real trailing digits (a phone
+      // number ending "...68-12" right before a badge starting "63…" got merged into
+      // one 4-digit "1263…" match). Requiring the SAME chunk to repeat verbatim can't
+      // do that: real content immediately before the badge never duplicates itself.
+      text = text.replace(/([-]?\d{1,4}[-]\d{1,2}:\d{2})\1\s*$/, '').trimEnd();
       // innerText drops href attributes — a link whose visible label is just
       // "Посмотреть вакансию полностью" (verified live on the kadrout channel)
       // leaves the actual URL nowhere in the plain text at all. Anchor hrefs are
