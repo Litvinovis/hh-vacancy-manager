@@ -71,6 +71,10 @@ jobs:
           scan-type: 'fs'
           scan-ref: '.'
           format: 'table'
+          # Without this, 'table' format only prints to the job log — the
+          # "Upload Trivy results" step below always found nothing to upload
+          # (silently, since if-no-files-found defaults to warn).
+          output: 'trivy-results.txt'
           exit-code: '0'
           ignore-unfixed: true
           vuln-type: 'library'
