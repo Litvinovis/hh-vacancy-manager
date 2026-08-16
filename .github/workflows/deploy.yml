@@ -36,6 +36,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Set up Java 25
         run: |
@@ -45,7 +47,38 @@ jobs:
       - name: Build
         run: cd backend && mvn package -B -DskipTests
 
+      # Both sidecars keep a long-lived browser session (DDoS-Guard/hh.ru cookies,
+      # the logged-in Telegram Web client) that a restart tears down and has to warm
+      # back up from scratch. Restarting them on every push — even ones that only
+      # touch backend/ — was starving tg-scraper of any time to actually scrape
+      # between restarts on days with a fast merge cadence. Only restart a sidecar
+      # when its own files (or its systemd unit) actually changed.
+      - name: Detect changed paths
+        id: changes
+        run: |
+          BEFORE="${{ github.event.before }}"
+          if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$BEFORE" 2>/dev/null; then
+            echo "No usable base commit (force-push or manual run) — deploying both sidecars to be safe"
+            echo "scraper=true" >> "$GITHUB_OUTPUT"
+            echo "tg_scraper=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          CHANGED=$(git diff --name-only "$BEFORE" "${{ github.sha }}")
+          echo "Changed files:"
+          echo "$CHANGED"
+          if echo "$CHANGED" | grep -qE '^(scraper/|scripts/hh-scraper\.service)'; then
+            echo "scraper=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "scraper=false" >> "$GITHUB_OUTPUT"
+          fi
+          if echo "$CHANGED" | grep -qE '^(tg-scraper/|scripts/tg-scraper\.service)'; then
+            echo "tg_scraper=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "tg_scraper=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Deploy scraper sidecar
+        if: steps.changes.outputs.scraper == 'true' || github.event_name == 'workflow_dispatch'
         run: |
           DEPLOY_DIR=/opt/hh-gui/scraper
           NPM_BIN=/home/clawd/.nvm/versions/node/v24.18.0/bin/npm
@@ -95,6 +128,7 @@ jobs:
           sudo systemctl restart hh-scraper
 
       - name: Deploy tg-scraper sidecar
+        if: steps.changes.outputs.tg_scraper == 'true' || github.event_name == 'workflow_dispatch'
         run: |
           DEPLOY_DIR=/opt/hh-gui/tg-scraper
           NPM_BIN=/home/clawd/.nvm/versions/node/v24.18.0/bin/npm
