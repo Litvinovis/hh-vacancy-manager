@@ -44,6 +44,41 @@ function enqueue(task) {
   return result;
 }
 
+// Idle parking: verified live (2026-08-16) that the shared browser, left open on
+// web.telegram.org between scrapes, pegged its GPU process at ~100-140% CPU
+// continuously for 7+ hours with nothing actually happening. First tried just
+// navigating the idle page to about:blank (Playwright disables background-tab
+// throttling by default, so a theory was tweb's own animations — the doodle
+// background, star-reaction sparkles — just compositing at full rate forever) —
+// verified live that this did NOT help at all: CPU stayed pegged for minutes after
+// the navigation succeeded. tweb registers a Service Worker (push notifications —
+// see the "Never miss a message!" banner), which runs independently of the
+// document and survives a plain page.goto() away from it; that's the more likely
+// culprit. Closing the whole browser context is the only thing guaranteed to stop
+// EVERYTHING regardless of which of the two it actually is — the next request's
+// existing getContext()/getPage() lazy-launch (same path a cold service restart
+// already takes, proven reliable) relaunches cleanly, still logged in (the
+// persisted profile dir holds the session, not the live process).
+const IDLE_PARK_MS = 2 * 60 * 1000;
+let idleParkTimer = null;
+
+function scheduleIdlePark() {
+  if (idleParkTimer) clearTimeout(idleParkTimer);
+  idleParkTimer = setTimeout(() => {
+    enqueue(async () => {
+      if (!contextPromise) return;
+      try {
+        const context = await contextPromise;
+        await context.close();
+      } catch (e) { /* best-effort — a failed close just costs CPU until the next attempt */
+      } finally {
+        contextPromise = null;
+        sharedPage = null;
+      }
+    });
+  }, IDLE_PARK_MS);
+}
+
 // This is a real logged-in account, not an anonymous scraper — verified live
 // that opening several channels back-to-back with zero delay works fine
 // technically, but it's exactly the mechanical, perfectly-serialized request
@@ -75,6 +110,7 @@ function enqueuePaced(task) {
       return await task();
     } finally {
       lastPacedActionAt = Date.now();
+      scheduleIdlePark();
     }
   });
 }
