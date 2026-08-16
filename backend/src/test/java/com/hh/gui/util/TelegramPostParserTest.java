@@ -39,6 +39,31 @@ class TelegramPostParserTest {
         assertTrue(result.endsWith("..."));
     }
 
+    @Test
+    void title_longRunOnSentence_cutsAtSentenceBoundaryNotMidClause() {
+        // Live bug: a raw marketing-paragraph title with no natural break before 150
+        // chars used to slice mid-word with "..." — "...с 95%...". A sentence-ending
+        // punctuation mark reasonably close to the cap reads far better than that.
+        String text = "Школа по подготовке выпускников к поступлению в зарубежные вузы ищет "
+            + "менеджера по продажам! На рынке образования мы уже 5 лет и наши студенты с 95% успехом поступают.";
+        String result = TelegramPostParser.title(text);
+
+        assertTrue(result.endsWith("!"), result);
+        assertFalse(result.contains("..."), result);
+        assertTrue(result.length() <= 150, result);
+    }
+
+    @Test
+    void title_longLineNoSentenceBoundaryNearCap_fallsBackToEllipsis() {
+        // An exclamation mark right at the very start (well before the halfway point of
+        // the cap) must not chop a 150-char title down to a handful of characters.
+        String text = "Эй!" + " слово".repeat(40);
+        String result = TelegramPostParser.title(text);
+
+        assertTrue(result.endsWith("..."), result);
+        assertEquals(150, result.length());
+    }
+
     // ── employer ──
 
     @Test
@@ -87,6 +112,38 @@ class TelegramPostParserTest {
     void employer_lowercasePhraseInTitle_notMistakenForCompany() {
         assertEquals("@somechan",
             TelegramPostParser.employer("Описание", "Дизайнер для долгосрочного сотрудничества", "somechan"));
+    }
+
+    @Test
+    void employer_projectTypeInTitle_notMistakenForCompany() {
+        // Live false positives: "MMA/UFC-проекта" and "FinTech-проект" got captured as
+        // the "company" — a project type, not who's hiring. Neither starts with a
+        // literal platform name, so PLATFORM_NOT_EMPLOYER alone didn't catch them.
+        assertEquals("@somechan",
+            TelegramPostParser.employer("Описание", "Reels-мейкер для MMA/UFC-проекта", "somechan"));
+        assertEquals("@somechan",
+            TelegramPostParser.employer("Описание", "Senior Technical Writer в FinTech-проект", "somechan"));
+    }
+
+    @Test
+    void employer_contentFormatInTitle_notMistakenForCompany() {
+        // "AI-креатор для Reels" — Reels is a content format (like Instagram/YouTube),
+        // not an employer.
+        assertEquals("@somechan", TelegramPostParser.employer("Описание", "AI-креатор для Reels", "somechan"));
+    }
+
+    @Test
+    void employer_titleTrailingEmployer_stripsSentenceFinalPeriod() {
+        // "...для SP Candle." — the sentence's own final period was dragged into the
+        // capture along with the real company name.
+        assertEquals("SP Candle",
+            TelegramPostParser.employer("Описание", "Ищу ассистента для SP Candle.", "somechan"));
+    }
+
+    @Test
+    void employer_labeledEmployer_stripsSentenceFinalPeriod() {
+        assertEquals("ООО Ромашка",
+            TelegramPostParser.employer("Компания: ООО Ромашка.\nЗадачи: ...", "Оператор", "somechan"));
     }
 
     // ── salary ──

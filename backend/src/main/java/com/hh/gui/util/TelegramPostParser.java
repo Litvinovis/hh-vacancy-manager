@@ -94,8 +94,20 @@ public final class TelegramPostParser {
     // "Роль в Telegram" / "для YouTube-проекта" name the PLATFORM the work happens on,
     // not who's hiring — TITLE_TRAILING_EMPLOYER can't distinguish that from a real
     // company name syntactically, so reject a capture that starts with one of these.
+    // Reels/Shorts/Stories added after live false positives ("AI-креатор для Reels" →
+    // company "Reels") — a content FORMAT within a platform, not a platform itself, but
+    // the same "describes the work, not who's hiring" problem.
     private static final Pattern PLATFORM_NOT_EMPLOYER = Pattern.compile(
-        "^(?:Telegram|Instagram|YouTube|TikTok|VK|WhatsApp|Facebook|Zoom|LinkedIn)\\b", Pattern.CASE_INSENSITIVE);
+        "^(?:Telegram|Instagram|YouTube|TikTok|VK|WhatsApp|Facebook|Zoom|LinkedIn|Reels|Shorts|Stories)\\b",
+        Pattern.CASE_INSENSITIVE);
+
+    // "для MMA/UFC-проекта", "в FinTech-проект" — live false positives where the
+    // capitalized run names a PROJECT TYPE, not an employer (PLATFORM_NOT_EMPLOYER only
+    // catches this when the run also starts with a literal platform name, e.g.
+    // "YouTube-проекта" — these don't). Anything ending in "проект"/"проекта"/"проекте"
+    // is rejected outright rather than trying to enumerate every such phrase.
+    private static final Pattern PROJECT_TYPE_NOT_EMPLOYER =
+        Pattern.compile("проект[а-яё]*$", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
     /**
      * Who's hiring, falling back to {@code "@" + channel} when the post never says —
@@ -106,13 +118,21 @@ public final class TelegramPostParser {
     public static String employer(String text, String title, String channel) {
         Matcher m = TG_EMPLOYER_PATTERN.matcher(text);
         if (m.find() && !LIST_MARKER_START.matcher(m.group(1)).find()) {
-            return m.group(1).trim();
+            return stripTrailingPeriod(m.group(1).trim());
         }
         Matcher titleMatch = TITLE_TRAILING_EMPLOYER.matcher(title);
-        if (titleMatch.find() && !PLATFORM_NOT_EMPLOYER.matcher(titleMatch.group(1)).find()) {
-            return titleMatch.group(1).trim();
+        if (titleMatch.find() && !PLATFORM_NOT_EMPLOYER.matcher(titleMatch.group(1)).find()
+                && !PROJECT_TYPE_NOT_EMPLOYER.matcher(titleMatch.group(1)).find()) {
+            return stripTrailingPeriod(titleMatch.group(1).trim());
         }
         return "@" + channel;
+    }
+
+    // A title ending mid-sentence ("...для SP Candle.") drags the sentence's own final
+    // period into the capture — verified live. A real company name ending in "." is
+    // vanishingly rare next to that, so this is a safe cleanup, not a risky one.
+    private static String stripTrailingPeriod(String s) {
+        return s.endsWith(".") ? s.substring(0, s.length() - 1) : s;
     }
 
     // Path B hh_id format is "tg_<channel>_<messageId>" (see tg-scraper/server.js's
@@ -290,7 +310,22 @@ public final class TelegramPostParser {
         return truncateTitle(text);
     }
 
+    // A raw-sentence title (no "Вакансия:"-style heading — see this class's javadoc)
+    // that overruns the cap used to get sliced mid-clause with "..." tacked on — live
+    // example: "...5 лет и наши студенты с 95%...". Cutting at the last sentence-ending
+    // punctuation instead, when there is one reasonably close to the cap, reads as a
+    // complete (if truncated) sentence instead of a dangling fragment. Only accepted
+    // past the halfway point of the cap so an early "!" in a short opening clause
+    // doesn't chop the title down to almost nothing.
     private static String truncateTitle(String s) {
-        return s.length() > MAX_TITLE_CHARS ? s.substring(0, MAX_TITLE_CHARS - 3) + "..." : s;
+        if (s.length() <= MAX_TITLE_CHARS) return s;
+        String window = s.substring(0, MAX_TITLE_CHARS);
+        int sentenceEnd = -1;
+        for (int i = window.length() - 1; i >= MAX_TITLE_CHARS / 2; i--) {
+            char c = window.charAt(i);
+            if (c == '.' || c == '!' || c == '?') { sentenceEnd = i; break; }
+        }
+        if (sentenceEnd >= 0) return window.substring(0, sentenceEnd + 1);
+        return s.substring(0, MAX_TITLE_CHARS - 3) + "...";
     }
 }

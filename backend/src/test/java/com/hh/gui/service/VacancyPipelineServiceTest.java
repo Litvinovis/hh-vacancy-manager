@@ -155,7 +155,7 @@ class VacancyPipelineServiceTest {
     void formatPublicPost_selfLinkWithPersonalContactNextToKeyword_showsTelegramLink() {
         String post = service.formatPublicPost(telegramSelfLinkVacancy(
             "Для отклика напиши Ассистент в лс @azatka_kzn"));
-        assertTrue(post.contains("💬 https://t.me/azatka_kzn"), post);
+        assertTrue(post.contains("💬 <a href=\"https://t.me/azatka_kzn\">Откликнуться</a>"), post);
     }
 
     @Test
@@ -171,7 +171,7 @@ class VacancyPipelineServiceTest {
     void formatPublicPost_selfLinkNoContactFound_fallsBackToTheLinkAsBefore() {
         String post = service.formatPublicPost(telegramSelfLinkVacancy(
             "Просто описание без каких-либо контактов."));
-        assertTrue(post.contains("👉 https://t.me/freelancce/15611"), post);
+        assertTrue(post.contains("👉 <a href=\"https://t.me/freelancce/15611\">Откликнуться</a>"), post);
     }
 
     @Test
@@ -180,7 +180,7 @@ class VacancyPipelineServiceTest {
         Vacancy v = vacancy("Продавец", "Подходит", 80);
         v.setDescription("Отклик: someone@example.com");
         String post = service.formatPublicPost(v);
-        assertTrue(post.contains("👉 https://hh.ru/vacancy/1"), post);
+        assertTrue(post.contains("👉 <a href=\"https://hh.ru/vacancy/1\">Откликнуться</a>"), post);
         assertFalse(post.contains("someone@example.com"), post);
     }
 
