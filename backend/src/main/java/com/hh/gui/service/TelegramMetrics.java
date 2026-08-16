@@ -10,13 +10,13 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Per-channel Micrometer metrics for the Telegram vacancy source (Path B of
- * VacancyPipelineService.discoverFromTelegram — posts with no first-party hh.ru
- * link, judged and published as-is rather than reusing the hh.ru pipeline).
+ * VacancyDiscovery.fromTelegram — posts with no first-party hh.ru link, judged
+ * and published as-is rather than reusing the hh.ru pipeline).
  *
  * Scoped to Path B only: Path A posts (a Telegram post that just links to an
  * hh.ru vacancy) fall into the ordinary hh.ru pipeline and aren't distinguishable
  * from RSS-discovered ones downstream, so they're not tagged by channel here —
- * see VacancyPipelineService.extractTgChannelFromHhId, which only recognizes the
+ * see TelegramPostParser.channelFromHhId, which only recognizes the
  * "tg_<channel>_<id>" hh_id format Path B rows get.
  *
  * bad_frac (fraud+rejected over collected) is intentionally not stored as its own
@@ -38,7 +38,7 @@ public class TelegramMetrics {
         this.registry = registry;
     }
 
-    /** A new Path B candidate was saved for this channel (VacancyPipelineService.discoverFromTelegram). */
+    /** A new Path B candidate was saved for this channel (VacancyDiscovery.fromTelegram). */
     public void recordCollected(String channel) {
         if (channel == null) return;
         registry.counter("telegram_collected_total", "application", "hh-gui", "channel", channel).increment();
@@ -55,15 +55,17 @@ public class TelegramMetrics {
         registry.counter(name, "application", "hh-gui", "channel", channel).increment();
     }
 
-    /** A Path B post was actually sent to a public channel (VacancyPipelineService.publishDueQueued). */
+    /** A Path B post was actually sent to a public channel (ChannelPublisher.publishDueQueued). */
     public void recordPublished(String channel) {
         if (channel == null) return;
         registry.counter("telegram_published_total", "application", "hh-gui", "channel", channel).increment();
     }
 
-    /** Total views summed across the posts just re-scraped from this channel (see
-     *  VacancyPipelineService.discoverFromTelegram) — a gauge, not a counter: views are a
-     *  snapshot of the channel's current activity level each scrape, not a running total. */
+    /** Total views summed across the posts just re-scraped from this channel — called both
+     *  for source channels (VacancyDiscovery.fromTelegram) and the app's own output
+     *  channel (ChannelEngagementTracker.checkOwnChannels), told apart by the channel tag.
+     *  A gauge, not a counter: views are a snapshot of current activity each scrape, not
+     *  a running total. */
     public void recordViews(String channel, int totalViews) {
         if (channel == null) return;
         viewGauges.computeIfAbsent(channel, ch -> {

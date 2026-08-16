@@ -244,7 +244,7 @@ public class VacancyDiscovery {
                 continue;
             }
             // SMM engagement snapshot for this SOURCE channel (where vacancies are found,
-            // not the app's own output channel — see checkOwnChannelEngagement for that) —
+            // not the app's own output channel — see ChannelEngagementTracker.checkOwnChannels for that) —
             // summed across whatever's currently visible in the scrape, refreshed on every
             // scheduled re-visit (not just at discovery), so already-known posts' growing
             // view/reaction counts still show up in Grafana even though they're skipped
@@ -281,7 +281,7 @@ public class VacancyDiscovery {
                     // Path B: the post itself is the only source — never write its own
                     // wording anywhere downstream except AI analysis input; the public
                     // post text this pipeline eventually sends out is AI-generated from
-                    // extracted facts, not a copy (see VacancyAiAnalyzer/sendPublicPosts).
+                    // extracted facts, not a copy (see VacancyAiAnalyzer/ChannelPublisher.send).
                     // Some channels (e.g. kadrout) are themselves aggregators posting only a
                     // teaser with a link to the full listing on their own site — verified
                     // live, that link (not a job board we have a scraper for, so still Path
