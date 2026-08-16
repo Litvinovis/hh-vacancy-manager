@@ -96,7 +96,7 @@ public class TelegramNotifier {
      * Public @username of a channel the channel bot is admin of (Bot API getChat) — null
      * if the channel has none (fully private, no public link) or on any failure. Needed
      * because tg-scraper's web-client sidecar reads channels by username, not numeric
-     * chat_id (see VacancyPipelineService.checkOwnChannelEngagement).
+     * chat_id (see ChannelEngagementTracker.checkOwnChannels).
      */
     public String getChatUsername(String targetChatId) {
         if (channelBotToken == null || channelBotToken.isEmpty()) return null;

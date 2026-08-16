@@ -150,7 +150,7 @@ public class PipelineScheduler implements SchedulingConfigurer {
 
     // No FeatureFlags gate here (unlike runDueDelayedPublications): nothing gets
     // queued in the first place unless publicFormatEnabled was already on when
-    // sendReport ran (see VacancyPipelineService.sendPublicPosts), so this is a
+    // sendReport ran (see ChannelPublisher.send), so this is a
     // natural no-op otherwise — an extra flag check would just duplicate that.
     private void runDueQueuedPublications() {
         if (schemaNotReady()) return;

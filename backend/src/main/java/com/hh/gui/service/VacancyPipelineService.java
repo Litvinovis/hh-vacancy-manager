@@ -28,9 +28,11 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 /**
- * Pipeline for a single (person, search) job: RSS-discover new vacancy IDs →
- * scrape full content for pending ones (via the headless-browser sidecar,
- * see ScraperClient) → AI-analyze scraped-but-unanalyzed ones → notify.
+ * Pipeline for a single (person, search) job: discover new vacancies (delegated to
+ * {@link VacancyDiscovery} — RSS, a saved hh.ru search URL, or public Telegram
+ * channels) → scrape full content for pending ones (via the headless-browser
+ * sidecar, see ScraperClient) → AI-analyze scraped-but-unanalyzed ones → notify,
+ * with the actual channel/queue delivery delegated to {@link ChannelPublisher}.
  *
  * Each method takes one SearchJob at a time; iterating over all configured
  * jobs is the caller's job (PipelineScheduler for the scheduled run,
