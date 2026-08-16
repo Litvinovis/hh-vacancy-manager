@@ -22,7 +22,10 @@ jobs:
           cache: maven
 
       - name: Run SpotBugs
-        run: cd backend && mvn spotbugs:check -Dmaven.test.skip=true --no-transfer-progress
+        # spotbugs:check as a standalone goal doesn't trigger compile first, so it
+        # had nothing to analyze ("No files found to run spotbugs") and always
+        # passed trivially. compile has to run in the same Maven invocation first.
+        run: cd backend && mvn compile spotbugs:check -Dmaven.test.skip=true --no-transfer-progress
         continue-on-error: true
 
       - name: Upload SpotBugs report
@@ -71,10 +74,21 @@ jobs:
           scan-type: 'fs'
           scan-ref: '.'
           format: 'table'
+          # Without this, 'table' format only prints to the job log — the
+          # "Upload Trivy results" step below always found nothing to upload
+          # (silently, since if-no-files-found defaults to warn).
+          output: 'trivy-results.txt'
           exit-code: '0'
           ignore-unfixed: true
           vuln-type: 'library'
           severity: 'CRITICAL,HIGH'
+          # Trivy resolves pom.xml's parent/dependency versions by walking Maven
+          # Central live — every scheduled run for the past month failed with
+          # "429 Too Many Requests" from repo.maven.apache.org, not an actual
+          # vulnerability finding. Java deps are already covered by the SCA job
+          # above (OWASP dependency-check, its own NVD database, no live Maven
+          # Central walk) — skip pom.xml here rather than fight Trivy's resolver.
+          skip-files: 'backend/pom.xml'
 
       - name: Upload Trivy results
         if: always()
