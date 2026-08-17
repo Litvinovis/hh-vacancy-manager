@@ -58,6 +58,11 @@ app:
     # called by the provider's servers, not a browser, so this is what stands in its
     # place. Empty means the endpoint accepts nothing (fails closed, not open).
     webhook-secret: ${SUBSCRIPTIONS_WEBHOOK_SECRET:}
+  moderation:
+    # Manual ✅/❌ gate before an EDITORIAL vacancy reaches the public channel —
+    # see ModerationService/ModerationBotPoller. Off by default like the rest of
+    # this block.
+    enabled: ${MODERATION_ENABLED:false}
 
 management:
   endpoints:
