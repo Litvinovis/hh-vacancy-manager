@@ -337,7 +337,18 @@ public class VacancyDiscovery {
             try {
                 vacancyRepo.save(v);
                 saved++;
-                telegramMetrics.recordCollected(TelegramPostParser.channelFromHhId(v.getHhId()));
+                // Path A (source="hh") has a real hh.ru numeric hh_id, which
+                // channelFromHhId never matches (it only recognizes the Path B
+                // "tg_<channel>_<id>" format) — recordCollected no-ops on the null it
+                // returns, so without this branch Path A candidates found via Telegram
+                // were invisible to every collection metric: not counted here (wrong
+                // format) AND not counted by fromRss/fromUrl's recordVacanciesCollected
+                // either (this save happens here, not there).
+                if ("hh".equals(v.getSource())) {
+                    metrics.recordVacanciesCollected("hh.ru", 1);
+                } else {
+                    telegramMetrics.recordCollected(TelegramPostParser.channelFromHhId(v.getHhId()));
+                }
             } catch (Exception e) {
                 log.warn("Не удалось сохранить Telegram-кандидата {} ({} · {}): {}",
                     v.getHhId(), job.personName, job.searchName, e.getMessage());
