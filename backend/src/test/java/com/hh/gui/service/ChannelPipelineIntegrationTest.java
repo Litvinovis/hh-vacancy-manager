@@ -71,11 +71,11 @@ class ChannelPipelineIntegrationTest {
         public ChannelResult fetchChannel(String username, int limit) {
             return new ChannelResult(true, null, List.of(
                 new TelegramMessage("tg_" + CHANNEL + "_1",
-                    "Оператор чата поддержки\n\nОбязанности: отвечать клиентам в чате\nОтклик: hr@example.com",
+                    "Оператор чата поддержки\n\nЗарплата: от 45000 руб.\nОбязанности: отвечать клиентам в чате\nОтклик: hr@example.com",
                     "2026-08-16T09:00:00.000Z", "https://t.me/" + CHANNEL + "/1", CHANNEL, "telegram",
                     120, Map.of("❤", 3)),
                 new TelegramMessage("tg_" + CHANNEL + "_2",
-                    "Ассистент руководителя\n\nОбязанности: планирование и документы\nПишите в лс @hr_person",
+                    "Ассистент руководителя\n\nЗарплата: от 60000 руб.\nОбязанности: планирование и документы\nПишите в лс @hr_person",
                     "2026-08-16T09:05:00.000Z", "https://t.me/" + CHANNEL + "/2", CHANNEL, "telegram",
                     80, Map.of())));
         }

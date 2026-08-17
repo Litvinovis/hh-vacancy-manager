@@ -14,6 +14,7 @@ import com.hh.gui.model.Vacancy;
 import com.hh.gui.repository.SearchRepository;
 import com.hh.gui.repository.VacancyRepository;
 import com.hh.gui.util.DedupKeys;
+import com.hh.gui.util.SalaryFormatter;
 import com.hh.gui.util.TelegramPostParser;
 import com.hh.gui.util.VacancyPostFormatter;
 import com.hh.gui.util.TextSimilarity;
@@ -927,6 +928,31 @@ public class VacancyPipelineService {
                 .map(Vacancy::getId)
                 .toList();
             vacancyRepo.markNotified(droppedIds);
+        }
+
+        // Quality floor for public-facing posts only (channel, delayed channel, subscriber
+        // broadcast — all three render via VacancyPostFormatter.publicPost/formatPublicPost):
+        // a reader can't act on a posting that names neither an employer nor a salary, so
+        // those are dropped here rather than shown as "компания не указана · з/п не указана".
+        // Personal reports (usePublicFormat=false) skip this — a job seeker doing their own
+        // search still wants to see everything, even sparse listings. Resolved the same way
+        // as the similarity-dedup drops above: markNotified so findUnnotifiedApproved doesn't
+        // keep re-offering them forever.
+        if (usePublicFormat) {
+            List<Vacancy> beforeQualityFilter = approved;
+            List<Vacancy> afterQualityFilter = beforeQualityFilter.stream()
+                .filter(v -> VacancyPostFormatter.hasRealCompany(v) || SalaryFormatter.hasSalary(v))
+                .toList();
+            approved = afterQualityFilter;
+            if (afterQualityFilter.size() < beforeQualityFilter.size()) {
+                List<Long> droppedIds = beforeQualityFilter.stream()
+                    .filter(v -> !afterQualityFilter.contains(v))
+                    .map(Vacancy::getId)
+                    .toList();
+                vacancyRepo.markNotified(droppedIds);
+                log.info("Фильтр качества (нет ни компании, ни зарплаты) ({} · {}): {} вакансий отброшено из {}",
+                    job.personName, job.searchName, droppedIds.size(), beforeQualityFilter.size());
+            }
         }
 
         if (primaryWillSend) {

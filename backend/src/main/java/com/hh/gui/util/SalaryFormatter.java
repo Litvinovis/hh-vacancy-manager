@@ -32,6 +32,10 @@ public final class SalaryFormatter {
         return range != null ? range : "з/п не указана";
     }
 
+    public static boolean hasSalary(Vacancy v) {
+        return (v.getSalaryFrom() != null && v.getSalaryFrom() > 0) || (v.getSalaryTo() != null && v.getSalaryTo() > 0);
+    }
+
     private static String range(Vacancy v) {
         boolean hasFrom = v.getSalaryFrom() != null && v.getSalaryFrom() > 0;
         boolean hasTo = v.getSalaryTo() != null && v.getSalaryTo() > 0;

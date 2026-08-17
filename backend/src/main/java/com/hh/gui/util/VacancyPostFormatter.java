@@ -32,18 +32,22 @@ public final class VacancyPostFormatter {
     private record Fields(String title, String company, String salary, String reason) {}
 
     private static Fields fields(Vacancy v) {
-        // A leading "@" means employer() (see TelegramPostParser) never found a real
-        // employer and fell back to the source channel's own handle — verified live
-        // that showing that handle as the "company" reads as a bug to a reader (an
-        // @-handle isn't something you can apply to), so it's treated the same as no
-        // company at all rather than printed as if it meant something.
-        String company = v.getCompany();
-        boolean hasRealCompany = company != null && !company.isEmpty() && !company.startsWith("@");
+        boolean hasRealCompany = hasRealCompany(v);
         return new Fields(
             truncate(v.getTitle(), MAX_TITLE_CHARS),
-            hasRealCompany ? escapeHtml(company) : "компания не указана",
+            hasRealCompany ? escapeHtml(v.getCompany()) : "компания не указана",
             SalaryFormatter.forReport(v),
             truncate(v.getAiReason(), MAX_REASON_CHARS));
+    }
+
+    // A leading "@" means employer() (see TelegramPostParser) never found a real
+    // employer and fell back to the source channel's own handle — verified live
+    // that showing that handle as the "company" reads as a bug to a reader (an
+    // @-handle isn't something you can apply to), so it's treated the same as no
+    // company at all rather than printed as if it meant something.
+    public static boolean hasRealCompany(Vacancy v) {
+        String company = v.getCompany();
+        return company != null && !company.isEmpty() && !company.startsWith("@");
     }
 
     /** Public channel / subscriber post: no internal scoring, just what a reader needs. */
