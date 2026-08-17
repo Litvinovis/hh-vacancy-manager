@@ -79,6 +79,17 @@ class TelegramNotifierTest {
             ex.sendResponseHeaders(500, -1);
             ex.close();
         });
+        server.createContext("/botGOODTOKEN/answerCallbackQuery", ex -> {
+            lastPath.set(ex.getRequestURI().toString());
+            ex.sendResponseHeaders(200, -1);
+            ex.close();
+        });
+        server.createContext("/botBADTOKEN/answerCallbackQuery", ex -> {
+            byte[] body = "{\"ok\":false,\"description\":\"Bad Request\"}".getBytes(StandardCharsets.UTF_8);
+            ex.sendResponseHeaders(400, body.length);
+            ex.getResponseBody().write(body);
+            ex.close();
+        });
         server.start();
         port = server.getAddress().getPort();
 
@@ -254,5 +265,58 @@ class TelegramNotifierTest {
         ReflectionTestUtils.setField(notifier, "channelBotToken", "");
 
         assertNull(notifier.getChatUsername("-100123"));
+    }
+
+    // ── moderation cards (sent via the CHANNEL bot, see sendModerationCard's javadoc for why) ──
+
+    @Test
+    void sendModerationCard_success_returnsTrueAndIncludesButtons() {
+        ReflectionTestUtils.setField(notifier, "channelBotToken", "GOODTOKEN");
+        ReflectionTestUtils.setField(notifier, "chatId", "-100123");
+
+        assertTrue(notifier.sendModerationCard("Оператор поддержки", 42L));
+
+        assertTrue(lastPath.get().contains("/botGOODTOKEN/sendMessage"), "должен уйти через канальный бот, не личный");
+        assertTrue(lastRequestBody.get().contains("chat_id=-100123"));
+        assertTrue(lastRequestBody.get().contains("modpub%3A42"), "callback_data кнопки \"Опубликовать\" должна нести id вакансии");
+        assertTrue(lastRequestBody.get().contains("modrej%3A42"), "callback_data кнопки \"Отклонить\" должна нести id вакансии");
+    }
+
+    @Test
+    void sendModerationCard_missingChannelToken_returnsFalse() {
+        ReflectionTestUtils.setField(notifier, "channelBotToken", "");
+        ReflectionTestUtils.setField(notifier, "chatId", "-100123");
+
+        assertFalse(notifier.sendModerationCard("Текст", 1L));
+    }
+
+    @Test
+    void sendModerationCard_missingChatId_returnsFalse() {
+        ReflectionTestUtils.setField(notifier, "channelBotToken", "GOODTOKEN");
+        ReflectionTestUtils.setField(notifier, "chatId", "");
+
+        assertFalse(notifier.sendModerationCard("Текст", 1L));
+    }
+
+    @Test
+    void answerCallbackQuery_success_doesNotThrow() {
+        ReflectionTestUtils.setField(notifier, "channelBotToken", "GOODTOKEN");
+
+        assertDoesNotThrow(() -> notifier.answerCallbackQuery("query-id-1"));
+        assertTrue(lastPath.get().contains("/botGOODTOKEN/answerCallbackQuery"));
+    }
+
+    @Test
+    void answerCallbackQuery_failure_isBestEffort_doesNotThrow() {
+        ReflectionTestUtils.setField(notifier, "channelBotToken", "BADTOKEN");
+
+        assertDoesNotThrow(() -> notifier.answerCallbackQuery("query-id-1"));
+    }
+
+    @Test
+    void answerCallbackQuery_missingToken_doesNotThrow() {
+        ReflectionTestUtils.setField(notifier, "channelBotToken", "");
+
+        assertDoesNotThrow(() -> notifier.answerCallbackQuery("query-id-1"));
     }
 }
