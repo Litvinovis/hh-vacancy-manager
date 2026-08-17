@@ -146,6 +146,29 @@ class TelegramPostParserTest {
             TelegramPostParser.employer("Компания: ООО Ромашка.\nЗадачи: ...", "Оператор", "somechan"));
     }
 
+    // ── finder.work-style "COMPANY • Без опыта" teaser (noexperience/theyseeku/distantsiya) ──
+
+    @Test
+    void employer_structuredCompanyBulletNoExperience_extracted() {
+        String text = "Специалист по рефинансированию\nот 100 000 ₽\nПКБ • Без опыта\n\nhttps://finder.work/vacancies/1";
+        assertEquals("ПКБ", TelegramPostParser.employer(text, "Специалист по рефинансированию", "noexperience"));
+    }
+
+    @Test
+    void employer_structuredCompanyBulletExperienceYears_extracted() {
+        String text = "Бухгалтер\nот 80 000 ₽\nРога и Копыта • От 3 лет\n\nhttps://finder.work/vacancies/2";
+        assertEquals("Рога и Копыта", TelegramPostParser.employer(text, "Бухгалтер", "theyseeku"));
+    }
+
+    @Test
+    void employer_bulletListItemNotExperienceLevel_notMistakenForCompany() {
+        // Same channels also use "•" for ordinary bullet lists elsewhere in the post body
+        // ("Мы предлагаем • удалённую работу") — only a bullet whose right side is
+        // actually an experience-level phrase should be treated as the company line.
+        String text = "Ассистент руководителя\nМы предлагаем:\nЧто предлагаем • удалённую работу\nГрафик • гибкий";
+        assertEquals("@distantsiya", TelegramPostParser.employer(text, "Ассистент руководителя", "distantsiya"));
+    }
+
     // ── salary ──
 
     @Test
@@ -195,6 +218,23 @@ class TelegramPostParserTest {
     @Test
     void hhLink_absent_returnsNull() {
         assertNull(TelegramPostParser.hhLink("Пишите в лс @somebody"));
+    }
+
+    @Test
+    void hhLink_noCitySubdomain_stillMatched() {
+        // Observed live: "Контакты: https://hh.ru/vacancy/136211253" (hh.ru's own generic
+        // domain, no city subdomain) fell through to Path B — a bare teaser — instead of
+        // Path A's full scrape, because the old pattern required a subdomain prefix.
+        TelegramPostParser.HhLink link = TelegramPostParser.hhLink("Контакты: https://hh.ru/vacancy/136211253");
+        assertNotNull(link);
+        assertEquals("136211253", link.hhId());
+    }
+
+    @Test
+    void hhLink_lookalikeDomainContainingHhRuAsSubstring_notMatched() {
+        // Regression guard for making the subdomain optional above: "myhh.ru" must not
+        // be mistaken for hh.ru just because "hh.ru" appears as a substring of it.
+        assertNull(TelegramPostParser.hhLink("Подробности на myhh.ru/vacancy/999"));
     }
 
     // ── channel from hh_id ──

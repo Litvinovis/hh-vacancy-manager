@@ -35,8 +35,14 @@ public final class TelegramPostParser {
     /** How a reader should apply — {@code emoji} labels the channel, {@code display} is the address itself. */
     public record Contact(String emoji, String display) {}
 
+    // City subdomain is OPTIONAL — verified live: "Контакты: https://hh.ru/vacancy/136211253"
+    // (no subdomain at all, hh.ru's own generic domain) never matched the old
+    // subdomain-required version, so that post fell through to Path B — a bare teaser with
+    // no real company/salary — instead of Path A's full scrape of the actual hh.ru page.
+    // The negative lookbehind stops "hh.ru" from matching mid-word inside an unrelated
+    // domain (e.g. "myhh.ru") now that a subdomain prefix is no longer required to anchor it.
     private static final Pattern HH_LINK_PATTERN =
-        Pattern.compile("(?:https?://)?[a-z0-9-]+\\.hh\\.ru/vacancy/(\\d+)", Pattern.CASE_INSENSITIVE);
+        Pattern.compile("(?<![a-zA-Z0-9.-])(?:[a-z0-9-]+\\.)?hh\\.ru/vacancy/(\\d+)", Pattern.CASE_INSENSITIVE);
 
     /**
      * The hh.ru vacancy this post links to, or null if it doesn't link to one — the
@@ -109,6 +115,18 @@ public final class TelegramPostParser {
     private static final Pattern PROJECT_TYPE_NOT_EMPLOYER =
         Pattern.compile("проект[а-яё]*$", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
+    // finder.work-style aggregator teaser ("noexperience"/"theyseeku"/"distantsiya",
+    // added 2026-08-17): a standalone line "COMPANY • Без опыта" right under the title/
+    // salary, no "Компания:" label at all — verified live against 7 real posts (ПКБ,
+    // Gi.Cross, Guruz, СБЕР, Европлан, ИП Лобанова О.Б., Киберколлект), all correctly
+    // extracted; requiring the bullet's RIGHT side to be an experience-level phrase (not
+    // just any short line) is what keeps this from misfiring on the "Мы предлагаем •
+    // удалённую работу" style bullet lists these same channels also use elsewhere in the
+    // post body.
+    private static final Pattern STRUCTURED_COMPANY_LEVEL = Pattern.compile(
+        "^([^\\n•]{2,40}?)\\s*•\\s*(?:Без опыта|От \\d+\\s*(?:года|лет)|Опыт(?:\\s+от)?)",
+        Pattern.MULTILINE | Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+
     /**
      * Who's hiring, falling back to {@code "@" + channel} when the post never says —
      * never null, because no dedup key can be computed without SOME employer value
@@ -119,6 +137,10 @@ public final class TelegramPostParser {
         Matcher m = TG_EMPLOYER_PATTERN.matcher(text);
         if (m.find() && !LIST_MARKER_START.matcher(m.group(1)).find()) {
             return stripTrailingPeriod(m.group(1).trim());
+        }
+        Matcher structured = STRUCTURED_COMPANY_LEVEL.matcher(text);
+        if (structured.find()) {
+            return stripTrailingPeriod(structured.group(1).trim());
         }
         Matcher titleMatch = TITLE_TRAILING_EMPLOYER.matcher(title);
         if (titleMatch.find() && !PLATFORM_NOT_EMPLOYER.matcher(titleMatch.group(1)).find()
