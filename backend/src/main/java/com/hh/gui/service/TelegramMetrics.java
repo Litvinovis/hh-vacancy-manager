@@ -33,6 +33,8 @@ public class TelegramMetrics {
     private final Map<String, AtomicInteger> viewGauges = new ConcurrentHashMap<>();
     private final Map<String, AtomicInteger> reactionGauges = new ConcurrentHashMap<>();
     private final Map<String, AtomicInteger> subscriberGauges = new ConcurrentHashMap<>();
+    private final Map<String, AtomicInteger> publishedRollingGauges = new ConcurrentHashMap<>();
+    private final Map<String, AtomicInteger> collectedRollingGauges = new ConcurrentHashMap<>();
 
     public TelegramMetrics(MeterRegistry registry) {
         this.registry = registry;
@@ -117,6 +119,58 @@ public class TelegramMetrics {
             Gauge.builder("telegram_channel_subscribers", value, AtomicInteger::get)
                 .description("Current subscriber count")
                 .tag("application", "hh-gui").tag("channel", ch).register(registry);
+            return value;
+        }).set(count);
+    }
+
+    /**
+     * Recomputed straight from the vacancies table on every scheduler tick (see
+     * PipelineScheduler.refreshRollingCountGauges → VacancyRepository.countPublishedSince),
+     * NOT accumulated in-process — a plain Gauge, not a Counter, so an app restart
+     * (this app redeploys many times a day during active development) never loses data:
+     * the next tick just recomputes the same trailing window fresh from the DB. Grafana
+     * plots the gauge's own value directly, no increase()/rate() needed.
+     *
+     * @param countsBySearch every search_name with at least one published row in the
+     *                       window, as returned by countPublishedSince — searches NOT in
+     *                       this map (nothing published this window) are zeroed out below
+     *                       rather than left showing a stale earlier value.
+     */
+    public void refreshPublishedRolling(Map<String, Integer> countsBySearch) {
+        for (var entry : countsBySearch.entrySet()) {
+            setPublishedRolling(entry.getKey(), entry.getValue());
+        }
+        for (String known : publishedRollingGauges.keySet()) {
+            if (!countsBySearch.containsKey(known)) setPublishedRolling(known, 0);
+        }
+    }
+
+    private void setPublishedRolling(String search, int count) {
+        publishedRollingGauges.computeIfAbsent(search, s -> {
+            AtomicInteger value = new AtomicInteger();
+            Gauge.builder("vacancies_published_rolling_1h", value, AtomicInteger::get)
+                .description("Vacancies published to a public destination in the trailing 1h, recomputed from the DB every refresh")
+                .tag("application", "hh-gui").tag("search", s).register(registry);
+            return value;
+        }).set(count);
+    }
+
+    /** Same reasoning as {@link #refreshPublishedRolling} — collection volume by source. */
+    public void refreshCollectedRolling(Map<String, Integer> countsBySource) {
+        for (var entry : countsBySource.entrySet()) {
+            setCollectedRolling(entry.getKey(), entry.getValue());
+        }
+        for (String known : collectedRollingGauges.keySet()) {
+            if (!countsBySource.containsKey(known)) setCollectedRolling(known, 0);
+        }
+    }
+
+    private void setCollectedRolling(String source, int count) {
+        collectedRollingGauges.computeIfAbsent(source, s -> {
+            AtomicInteger value = new AtomicInteger();
+            Gauge.builder("vacancies_collected_rolling_1d", value, AtomicInteger::get)
+                .description("Vacancies collected in the trailing 24h, by source, recomputed from the DB every refresh")
+                .tag("application", "hh-gui").tag("source", s).register(registry);
             return value;
         }).set(count);
     }

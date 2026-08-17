@@ -165,11 +165,25 @@ class PipelineSchedulerTest {
     static class FakeVacancyRepository extends VacancyRepository {
         final List<String> deleteCutoffs = new ArrayList<>();
         int deleteReturns = 0;
+        final List<String> publishedSinceCalls = new ArrayList<>();
+        final List<String> collectedSinceCalls = new ArrayList<>();
+        java.util.Map<String, Integer> publishedResult = java.util.Map.of();
+        java.util.Map<String, Integer> collectedResult = java.util.Map.of();
         FakeVacancyRepository() { super(null); }
         @Override
         public int deleteOlderThan(String cutoffCreatedAt) {
             deleteCutoffs.add(cutoffCreatedAt);
             return deleteReturns;
+        }
+        @Override
+        public java.util.Map<String, Integer> countPublishedSince(String sinceIso) {
+            publishedSinceCalls.add(sinceIso);
+            return publishedResult;
+        }
+        @Override
+        public java.util.Map<String, Integer> countCollectedSince(String sinceIso) {
+            collectedSinceCalls.add(sinceIso);
+            return collectedResult;
         }
     }
 
@@ -196,6 +210,8 @@ class PipelineSchedulerTest {
     private FakeEngagement engagement;
     private TogglableFlags flags;
     private FakeVacancyRepository vacancyRepo;
+    private SimpleMeterRegistry metricsRegistry;
+    private TelegramMetrics telegramMetrics;
     private PipelineScheduler scheduler;
 
     @BeforeEach
@@ -213,8 +229,11 @@ class PipelineSchedulerTest {
         engagement = new FakeEngagement();
         flags = new TogglableFlags();
         vacancyRepo = new FakeVacancyRepository();
+        metricsRegistry = new SimpleMeterRegistry();
+        telegramMetrics = new TelegramMetrics(metricsRegistry);
         scheduler = new PipelineScheduler(pipeline, profiles, config, analyzer, searchRepo,
-            freeModels, flags, schema, subscriptions, publisher, engagement, vacancyRepo);
+            freeModels, flags, schema, subscriptions, publisher, engagement, vacancyRepo,
+            telegramMetrics);
     }
 
     private List<TriggerTask> tasks() {
@@ -254,7 +273,7 @@ class PipelineSchedulerTest {
 
     @Test
     void configureTasks_registersEveryTrigger() {
-        assertEquals(12, tasks().size(),
+        assertEquals(13, tasks().size(),
             "все триггеры должны быть зарегистрированы — молча пропавший = молча не работающая функция");
     }
 
@@ -276,6 +295,7 @@ class PipelineSchedulerTest {
         assertEquals(0, engagement.subscriberChecks);
         assertEquals(0, subscriptions.expiries);
         assertTrue(vacancyRepo.deleteCutoffs.isEmpty(), "retention-очистка не должна стартовать до готовности схемы");
+        assertTrue(vacancyRepo.publishedSinceCalls.isEmpty(), "rolling-метрики не должны обращаться к БД до готовности схемы");
         assertEquals(1, freeModels.refreshes,
             "обновление списка free-моделей к БД не обращается — единственная задача без этой защиты");
     }
@@ -346,6 +366,50 @@ class PipelineSchedulerTest {
         runAllTasks();
 
         assertEquals(1, vacancyRepo.deleteCutoffs.size());
+    }
+
+    // ── DB-backed rolling gauges (см. TelegramMetrics.refreshPublishedRolling/refreshCollectedRolling) ──
+
+    @Test
+    void rollingMetrics_queriesOneHourAndOneDayWindows() {
+        runAllTasks();
+
+        assertEquals(1, vacancyRepo.publishedSinceCalls.size());
+        Instant publishedSince = Instant.parse(vacancyRepo.publishedSinceCalls.get(0));
+        assertTrue(publishedSince.isAfter(Instant.now().minus(Duration.ofHours(1)).minusSeconds(5)),
+            "окно публикаций должно быть примерно 'сейчас минус 1 час'");
+
+        assertEquals(1, vacancyRepo.collectedSinceCalls.size());
+        Instant collectedSince = Instant.parse(vacancyRepo.collectedSinceCalls.get(0));
+        assertTrue(collectedSince.isAfter(Instant.now().minus(Duration.ofDays(1)).minusSeconds(5)),
+            "окно сбора должно быть примерно 'сейчас минус 1 день'");
+    }
+
+    @Test
+    void rollingMetrics_publishedCountsReachTheGaugeRegistry() {
+        vacancyRepo.publishedResult = java.util.Map.of("Без техстека", 7);
+        vacancyRepo.collectedResult = java.util.Map.of("hh", 3, "telegram", 9);
+
+        runAllTasks();
+
+        assertEquals(7.0, metricsRegistry.find("vacancies_published_rolling_1h")
+            .tag("search", "Без техстека").gauge().value());
+        assertEquals(3.0, metricsRegistry.find("vacancies_collected_rolling_1d").tag("source", "hh").gauge().value());
+        assertEquals(9.0, metricsRegistry.find("vacancies_collected_rolling_1d").tag("source", "telegram").gauge().value());
+    }
+
+    @Test
+    void rollingMetrics_repositoryThrows_doesNotBreakOtherTasks() {
+        FakeVacancyRepository throwing = new FakeVacancyRepository() {
+            @Override
+            public java.util.Map<String, Integer> countPublishedSince(String sinceIso) {
+                throw new RuntimeException("БД недоступна");
+            }
+        };
+        scheduler = new PipelineScheduler(pipeline, profiles, config, analyzer, searchRepo,
+            freeModels, flags, schema, subscriptions, publisher, engagement, throwing, telegramMetrics);
+
+        assertDoesNotThrow(this::runAllTasks);
     }
 
     // ── флаги функций ──
@@ -487,7 +551,8 @@ class PipelineSchedulerTest {
             @Override public void publishDueDelayed(int limit) { throw new IllegalStateException("бум"); }
         };
         scheduler = new PipelineScheduler(pipeline, profiles, config, analyzer, searchRepo,
-            freeModels, flags, schema, subscriptions, exploding, engagement, vacancyRepo);
+            freeModels, flags, schema, subscriptions, exploding, engagement, vacancyRepo,
+            new TelegramMetrics(new SimpleMeterRegistry()));
 
         assertDoesNotThrow(this::runAllTasks);
     }

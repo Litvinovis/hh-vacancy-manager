@@ -218,6 +218,50 @@ class VacancyRepositoryTest {
         assertNotNull(counts);
     }
 
+    // ── countPublishedSince / countCollectedSince (DB-backed, restart-proof rolling gauges) ──
+
+    @Test
+    void countPublishedSince_onlyNotifiedRowsWithinWindow() {
+        Vacancy inWindow = saveWithStatus("pub-1", "new");
+        jdbc.update("UPDATE vacancies SET search_name='Без техстека' WHERE id=?", inWindow.getId());
+        vacancyRepo.markNotified(List.of(inWindow.getId()));
+
+        Vacancy notNotified = saveWithStatus("pub-2", "new");
+        jdbc.update("UPDATE vacancies SET search_name='Без техстека' WHERE id=?", notNotified.getId());
+        // помечен уведомлённым, но давно — за пределами окна
+        Vacancy stale = saveWithStatus("pub-3", "new");
+        jdbc.update("UPDATE vacancies SET search_name='Без техстека' WHERE id=?", stale.getId());
+        vacancyRepo.markNotified(List.of(stale.getId()));
+        jdbc.update("UPDATE vacancies SET updated_at=? WHERE id=?",
+            java.time.Instant.now().minus(java.time.Duration.ofHours(5)).toString(), stale.getId());
+
+        var counts = vacancyRepo.countPublishedSince(
+            java.time.Instant.now().minus(java.time.Duration.ofHours(1)).toString());
+
+        assertEquals(1, counts.get("Без техстека"), "не-уведомлённые и уведомлённые давно не должны попасть в окно");
+    }
+
+    @Test
+    void countCollectedSince_groupedBySource() {
+        Vacancy hhRow = createTestVacancy("col-1", "Тест", "new");
+        hhRow.setSource("hh");
+        vacancyRepo.save(hhRow);
+        Vacancy tgRow = createTestVacancy("col-2", "Тест", "new");
+        tgRow.setSource("telegram");
+        vacancyRepo.save(tgRow);
+        Vacancy oldRow = createTestVacancy("col-3", "Тест", "new");
+        oldRow.setSource("hh");
+        Vacancy savedOld = vacancyRepo.save(oldRow);
+        jdbc.update("UPDATE vacancies SET created_at=? WHERE id=?",
+            java.time.Instant.now().minus(java.time.Duration.ofDays(2)).toString(), savedOld.getId());
+
+        var counts = vacancyRepo.countCollectedSince(
+            java.time.Instant.now().minus(java.time.Duration.ofDays(1)).toString());
+
+        assertEquals(1, counts.get("hh"), "запись старше окна не должна учитываться");
+        assertEquals(1, counts.get("telegram"));
+    }
+
     // ── resetScore ──
 
     @Test

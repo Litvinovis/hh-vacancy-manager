@@ -917,6 +917,31 @@ public class VacancyRepository {
         return result;
     }
 
+    /**
+     * Vacancies actually sent to a public destination since sinceIso, grouped by
+     * search_name — the source of truth for the "publications per hour" Grafana
+     * gauge. DB-backed and recomputed fresh on every poll (see
+     * TelegramMetrics.refreshPublishedRolling), unlike an in-memory Micrometer
+     * Counter: this app redeploys many times a day during active development, and a
+     * Counter resets to zero on every restart — verified live, that lost ~88% of a
+     * day's real publish volume. updated_at is stamped by markNotified() at the
+     * moment of a successful send, so it's a reliable "when published" proxy.
+     */
+    public Map<String, Integer> countPublishedSince(String sinceIso) {
+        Map<String, Integer> result = new LinkedHashMap<>();
+        jdbc.query("SELECT search_name, COUNT(*) as cnt FROM vacancies WHERE notified = 1 AND updated_at >= ? GROUP BY search_name",
+            (rs) -> { result.put(rs.getString("search_name"), rs.getInt("cnt")); }, sinceIso);
+        return result;
+    }
+
+    /** Same reasoning as {@link #countPublishedSince} — collection volume by source, DB-backed. */
+    public Map<String, Integer> countCollectedSince(String sinceIso) {
+        Map<String, Integer> result = new LinkedHashMap<>();
+        jdbc.query("SELECT source, COUNT(*) as cnt FROM vacancies WHERE created_at >= ? GROUP BY source",
+            (rs) -> { result.put(rs.getString("source"), rs.getInt("cnt")); }, sinceIso);
+        return result;
+    }
+
     private int queryCount(String sql, Long userId) {
         Integer count = userId != null
             ? jdbc.queryForObject(sql, Integer.class, userId)
