@@ -994,6 +994,7 @@ public class VacancyPipelineService {
             for (Long chatId : chatIds) {
                 telegramNotifier.sendViaChannelBot(post, String.valueOf(chatId));
             }
+            telegramMetrics.recordChannelPost(job.searchName);
         }
         log.info("Рассылка подписчикам ({} · {}, {} вакансий × {} подписчиков)",
             job.personName, job.searchName, approved.size(), chatIds.size());

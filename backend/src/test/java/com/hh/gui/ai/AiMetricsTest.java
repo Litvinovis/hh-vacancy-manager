@@ -99,6 +99,25 @@ class AiMetricsTest {
         assertEquals(150.0, registry.find("ai_tokens_total").tag("provider", "openrouter").tag("type", "prompt").counter().count());
     }
 
+    @Test
+    void recordAnalysisFailure_taggedByProviderKindAndStage() {
+        // Covers what recordError can't: an HTTP 200 with a malformed body (BAD_RESPONSE)
+        // has no non-2xx status to tag, so it was previously invisible in metrics —
+        // only ever logged, which is exactly why "AI Errors" looked empty despite real,
+        // observed-live parse failures.
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        AiMetrics metrics = new AiMetrics(registry, new RuntimeConfig());
+
+        metrics.recordAnalysisFailure("openrouter", "BAD_RESPONSE", "analyze");
+        metrics.recordAnalysisFailure("openrouter", "BAD_RESPONSE", "analyze");
+        metrics.recordAnalysisFailure("openrouter", "BAD_RESPONSE", "prescreen");
+
+        assertEquals(2.0, registry.find("ai_analysis_failures_total")
+            .tag("provider", "openrouter").tag("kind", "BAD_RESPONSE").tag("stage", "analyze").counter().count());
+        assertEquals(1.0, registry.find("ai_analysis_failures_total")
+            .tag("provider", "openrouter").tag("kind", "BAD_RESPONSE").tag("stage", "prescreen").counter().count());
+    }
+
     private RuntimeConfig providersConfig(String... names) {
         RuntimeConfig config = new RuntimeConfig();
         config.setAiProviders(List.of(names).stream()

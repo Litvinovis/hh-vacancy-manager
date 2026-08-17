@@ -92,6 +92,7 @@ public class ChannelPublisher {
         for (Vacancy v : approved) {
             if (telegramNotifier.sendViaChannelBot(VacancyPostFormatter.publicPost(v), job.chatId)) {
                 vacancyRepo.markNotified(List.of(v.getId()));
+                telegramMetrics.recordChannelPost(job.searchName);
                 notifiedCount++;
             } else {
                 log.warn("Не удалось опубликовать вакансию id={} ({} · {}) — останется неуведомлённой",
@@ -226,7 +227,11 @@ public class ChannelPublisher {
                 ? dueForSearch.subList(0, PUBLISH_BATCH_SIZE) : dueForSearch;
             if (telegramNotifier.sendViaChannelBot(formatBatch(batch), chatId)) {
                 vacancyRepo.markNotified(batch.stream().map(Vacancy::getId).toList());
-                for (Vacancy v : batch) telegramMetrics.recordPublished(TelegramPostParser.channelFromHhId(v.getHhId()));
+                String searchName = searchOpt.get().getName();
+                for (Vacancy v : batch) {
+                    telegramMetrics.recordPublished(TelegramPostParser.channelFromHhId(v.getHhId()));
+                    telegramMetrics.recordChannelPost(searchName);
+                }
             } else {
                 log.warn("Публикация из очереди не удалась для батча из {} вакансий (search_id={})", batch.size(), entry.getKey());
             }
@@ -262,9 +267,11 @@ public class ChannelPublisher {
                 continue;
             }
             String delayedChatId = searchOpt.get().getDelayedChatId();
+            String searchName = searchOpt.get().getName();
             for (Vacancy v : entry.getValue()) {
                 if (telegramNotifier.sendViaChannelBot(VacancyPostFormatter.publicPost(v), delayedChatId)) {
                     vacancyRepo.markDelayedNotified(List.of(v.getId()));
+                    telegramMetrics.recordChannelPost(searchName);
                 } else {
                     log.warn("Отложенная публикация не удалась для id={} (search_id={})", v.getId(), entry.getKey());
                 }

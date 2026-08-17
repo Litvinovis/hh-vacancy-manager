@@ -73,6 +73,28 @@ class TelegramMetricsTest {
     }
 
     @Test
+    void recordChannelPost_incrementsPerSearchCounter() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        TelegramMetrics metrics = new TelegramMetrics(registry);
+
+        metrics.recordChannelPost("Без техстека");
+        metrics.recordChannelPost("Без техстека");
+        metrics.recordChannelPost("Интересная удалёнка");
+
+        assertEquals(2.0, registry.find("channel_posts_published_total").tag("search", "Без техстека").counter().count());
+        assertEquals(1.0, registry.find("channel_posts_published_total").tag("search", "Интересная удалёнка").counter().count());
+    }
+
+    @Test
+    void recordChannelPost_nullSearchName_doesNotThrowOrRegister() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        TelegramMetrics metrics = new TelegramMetrics(registry);
+
+        assertDoesNotThrow(() -> metrics.recordChannelPost(null));
+        assertTrue(registry.getMeters().isEmpty());
+    }
+
+    @Test
     void recordViews_setsGaugeToLatestValue_notAccumulating() {
         // A gauge, not a counter: the second scrape's total should REPLACE the first,
         // not add to it — each scrape reports the channel's current state, not a delta.
