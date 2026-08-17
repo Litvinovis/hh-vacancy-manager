@@ -473,6 +473,20 @@ class VacancyAiAnalyzerTest {
     }
 
     @Test
+    void parseResponse_titleAndCompanyWithHtmlEntities_decoded() throws Exception {
+        // Observed live: the model HTML-entity-escaped "&" inside its own JSON string
+        // ("Research &amp; Data Analyst") — written raw, this double-escapes on the way
+        // out to Telegram ("&amp;amp;") instead of showing a plain "&".
+        String json = "{\"choices\":[{\"message\":{\"content\":"
+            + "\"[{\\\"id\\\":\\\"1\\\",\\\"score\\\":80,\\\"verdict\\\":\\\"yes\\\",\\\"reason\\\":\\\"ok\\\","
+            + "\\\"title\\\":\\\"Research &amp; Data Analyst\\\",\\\"company\\\":\\\"Fish &amp; Co\\\"}]\"}}]}";
+        List<VacancyAiAnalyzer.AiResult> results = parseResponseOk(json);
+        assertEquals(1, results.size());
+        assertEquals("Research & Data Analyst", results.get(0).title());
+        assertEquals("Fish & Co", results.get(0).company());
+    }
+
+    @Test
     void parseResponse_titleNullOrAbsent_leavesAiResultTitleNull() throws Exception {
         String json = "{\"choices\":[{\"message\":{\"content\":"
             + "\"[{\\\"id\\\":\\\"1\\\",\\\"score\\\":80,\\\"verdict\\\":\\\"yes\\\",\\\"reason\\\":\\\"ok\\\",\\\"title\\\":null}]\"}}]}";
