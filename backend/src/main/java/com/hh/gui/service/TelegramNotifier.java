@@ -126,14 +126,23 @@ public class TelegramNotifier {
     }
 
     /**
-     * A moderation card: personal bot, default chat (app.telegram.chat-id — the owner's
-     * own DM, same fallback send(String) uses), with two inline buttons whose callback_data
-     * ModerationBotPoller dispatches back to ModerationService. Unlike doSend, this can't
-     * go through the plain sendMessage form body — reply_markup is JSON, not a flat field.
+     * A moderation card: sent via the CHANNEL bot (app.telegram.channel-bot-token), not
+     * the personal one — the personal bot's token is shared with an unrelated system
+     * (hermes-agent) that already long-polls it, and two independent getUpdates
+     * consumers on one token fight over it (live-observed: persistent 409 "terminated by
+     * other getUpdates request"). The channel bot's own poller (TelegramBotPoller) only
+     * runs when app.subscriptions.enabled — off today — so it's a free slot for now;
+     * turning subscriptions on later would recreate the exact same conflict between the
+     * two, at which point one of them needs its own dedicated bot token instead.
+     * Still targets app.telegram.chat-id (the owner's personal DM), not the channel —
+     * only the BOT IDENTITY sending it changed, not the destination. Two inline buttons
+     * whose callback_data ModerationBotPoller dispatches back to ModerationService.
+     * Unlike doSend, this can't go through the plain sendMessage form body —
+     * reply_markup is JSON, not a flat field.
      */
     public boolean sendModerationCard(String message, long vacancyId) {
-        if (botToken == null || botToken.isEmpty()) {
-            log.warn("Токен Telegram-бота не настроен — карточка модерации не отправлена");
+        if (channelBotToken == null || channelBotToken.isEmpty()) {
+            log.warn("Токен канального Telegram-бота не настроен — карточка модерации не отправлена");
             return false;
         }
         if (chatId == null || chatId.isBlank()) {
@@ -145,7 +154,7 @@ public class TelegramNotifier {
             "{\"text\":\"❌ Отклонить\",\"callback_data\":\"modrej:" + vacancyId + "\"}" +
             "]]}";
         try {
-            String url = apiBaseUrl + "/bot" + botToken + "/sendMessage";
+            String url = apiBaseUrl + "/bot" + channelBotToken + "/sendMessage";
             HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
             conn.setRequestMethod("POST");
             conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
@@ -176,9 +185,9 @@ public class TelegramNotifier {
      *  indefinitely otherwise. Best-effort: a failure here doesn't undo the decision, which
      *  has already been applied by the time this is called. */
     public void answerCallbackQuery(String callbackQueryId) {
-        if (botToken == null || botToken.isEmpty()) return;
+        if (channelBotToken == null || channelBotToken.isEmpty()) return;
         try {
-            String url = apiBaseUrl + "/bot" + botToken + "/answerCallbackQuery?callback_query_id="
+            String url = apiBaseUrl + "/bot" + channelBotToken + "/answerCallbackQuery?callback_query_id="
                 + URLEncoder.encode(callbackQueryId, StandardCharsets.UTF_8);
             HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
             conn.setRequestMethod("POST");

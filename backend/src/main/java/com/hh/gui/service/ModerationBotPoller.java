@@ -17,10 +17,17 @@ import java.util.Map;
 
 /**
  * Receives the ✅/❌ button taps from ModerationService's cards via long-polling on the
- * PERSONAL bot (app.telegram.bot-token — the owner's own DM, not the channel bot) —
- * same getUpdates approach as TelegramBotPoller, same reason (no confirmed public HTTPS
- * reachability for a webhook), separate poller because it's a different bot identity
- * and a different update type (callback_query, not message).
+ * CHANNEL bot (app.telegram.channel-bot-token), same getUpdates approach as
+ * TelegramBotPoller, same reason (no confirmed public HTTPS reachability for a webhook).
+ *
+ * Deliberately NOT the personal bot (app.telegram.bot-token): that token is shared with
+ * an unrelated system (hermes-agent) that already long-polls it, and Telegram allows
+ * only one active getUpdates consumer per bot — live-observed as persistent 409
+ * "terminated by other getUpdates request" once both polled it. The channel bot's own
+ * poller (TelegramBotPoller) only runs when app.subscriptions.enabled, which is off
+ * today, so this borrows an otherwise-idle slot — see the conflict check in start().
+ * Cards still land in the owner's personal DM (app.telegram.chat-id) regardless of
+ * which bot identity sent them — see TelegramNotifier.sendModerationCard.
  *
  * Entirely inert while FeatureFlags.moderationEnabled is false — see start().
  */
@@ -30,8 +37,8 @@ public class ModerationBotPoller {
     private static final Logger log = LoggerFactory.getLogger(ModerationBotPoller.class);
     private static final String GET_UPDATES_URL = "https://api.telegram.org/bot%s/getUpdates?offset=%d&timeout=30";
 
-    @Value("${app.telegram.bot-token:}")
-    private String botToken;
+    @Value("${app.telegram.channel-bot-token:}")
+    private String channelBotToken;
 
     private final FeatureFlags featureFlags;
     private final ModerationService moderationService;
@@ -57,9 +64,17 @@ public class ModerationBotPoller {
             log.info("Модерация отключена (app.moderation.enabled=false) — поллер не запущен");
             return;
         }
-        if (botToken == null || botToken.isBlank()) {
-            log.warn("Модерация включена, но TELEGRAM_BOT_TOKEN не задан — поллер не запущен");
+        if (channelBotToken == null || channelBotToken.isBlank()) {
+            log.warn("Модерация включена, но TELEGRAM_CHANNEL_BOT_TOKEN не задан — поллер не запущен");
             return;
+        }
+        if (featureFlags.isSubscriptionsEnabled()) {
+            // TelegramBotPoller also long-polls this exact token when subscriptions are
+            // on — the two would fight over getUpdates (see class javadoc). Not a hard
+            // stop (moderation still mostly works, just with intermittent missed
+            // callback_query updates), but this needs to be loud, not a silent 409 loop.
+            log.error("Модерация и подписки одновременно включены — оба поллера делят app.telegram.channel-bot-token " +
+                "и будут конфликтовать за getUpdates (см. javadoc ModerationBotPoller). Нужен отдельный токен для одного из них.");
         }
         running = true;
         Thread.ofVirtual().name("moderation-bot-poller").start(this::pollLoop);
@@ -92,7 +107,7 @@ public class ModerationBotPoller {
     }
 
     private void poll() throws Exception {
-        String url = String.format(GET_UPDATES_URL, botToken, offset);
+        String url = String.format(GET_UPDATES_URL, channelBotToken, offset);
         HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
         conn.setRequestMethod("GET");
         conn.setConnectTimeout(10_000);
