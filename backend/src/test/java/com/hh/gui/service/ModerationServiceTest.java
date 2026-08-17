@@ -63,12 +63,17 @@ class ModerationServiceTest {
     private static class RecordingNotifier extends TelegramNotifier {
         final List<String> sentCards = new ArrayList<>();
         final List<Long> sentVacancyIds = new ArrayList<>();
+        final List<Long> deletedMessageIds = new ArrayList<>();
         boolean sendResult = true;
         @Override
         public boolean sendModerationCard(String message, long vacancyId) {
             sentCards.add(message);
             sentVacancyIds.add(vacancyId);
             return sendResult;
+        }
+        @Override
+        public void deleteModerationCard(long messageId) {
+            deletedMessageIds.add(messageId);
         }
     }
 
@@ -160,17 +165,37 @@ class ModerationServiceTest {
         SearchJob reconstructed = job("Без техстека", 10L);
         profileFactory.jobs.put(10L, reconstructed);
 
-        service.resolveApprove(7L);
+        service.resolveApprove(7L, 555L);
 
         assertEquals(List.of(7L), repo.approvedMarks);
         assertEquals(List.of(v), publisher.sentVacancies);
         assertSame(reconstructed, publisher.sentJob);
         assertTrue(repo.rejectedMarks.isEmpty());
+        assertEquals(List.of(555L), notifier.deletedMessageIds,
+            "карточка должна удаляться из чата после решения, а не висеть с кликабельными кнопками");
+    }
+
+    @Test
+    void resolveApprove_nullMessageId_doesNotAttemptDelete() {
+        Vacancy v = vacancy(7, 10L, "Аналитик");
+        repo.byId.put(7L, v);
+        profileFactory.jobs.put(10L, job("Без техстека", 10L));
+
+        service.resolveApprove(7L, null);
+
+        assertTrue(notifier.deletedMessageIds.isEmpty());
+    }
+
+    @Test
+    void resolveReject_deletesTheCard() {
+        service.resolveReject(4L, 777L);
+
+        assertEquals(List.of(777L), notifier.deletedMessageIds);
     }
 
     @Test
     void resolveApprove_vacancyNotFound_doesNotThrowOrPublish() {
-        assertDoesNotThrow(() -> service.resolveApprove(999L));
+        assertDoesNotThrow(() -> service.resolveApprove(999L, 555L));
         assertTrue(publisher.sentVacancies.isEmpty());
     }
 
@@ -181,7 +206,7 @@ class ModerationServiceTest {
         Vacancy v = vacancy(8, 999L, "Пропавший поиск");
         repo.byId.put(8L, v);
 
-        service.resolveApprove(8L);
+        service.resolveApprove(8L, 555L);
 
         assertEquals(List.of(8L), repo.rejectedMarks);
         assertTrue(publisher.sentVacancies.isEmpty());
@@ -194,7 +219,7 @@ class ModerationServiceTest {
         profileFactory.jobs.put(10L, job("Без техстека", 10L));
         repo.nextQueued = Optional.of(vacancy(9, 10L, "Следующая в очереди"));
 
-        service.resolveApprove(7L);
+        service.resolveApprove(7L, 555L);
 
         assertEquals(1, notifier.sentCards.size(), "после решения должна показаться следующая карточка");
         assertTrue(notifier.sentCards.get(0).contains("Следующая в очереди"));
@@ -204,7 +229,7 @@ class ModerationServiceTest {
     void resolveReject_marksRejectedAndAdvancesQueue() {
         repo.nextQueued = Optional.of(vacancy(9, 10L, "Следующая в очереди"));
 
-        service.resolveReject(4L);
+        service.resolveReject(4L, 555L);
 
         assertEquals(List.of(4L), repo.rejectedMarks);
         assertTrue(publisher.sentVacancies.isEmpty());
@@ -223,7 +248,7 @@ class ModerationServiceTest {
         repo.byId.put(7L, alreadyApproved);
         profileFactory.jobs.put(10L, job("Без техстека", 10L));
 
-        service.resolveApprove(7L);
+        service.resolveApprove(7L, 555L);
 
         assertTrue(publisher.sentVacancies.isEmpty(), "повторный approve не должен публиковать вакансию второй раз");
         assertTrue(repo.approvedMarks.isEmpty(), "moderation_status уже 'approved' — повторно помечать не нужно");
@@ -236,7 +261,7 @@ class ModerationServiceTest {
         repo.byId.put(7L, alreadyRejected);
         profileFactory.jobs.put(10L, job("Без техстека", 10L));
 
-        service.resolveApprove(7L);
+        service.resolveApprove(7L, 555L);
 
         assertTrue(publisher.sentVacancies.isEmpty(),
             "просроченный approve на уже отклонённую вакансию не должен всё равно публиковать её");
@@ -252,7 +277,7 @@ class ModerationServiceTest {
         repo.byId.put(7L, stillQueued);
         profileFactory.jobs.put(10L, job("Без техстека", 10L));
 
-        service.resolveApprove(7L);
+        service.resolveApprove(7L, 555L);
 
         assertTrue(publisher.sentVacancies.isEmpty());
     }
@@ -263,7 +288,7 @@ class ModerationServiceTest {
         alreadyApproved.setModerationStatus("approved");
         repo.byId.put(7L, alreadyApproved);
 
-        service.resolveReject(7L);
+        service.resolveReject(7L, 555L);
 
         assertTrue(repo.rejectedMarks.isEmpty(),
             "просроченный reject не должен задним числом отменять уже состоявшуюся публикацию");

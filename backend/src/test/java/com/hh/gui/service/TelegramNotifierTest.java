@@ -84,6 +84,17 @@ class TelegramNotifierTest {
             ex.sendResponseHeaders(200, -1);
             ex.close();
         });
+        server.createContext("/botGOODTOKEN/deleteMessage", ex -> {
+            lastPath.set(ex.getRequestURI().toString());
+            ex.sendResponseHeaders(200, -1);
+            ex.close();
+        });
+        server.createContext("/botBADTOKEN/deleteMessage", ex -> {
+            byte[] body = "{\"ok\":false,\"description\":\"Bad Request: message to delete not found\"}".getBytes(StandardCharsets.UTF_8);
+            ex.sendResponseHeaders(400, body.length);
+            ex.getResponseBody().write(body);
+            ex.close();
+        });
         server.createContext("/botBADTOKEN/answerCallbackQuery", ex -> {
             byte[] body = "{\"ok\":false,\"description\":\"Bad Request\"}".getBytes(StandardCharsets.UTF_8);
             ex.sendResponseHeaders(400, body.length);
@@ -296,6 +307,34 @@ class TelegramNotifierTest {
         ReflectionTestUtils.setField(notifier, "chatId", "");
 
         assertFalse(notifier.sendModerationCard("Текст", 1L));
+    }
+
+    @Test
+    void deleteModerationCard_success_sendsChatIdAndMessageId() {
+        ReflectionTestUtils.setField(notifier, "channelBotToken", "GOODTOKEN");
+        ReflectionTestUtils.setField(notifier, "chatId", "-100123");
+
+        assertDoesNotThrow(() -> notifier.deleteModerationCard(555L));
+
+        assertTrue(lastPath.get().contains("/botGOODTOKEN/deleteMessage"));
+        assertTrue(lastPath.get().contains("chat_id=-100123"));
+        assertTrue(lastPath.get().contains("message_id=555"));
+    }
+
+    @Test
+    void deleteModerationCard_failure_isBestEffort_doesNotThrow() {
+        ReflectionTestUtils.setField(notifier, "channelBotToken", "BADTOKEN");
+        ReflectionTestUtils.setField(notifier, "chatId", "-100123");
+
+        assertDoesNotThrow(() -> notifier.deleteModerationCard(555L));
+    }
+
+    @Test
+    void deleteModerationCard_missingToken_doesNotThrow() {
+        ReflectionTestUtils.setField(notifier, "channelBotToken", "");
+        ReflectionTestUtils.setField(notifier, "chatId", "-100123");
+
+        assertDoesNotThrow(() -> notifier.deleteModerationCard(555L));
     }
 
     @Test

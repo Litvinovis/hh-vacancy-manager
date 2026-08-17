@@ -185,15 +185,24 @@ public class ModerationBotPoller {
 
         telegramNotifier.answerCallbackQuery(callbackQueryId);
 
+        // The tapped message's own id — needed to delete the card afterward (see
+        // ModerationService) so the ✅/❌ buttons don't just sit there clickable forever.
+        // Absent (rare: an old/edited message) means "nothing to clean up", not an error.
+        Long messageId = null;
+        if (callback.get("message") instanceof Map<?, ?> message
+                && message.get("message_id") instanceof Number messageIdNum) {
+            messageId = messageIdNum.longValue();
+        }
+
         Long vacancyId = parseVacancyId(data);
         if (vacancyId == null) {
             log.warn("Нераспознанный callback_data модерации: {}", data);
             return;
         }
         if (data.startsWith("modpub:")) {
-            moderationService.resolveApprove(vacancyId);
+            moderationService.resolveApprove(vacancyId, messageId);
         } else if (data.startsWith("modrej:")) {
-            moderationService.resolveReject(vacancyId);
+            moderationService.resolveReject(vacancyId, messageId);
         } else {
             log.warn("Нераспознанный callback_data модерации: {}", data);
         }
