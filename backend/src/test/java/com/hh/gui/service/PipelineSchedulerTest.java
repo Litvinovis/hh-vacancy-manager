@@ -53,7 +53,7 @@ class PipelineSchedulerTest {
 
         RecordingPipeline(RuntimeConfig config) {
             super(null, null, null, null, config, null, new FeatureFlags(), null,
-                new TelegramMetrics(new SimpleMeterRegistry()), null, null, null);
+                new TelegramMetrics(new SimpleMeterRegistry()), null, null, null, null);
         }
         private void maybeFail(SearchJob job) {
             if (failOn.contains(job.searchName)) throw new IllegalStateException("сломался поиск " + job.searchName);
@@ -233,7 +233,7 @@ class PipelineSchedulerTest {
         telegramMetrics = new TelegramMetrics(metricsRegistry);
         scheduler = new PipelineScheduler(pipeline, profiles, config, analyzer, searchRepo,
             freeModels, flags, schema, subscriptions, publisher, engagement, vacancyRepo,
-            telegramMetrics);
+            telegramMetrics, null);
     }
 
     private List<TriggerTask> tasks() {
@@ -273,7 +273,7 @@ class PipelineSchedulerTest {
 
     @Test
     void configureTasks_registersEveryTrigger() {
-        assertEquals(13, tasks().size(),
+        assertEquals(14, tasks().size(),
             "все триггеры должны быть зарегистрированы — молча пропавший = молча не работающая функция");
     }
 
@@ -407,7 +407,7 @@ class PipelineSchedulerTest {
             }
         };
         scheduler = new PipelineScheduler(pipeline, profiles, config, analyzer, searchRepo,
-            freeModels, flags, schema, subscriptions, publisher, engagement, throwing, telegramMetrics);
+            freeModels, flags, schema, subscriptions, publisher, engagement, throwing, telegramMetrics, null);
 
         assertDoesNotThrow(this::runAllTasks);
     }
@@ -552,7 +552,7 @@ class PipelineSchedulerTest {
         };
         scheduler = new PipelineScheduler(pipeline, profiles, config, analyzer, searchRepo,
             freeModels, flags, schema, subscriptions, exploding, engagement, vacancyRepo,
-            new TelegramMetrics(new SimpleMeterRegistry()));
+            new TelegramMetrics(new SimpleMeterRegistry()), null);
 
         assertDoesNotThrow(this::runAllTasks);
     }

@@ -125,6 +125,72 @@ public class TelegramNotifier {
         }
     }
 
+    /**
+     * A moderation card: personal bot, default chat (app.telegram.chat-id — the owner's
+     * own DM, same fallback send(String) uses), with two inline buttons whose callback_data
+     * ModerationBotPoller dispatches back to ModerationService. Unlike doSend, this can't
+     * go through the plain sendMessage form body — reply_markup is JSON, not a flat field.
+     */
+    public boolean sendModerationCard(String message, long vacancyId) {
+        if (botToken == null || botToken.isEmpty()) {
+            log.warn("Токен Telegram-бота не настроен — карточка модерации не отправлена");
+            return false;
+        }
+        if (chatId == null || chatId.isBlank()) {
+            log.warn("app.telegram.chat-id не настроен — некуда отправить карточку модерации");
+            return false;
+        }
+        String replyMarkup = "{\"inline_keyboard\":[[" +
+            "{\"text\":\"✅ Опубликовать\",\"callback_data\":\"modpub:" + vacancyId + "\"}," +
+            "{\"text\":\"❌ Отклонить\",\"callback_data\":\"modrej:" + vacancyId + "\"}" +
+            "]]}";
+        try {
+            String url = apiBaseUrl + "/bot" + botToken + "/sendMessage";
+            HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
+            conn.setRequestMethod("POST");
+            conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
+            conn.setConnectTimeout(15000);
+            conn.setReadTimeout(30000);
+            conn.setDoOutput(true);
+
+            String body = "chat_id=" + URLEncoder.encode(chatId, StandardCharsets.UTF_8)
+                + "&text=" + URLEncoder.encode(message, StandardCharsets.UTF_8)
+                + "&parse_mode=HTML&disable_web_page_preview=true"
+                + "&reply_markup=" + URLEncoder.encode(replyMarkup, StandardCharsets.UTF_8);
+
+            try (OutputStream os = conn.getOutputStream()) {
+                os.write(body.getBytes(StandardCharsets.UTF_8));
+            }
+
+            int code = conn.getResponseCode();
+            if (code == 200) return true;
+            log.error("Ошибка отправки карточки модерации {}: {}", code, HttpUtil.readBody(conn, code));
+            return false;
+        } catch (Exception e) {
+            log.error("Не удалось отправить карточку модерации: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    /** Stops the loading spinner on the button the admin just tapped — Telegram shows it
+     *  indefinitely otherwise. Best-effort: a failure here doesn't undo the decision, which
+     *  has already been applied by the time this is called. */
+    public void answerCallbackQuery(String callbackQueryId) {
+        if (botToken == null || botToken.isEmpty()) return;
+        try {
+            String url = apiBaseUrl + "/bot" + botToken + "/answerCallbackQuery?callback_query_id="
+                + URLEncoder.encode(callbackQueryId, StandardCharsets.UTF_8);
+            HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
+            conn.setRequestMethod("POST");
+            conn.setConnectTimeout(10000);
+            conn.setReadTimeout(15000);
+            int code = conn.getResponseCode();
+            if (code != 200) log.warn("answerCallbackQuery вернул {}: {}", code, HttpUtil.readBody(conn, code));
+        } catch (Exception e) {
+            log.warn("Не удалось подтвердить callback_query: {}", e.getMessage());
+        }
+    }
+
     private boolean doSend(String token, String missingTokenMessage, String message, String resolvedChatId) {
         if (token == null || token.isEmpty()) {
             log.warn(missingTokenMessage);

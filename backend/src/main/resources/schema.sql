@@ -101,6 +101,9 @@ CREATE TABLE IF NOT EXISTS vacancies (
     -- novelty_note is the short human-readable reason, shown with the color in posts.
     novelty_color TEXT DEFAULT '',
     novelty_note TEXT DEFAULT '',
+    -- none | queued | sent | approved | rejected — see ModerationService. Only
+    -- touched for EDITORIAL (public-channel) searches when app.moderation.enabled.
+    moderation_status TEXT NOT NULL DEFAULT 'none',
     -- ai_attempts: how many times this row was sent to the LLM while staying
     -- 'pending' (model silently omitted it from the answer). Past the cap the
     -- row is marked ai_verdict='error' instead of burning tokens forever.

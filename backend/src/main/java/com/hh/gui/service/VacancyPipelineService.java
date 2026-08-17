@@ -64,6 +64,7 @@ public class VacancyPipelineService {
     private final ScrapeCooldown scrapeCooldown;
     private final FeatureFlags featureFlags;
     private final SubscriptionService subscriptionService;
+    private final ModerationService moderationService;
 
     // Used by getBatchSize() below, at actual call time — by then this bean is fully
     // constructed and this field-injected @Value is populated, unlike the constructor
@@ -83,7 +84,8 @@ public class VacancyPipelineService {
                                    RuntimeConfig runtimeConfig, AiMetrics metrics, FeatureFlags featureFlags,
                                    SubscriptionService subscriptionService,
                                    TelegramMetrics telegramMetrics, ChannelPublisher channelPublisher,
-                                   VacancyDiscovery discovery, ScrapeCooldown scrapeCooldown) {
+                                   VacancyDiscovery discovery, ScrapeCooldown scrapeCooldown,
+                                   ModerationService moderationService) {
         this.scraperClient = scraperClient;
         this.aiAnalyzer = aiAnalyzer;
         this.vacancyRepo = vacancyRepo;
@@ -96,6 +98,7 @@ public class VacancyPipelineService {
         this.channelPublisher = channelPublisher;
         this.discovery = discovery;
         this.scrapeCooldown = scrapeCooldown;
+        this.moderationService = moderationService;
     }
 
     public boolean isNotificationsEnabled() { return runtimeConfig.isNotificationsEnabled(); }
@@ -957,7 +960,17 @@ public class VacancyPipelineService {
 
         if (primaryWillSend) {
             if (usePublicFormat) {
-                channelPublisher.send(approved, job);
+                // Manual gate for the public channel: an EDITORIAL job holds here for a
+                // human ✅/❌ instead of going straight out (see ModerationService). Scoped
+                // to EDITORIAL specifically, not just usePublicFormat, since that's what
+                // "публичный канал" was scoped to when this was requested — a PERSONAL job
+                // that happens to use the public template (if that combination is ever
+                // used) still publishes automatically, unmoderated.
+                if (featureFlags.isModerationEnabled() && job.kind != null && job.kind.isEditorial()) {
+                    moderationService.queueForModeration(approved, job);
+                } else {
+                    channelPublisher.send(approved, job);
+                }
             } else {
                 sendPersonalReport(approved, job);
             }

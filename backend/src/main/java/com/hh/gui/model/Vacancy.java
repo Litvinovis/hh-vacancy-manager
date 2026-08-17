@@ -22,6 +22,10 @@ public class Vacancy {
     // color in public posts.
     private String noveltyColor;
     private String noveltyNote;
+    // none | queued | sent | approved | rejected — see ModerationService. Written/read
+    // through dedicated repository methods (markModerationQueued etc.), not the general
+    // save()/update() path — same pattern as ai_verdict via updateAiResult.
+    private String moderationStatus;
     private String description;
     private String status;
     private String rejectionReason;
@@ -107,6 +111,9 @@ public class Vacancy {
 
     public String getNoveltyColor() { return noveltyColor; }
     public void setNoveltyColor(String noveltyColor) { this.noveltyColor = noveltyColor; }
+
+    public String getModerationStatus() { return moderationStatus; }
+    public void setModerationStatus(String moderationStatus) { this.moderationStatus = moderationStatus; }
 
     public String getNoveltyNote() { return noveltyNote; }
     public void setNoveltyNote(String noveltyNote) { this.noveltyNote = noveltyNote; }

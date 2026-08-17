@@ -65,6 +65,7 @@ class VacancyPipelineServiceTest {
         private io.micrometer.core.instrument.MeterRegistry registry =
             new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
         private ScrapeCooldown cooldown = new ScrapeCooldown();
+        private SearchProfileFactory profileFactory;
 
         Builder scraper(ScraperClient v) { this.scraper = v; return this; }
         Builder telegram(TelegramClient v) { this.telegram = v; return this; }
@@ -79,6 +80,8 @@ class VacancyPipelineServiceTest {
         Builder metricsRegistry(io.micrometer.core.instrument.MeterRegistry v) { this.registry = v; return this; }
         /** Shared with the caller when a test asserts on the scrape freeze. */
         Builder cooldown(ScrapeCooldown v) { this.cooldown = v; return this; }
+        /** Only when a test actually reaches the moderation-enabled path. */
+        Builder profileFactory(SearchProfileFactory v) { this.profileFactory = v; return this; }
 
         VacancyPipelineService build() {
             TelegramMetrics tgMetrics = new TelegramMetrics(registry);
@@ -95,8 +98,10 @@ class VacancyPipelineServiceTest {
                 new ChannelEngagementTracker(searchRepo, telegram, notifier, tgMetrics);
             VacancyDiscovery discovery = new VacancyDiscovery(null, scraper, telegram, analyzer, repo,
                 tgMetrics, engagement, cooldown, resolvedAiMetrics);
+            ModerationService moderationService = new ModerationService(repo, profileFactory, publisher, notifier);
             return new VacancyPipelineService(scraper, analyzer, repo, notifier,
-                config, resolvedAiMetrics, featureFlags, null, tgMetrics, publisher, discovery, cooldown);
+                config, resolvedAiMetrics, featureFlags, null, tgMetrics, publisher, discovery, cooldown,
+                moderationService);
         }
     }
 
@@ -645,6 +650,7 @@ class VacancyPipelineServiceTest {
         List<Vacancy> alreadyNotified = List.of();
         List<Vacancy> unresolvedEmployerPool = List.of();
         final List<Long> markedNotified = new ArrayList<>();
+        final List<Long> markedModerationQueued = new ArrayList<>();
         FakeSimilarityRepo() { super(null); }
         @Override
         public List<Vacancy> findNotifiedByEmployer(String person, String searchName, String employerName) {
@@ -657,6 +663,10 @@ class VacancyPipelineServiceTest {
         @Override
         public void markNotified(List<Long> ids) {
             markedNotified.addAll(ids);
+        }
+        @Override
+        public void markModerationQueued(List<Long> ids) {
+            markedModerationQueued.addAll(ids);
         }
     }
 
@@ -851,6 +861,83 @@ class VacancyPipelineServiceTest {
         assertEquals(1, notifier.sent.size(), "личный отчёт не фильтруется по компании/зарплате");
     }
 
+    // ── Ручная модерация публичных постов ──
+
+    private static class ModerationEnabledFlags extends FeatureFlags {
+        @Override public boolean isPublicFormatEnabled() { return true; }
+        @Override public boolean isModerationEnabled() { return true; }
+    }
+
+    private SearchJob editorialJob() {
+        SearchJob job = publicJob();
+        job.kind = com.hh.gui.model.SearchKind.EDITORIAL;
+        return job;
+    }
+
+    @Test
+    void sendReport_editorialWithModerationEnabled_queuesInsteadOfPublishing() throws Exception {
+        RuntimeConfig config = new RuntimeConfig();
+        config.setChannelNotificationsEnabled(true);
+        FakeSimilarityRepo repo = new FakeSimilarityRepo();
+        RecordingChannelNotifier notifier = new RecordingChannelNotifier();
+        VacancyPipelineService svc = service().repo(repo).notifier(notifier).config(config)
+            .featureFlags(new ModerationEnabledFlags()).build();
+
+        Vacancy candidate = vacancy("Оператор поддержки", "Подходит", 75);
+        candidate.setId(80L);
+        candidate.setSalaryFrom(50000);
+        candidate.setDescription("Обязанности: отвечать клиентам\nТребования: без опыта");
+
+        sendReport(svc, List.of(candidate), editorialJob());
+
+        assertTrue(notifier.sent.isEmpty(), "модерация должна перехватить публикацию — прямой отправки быть не должно");
+        assertEquals(List.of(80L), repo.markedModerationQueued);
+    }
+
+    @Test
+    void sendReport_editorialWithModerationDisabled_publishesDirectly() throws Exception {
+        // Контрольный случай: тот же EDITORIAL-джоб, но флаг модерации выключен —
+        // должен работать ровно как раньше, без задержки на человека.
+        RuntimeConfig config = new RuntimeConfig();
+        config.setChannelNotificationsEnabled(true);
+        FakeSimilarityRepo repo = new FakeSimilarityRepo();
+        RecordingChannelNotifier notifier = new RecordingChannelNotifier();
+        VacancyPipelineService svc = service().repo(repo).notifier(notifier).config(config)
+            .featureFlags(new TogglableFlags()).build();
+
+        Vacancy candidate = vacancy("Оператор поддержки", "Подходит", 75);
+        candidate.setId(81L);
+        candidate.setSalaryFrom(50000);
+        candidate.setDescription("Обязанности: отвечать клиентам\nТребования: без опыта");
+
+        sendReport(svc, List.of(candidate), editorialJob());
+
+        assertEquals(1, notifier.sent.size(), "без включённой модерации публикация должна идти как раньше");
+        assertTrue(repo.markedModerationQueued.isEmpty());
+    }
+
+    @Test
+    void sendReport_personalKindWithModerationEnabled_stillPublishesDirectly() throws Exception {
+        // Модерация специально ограничена EDITORIAL — публичный формат на PERSONAL-джобе
+        // (если такая комбинация вообще встретится) не должен неожиданно зависать на человеке.
+        RuntimeConfig config = new RuntimeConfig();
+        config.setChannelNotificationsEnabled(true);
+        FakeSimilarityRepo repo = new FakeSimilarityRepo();
+        RecordingChannelNotifier notifier = new RecordingChannelNotifier();
+        VacancyPipelineService svc = service().repo(repo).notifier(notifier).config(config)
+            .featureFlags(new ModerationEnabledFlags()).build();
+
+        Vacancy candidate = vacancy("Оператор поддержки", "Подходит", 75);
+        candidate.setId(82L);
+        candidate.setSalaryFrom(50000);
+        candidate.setDescription("Обязанности: отвечать клиентам\nТребования: без опыта");
+
+        sendReport(svc, List.of(candidate), publicJob()); // kind остаётся PERSONAL по умолчанию
+
+        assertEquals(1, notifier.sent.size());
+        assertTrue(repo.markedModerationQueued.isEmpty());
+    }
+
     // ── Взаимное исключение прогонов одного поиска ──
 
     /** Считает, сколько прогонов одного поиска выполнялось одновременно. */
@@ -863,7 +950,7 @@ class VacancyPipelineServiceTest {
 
         ConcurrencyProbe(RuntimeConfig config) {
             super(null, null, null, null, config, null, new FeatureFlags(), null,
-                new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()), null, null, null);
+                new TelegramMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()), null, null, null, null);
         }
 
         @Override
