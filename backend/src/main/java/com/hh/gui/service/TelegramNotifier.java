@@ -181,6 +181,30 @@ public class TelegramNotifier {
         }
     }
 
+    /**
+     * Removes a resolved moderation card entirely, rather than leaving its ✅/❌ buttons
+     * sitting there clickable forever (Telegram doesn't grey out inline buttons on its
+     * own just because the vacancy was already decided). Same bot as sendModerationCard —
+     * only the bot that sent a message may delete it. Best-effort: a failure here is a
+     * cosmetic leftover, not a reason to fail the decision that already went through.
+     */
+    public void deleteModerationCard(long messageId) {
+        if (channelBotToken == null || channelBotToken.isEmpty()) return;
+        if (chatId == null || chatId.isBlank()) return;
+        try {
+            String url = apiBaseUrl + "/bot" + channelBotToken + "/deleteMessage?chat_id="
+                + URLEncoder.encode(chatId, StandardCharsets.UTF_8) + "&message_id=" + messageId;
+            HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
+            conn.setRequestMethod("POST");
+            conn.setConnectTimeout(10000);
+            conn.setReadTimeout(15000);
+            int code = conn.getResponseCode();
+            if (code != 200) log.warn("deleteMessage({}) вернул {}: {}", messageId, code, HttpUtil.readBody(conn, code));
+        } catch (Exception e) {
+            log.warn("Не удалось удалить карточку модерации: {}", e.getMessage());
+        }
+    }
+
     /** Stops the loading spinner on the button the admin just tapped — Telegram shows it
      *  indefinitely otherwise. Best-effort: a failure here doesn't undo the decision, which
      *  has already been applied by the time this is called. */

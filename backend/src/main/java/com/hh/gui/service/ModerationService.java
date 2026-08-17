@@ -66,16 +66,23 @@ public class ModerationService {
 
     /** ✅ tapped: publishes exactly like the automatic path would have (same
      *  ChannelPublisher.send, immediate-or-paced per the search's own publishPaceMinutes),
-     *  just for this one vacancy instead of a whole approved batch. */
-    public void resolveApprove(Long vacancyId) {
+     *  just for this one vacancy instead of a whole approved batch.
+     *  @param messageId the tapped card's own message id, so it can be deleted afterward
+     *                    (see TelegramNotifier.deleteModerationCard) instead of leaving
+     *                    its ✅/❌ buttons sitting there clickable forever — null on the
+     *                    rare update shape that doesn't carry one, in which case there's
+     *                    just nothing to clean up. */
+    public void resolveApprove(Long vacancyId, Long messageId) {
         Optional<Vacancy> vacancyOpt = vacancyRepo.findById(vacancyId);
         if (vacancyOpt.isEmpty()) {
             log.warn("Модерация: вакансия id={} не найдена (approve)", vacancyId);
+            deleteCard(messageId);
             advanceQueue();
             return;
         }
         Vacancy v = vacancyOpt.get();
         if (!alreadySent(v, vacancyId, "approve")) {
+            deleteCard(messageId);
             advanceQueue(); // no-op unless the queue is somehow stuck with nothing 'sent'
             return;
         }
@@ -84,36 +91,45 @@ public class ModerationService {
             log.warn("Модерация: не удалось восстановить поиск для вакансии id={} (search_id={}) — публикация отменена",
                 vacancyId, v.getSearchId());
             vacancyRepo.markModerationRejected(vacancyId);
+            deleteCard(messageId);
             advanceQueue();
             return;
         }
         vacancyRepo.markModerationApproved(vacancyId);
         channelPublisher.send(List.of(v), jobOpt.get());
+        deleteCard(messageId);
         advanceQueue();
     }
 
-    /** ❌ tapped: resolved as never-publish, same as a similarity-dedup drop. */
-    public void resolveReject(Long vacancyId) {
+    /** ❌ tapped: resolved as never-publish, same as a similarity-dedup drop.
+     *  @param messageId see resolveApprove's javadoc. */
+    public void resolveReject(Long vacancyId, Long messageId) {
         Optional<Vacancy> vacancyOpt = vacancyRepo.findById(vacancyId);
         if (vacancyOpt.isPresent() && !alreadySent(vacancyOpt.get(), vacancyId, "reject")) {
+            deleteCard(messageId);
             advanceQueue();
             return;
         }
         vacancyRepo.markModerationRejected(vacancyId);
+        deleteCard(messageId);
         advanceQueue();
+    }
+
+    private void deleteCard(Long messageId) {
+        if (messageId != null) telegramNotifier.deleteModerationCard(messageId);
     }
 
     /**
      * True only when the vacancy is still waiting on a decision ('sent' — the state
-     * advanceQueue put it in right before the card went out). A Telegram button tap
-     * fires callback_query, and Telegram keeps redelivering an update until getUpdates
-     * is called with an offset past it — ModerationBotPoller's offset lives in memory
-     * only (see its javadoc), so it resets on every app restart and the SAME old tap
-     * gets replayed. Live-observed: dozens of vacancies auto-published across several
-     * restarts with no one touching a button, all traced back to this. Guarding on the
-     * expected precondition state makes every handler here safe to call twice (or a
-     * hundred times) for the same vacancy — a replay just finds it no longer 'sent'
-     * and is a no-op, logged so a real bug elsewhere doesn't look like ordinary drift.
+     * advanceQueue put it in right before the card went out). ModerationBotPoller now
+     * persists its offset (see its javadoc), so a genuine restart-triggered replay of an
+     * already-resolved callback_query shouldn't recur — but this guard stays as a second,
+     * independent safety net regardless of the reason a stale/duplicate tap might arrive.
+     * Live-observed before the offset fix: dozens of vacancies auto-published across
+     * several restarts with no one touching a button, all traced back to that. Guarding
+     * on the expected precondition state makes every handler here safe to call twice (or
+     * a hundred times) for the same vacancy — a replay just finds it no longer 'sent' and
+     * is a no-op, logged so a real bug elsewhere doesn't look like ordinary drift.
      */
     private boolean alreadySent(Vacancy v, Long vacancyId, String action) {
         if ("sent".equals(v.getModerationStatus())) return true;
