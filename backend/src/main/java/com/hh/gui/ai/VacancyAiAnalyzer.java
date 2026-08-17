@@ -823,10 +823,17 @@ public class VacancyAiAnalyzer {
             Integer aiSalaryTo = salaryToVal instanceof Number n && n.intValue() > 0 ? n.intValue() : null;
             Object currencyVal = item.get("currency");
             String aiCurrency = currencyVal instanceof String s && !s.isBlank() ? s : null;
+            // The model sometimes HTML-entity-escapes special characters inside its own
+            // JSON string values (observed live: "Research &amp; Data Analyst") — decoded
+            // here for the same reason VacancyPipelineService.decodeEntities() exists for
+            // the scraper path: written raw, this gets double-escaped on the way out to
+            // Telegram ("&amp;amp;") instead of showing a plain "&".
             Object companyVal = item.get("company");
-            String aiCompany = companyVal instanceof String s && !s.isBlank() ? s : null;
+            String aiCompany = companyVal instanceof String s && !s.isBlank()
+                ? org.jsoup.parser.Parser.unescapeEntities(s, false) : null;
             Object titleVal = item.get("title");
-            String aiTitle = titleVal instanceof String s && !s.isBlank() ? s : null;
+            String aiTitle = titleVal instanceof String s && !s.isBlank()
+                ? org.jsoup.parser.Parser.unescapeEntities(s, false) : null;
             if (aiTitle != null && aiTitle.length() > 150) aiTitle = aiTitle.substring(0, 147) + "...";
 
             results.add(new AiResult(id, Math.max(0, Math.min(100, score)), verdict, reason, noveltyColor, noveltyNote,
