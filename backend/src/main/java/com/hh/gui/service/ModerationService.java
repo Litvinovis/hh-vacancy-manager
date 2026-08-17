@@ -75,6 +75,10 @@ public class ModerationService {
             return;
         }
         Vacancy v = vacancyOpt.get();
+        if (!alreadySent(v, vacancyId, "approve")) {
+            advanceQueue(); // no-op unless the queue is somehow stuck with nothing 'sent'
+            return;
+        }
         Optional<SearchJob> jobOpt = v.getSearchId() != null ? profileFactory.buildForSearchId(v.getSearchId()) : Optional.empty();
         if (jobOpt.isEmpty()) {
             log.warn("Модерация: не удалось восстановить поиск для вакансии id={} (search_id={}) — публикация отменена",
@@ -90,7 +94,31 @@ public class ModerationService {
 
     /** ❌ tapped: resolved as never-publish, same as a similarity-dedup drop. */
     public void resolveReject(Long vacancyId) {
+        Optional<Vacancy> vacancyOpt = vacancyRepo.findById(vacancyId);
+        if (vacancyOpt.isPresent() && !alreadySent(vacancyOpt.get(), vacancyId, "reject")) {
+            advanceQueue();
+            return;
+        }
         vacancyRepo.markModerationRejected(vacancyId);
         advanceQueue();
+    }
+
+    /**
+     * True only when the vacancy is still waiting on a decision ('sent' — the state
+     * advanceQueue put it in right before the card went out). A Telegram button tap
+     * fires callback_query, and Telegram keeps redelivering an update until getUpdates
+     * is called with an offset past it — ModerationBotPoller's offset lives in memory
+     * only (see its javadoc), so it resets on every app restart and the SAME old tap
+     * gets replayed. Live-observed: dozens of vacancies auto-published across several
+     * restarts with no one touching a button, all traced back to this. Guarding on the
+     * expected precondition state makes every handler here safe to call twice (or a
+     * hundred times) for the same vacancy — a replay just finds it no longer 'sent'
+     * and is a no-op, logged so a real bug elsewhere doesn't look like ordinary drift.
+     */
+    private boolean alreadySent(Vacancy v, Long vacancyId, String action) {
+        if ("sent".equals(v.getModerationStatus())) return true;
+        log.info("Модерация: повтор/устаревший callback ({}) для id={}, но статус уже '{}' — пропускаем (вероятно, replay после рестарта)",
+            action, vacancyId, v.getModerationStatus());
+        return false;
     }
 }
