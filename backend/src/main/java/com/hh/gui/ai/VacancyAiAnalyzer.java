@@ -244,6 +244,8 @@ public class VacancyAiAnalyzer {
             try {
                 return parseResponse(callLlm(prompt, maxTokens), List.of());
             } catch (Exception e) {
+                LlmException.Kind kind = e instanceof LlmException le ? le.kind() : LlmException.Kind.TRANSPORT;
+                metrics.recordAnalysisFailure(providerManager.getCurrentProviderName(), kind.name(), "prescreen");
                 if (attempt >= 2) throw e;
                 log.warn("Прескрининг: попытка {} не удалась ({}), повторяем", attempt, e.getMessage());
             }
@@ -330,6 +332,7 @@ public class VacancyAiAnalyzer {
             } catch (Exception e) {
                 attempt++;
                 LlmException.Kind kind = e instanceof LlmException le ? le.kind() : LlmException.Kind.TRANSPORT;
+                metrics.recordAnalysisFailure(providerManager.getCurrentProviderName(), kind.name(), "analyze");
                 boolean isAuthError = kind == LlmException.Kind.AUTH;
 
                 if (isAuthError || attempt >= maxRetries) {

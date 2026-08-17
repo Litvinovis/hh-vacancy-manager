@@ -47,6 +47,8 @@ class ChannelPublisherTest {
         Builder searchRepo(SearchRepository v) { this.searchRepo = v; return this; }
         Builder notifier(TelegramNotifier v) { this.notifier = v; return this; }
         Builder config(RuntimeConfig v) { this.config = v; return this; }
+        /** Only when a test asserts on the recorded metrics and needs the registry back. */
+        Builder metricsRegistry(SimpleMeterRegistry v) { this.registry = v; return this; }
 
         ChannelPublisher build() {
             return new ChannelPublisher(repo, searchRepo, notifier, new TelegramMetrics(registry), config);
@@ -340,6 +342,25 @@ class ChannelPublisherTest {
 
         assertEquals(2, notifier.sentMessages.size(), "без темпа публикации каждая вакансия уходит своим постом");
         assertEquals(List.of(1L, 2L), repo.notifiedIds);
+    }
+
+    @Test
+    void send_withoutPace_recordsChannelPostPerVacancy() {
+        // channel_posts_published_total is tagged by search, not by source channel
+        // (see telegramMetrics.recordChannelPost) — this is what an hh.ru-URL-discovered
+        // search (no "tg_<channel>_<id>" hh_id, so recordPublished's channel tag is
+        // always null) needs for its posts to show up in "publications per hour" at all.
+        FakeDueQueueRepo repo = new FakeDueQueueRepo();
+        RecordingChannelBotNotifier notifier = new RecordingChannelBotNotifier();
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        ChannelPublisher publisher = publisher().repo(repo).notifier(notifier).metricsRegistry(registry).build();
+        SearchJob job = job();
+        job.publishPaceMinutes = null;
+
+        publisher.send(List.of(vacancy(1, "12345678", "Без ссылки на источник"),
+            vacancy(2, "87654321", "Вторая")), job);
+
+        assertEquals(2.0, registry.find("channel_posts_published_total").tag("search", job.searchName).counter().count());
     }
 
     @Test

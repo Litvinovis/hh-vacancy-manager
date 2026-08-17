@@ -61,6 +61,21 @@ public class TelegramMetrics {
         registry.counter("telegram_published_total", "application", "hh-gui", "channel", channel).increment();
     }
 
+    /**
+     * A vacancy actually went out to a public-facing destination — queued channel post,
+     * delayed channel, or subscriber broadcast — tagged by which SEARCH it came from
+     * rather than which Telegram SOURCE channel it was discovered on (recordPublished's
+     * tag), because hh.ru-URL-discovered vacancies have no source channel at all and
+     * would otherwise vanish from "posts published" entirely (channelFromHhId returns
+     * null for a plain numeric hh_id, and recordPublished no-ops on a null channel).
+     * One increment per vacancy per destination it's actually sent to, not per recipient —
+     * a subscriber broadcast to 50 chat_ids is still one posting, not fifty.
+     */
+    public void recordChannelPost(String searchName) {
+        if (searchName == null) return;
+        registry.counter("channel_posts_published_total", "application", "hh-gui", "search", searchName).increment();
+    }
+
     /** Total views summed across the posts just re-scraped from this channel — called both
      *  for source channels (VacancyDiscovery.fromTelegram) and the app's own output
      *  channel (ChannelEngagementTracker.checkOwnChannels), told apart by the channel tag.

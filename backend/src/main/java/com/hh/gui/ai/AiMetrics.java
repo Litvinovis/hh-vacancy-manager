@@ -59,6 +59,20 @@ public class AiMetrics {
             "provider", provider, "status", String.valueOf(statusCode)).increment();
     }
 
+    /**
+     * Record a failed analysis attempt that exhausted its retry budget for one provider —
+     * covers everything recordError doesn't: an HTTP 200 with a malformed/incomplete
+     * response body (LlmException.Kind.BAD_RESPONSE — no "choices", empty content, no
+     * JSON array found) has no non-2xx status to tag, so it was previously only visible
+     * in logs, never in a metric. kind is LlmException.Kind.name() (BAD_RESPONSE/
+     * RATE_LIMIT/AUTH/TRANSPORT); stage tells apart the full-analysis prompt from the
+     * cheaper card prescreen, since they fail independently and at very different rates.
+     */
+    public void recordAnalysisFailure(String provider, String kind, String stage) {
+        registry.counter("ai_analysis_failures_total", "application", "hh-gui",
+            "provider", provider, "kind", kind, "stage", stage).increment();
+    }
+
     /** Record a 429 rate limit hit. */
     public void recordRateLimit(String provider) {
         registry.counter("ai_rate_limits_total", "application", "hh-gui", "provider", provider).increment();

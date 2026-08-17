@@ -269,7 +269,7 @@ class VacancyPipelineServiceTest {
         final List<SearchPageResult> pages;
         int calls = 0;
         FakeScraper(RuntimeConfig config, SearchPageResult... pages) {
-            super(config);
+            super(config, new com.hh.gui.client.ScraperMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
             this.pages = List.of(pages);
         }
         @Override
@@ -446,7 +446,9 @@ class VacancyPipelineServiceTest {
     private static class FreshnessScraper extends ScraperClient {
         final java.util.Map<String, ScrapeResult> byId = new java.util.HashMap<>();
         int calls = 0;
-        FreshnessScraper(RuntimeConfig config) { super(config); }
+        FreshnessScraper(RuntimeConfig config) {
+            super(config, new com.hh.gui.client.ScraperMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+        }
         @Override
         public ScrapeResult scrape(String hhId) {
             calls++;

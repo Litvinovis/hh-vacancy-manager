@@ -511,7 +511,7 @@ class VacancyDiscoveryTest {
         final List<SearchPageResult> pages;
         int calls = 0;
         FakeScraper(RuntimeConfig config, SearchPageResult... pages) {
-            super(config);
+            super(config, new com.hh.gui.client.ScraperMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
             this.pages = List.of(pages);
         }
         @Override

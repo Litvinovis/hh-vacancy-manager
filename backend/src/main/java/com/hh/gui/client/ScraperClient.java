@@ -33,10 +33,22 @@ public class ScraperClient {
     private String scraperBaseUrl;
 
     private final RuntimeConfig runtimeConfig;
+    private final ScraperMetrics metrics;
     private final ObjectMapper mapper = new ObjectMapper();
 
-    public ScraperClient(RuntimeConfig runtimeConfig) {
+    public ScraperClient(RuntimeConfig runtimeConfig, ScraperMetrics metrics) {
         this.runtimeConfig = runtimeConfig;
+        this.metrics = metrics;
+    }
+
+    /** Bounds label cardinality: a Java-side exception message ("client_error: Read timed
+     *  out") is unbounded free text — only the code before the first ':' (or the sidecar's
+     *  own short reason, which already is one) becomes the metric label. */
+    private static String normalizeReason(String reason) {
+        if (reason == null || reason.isBlank()) return "unknown";
+        int colon = reason.indexOf(':');
+        String base = colon > 0 ? reason.substring(0, colon) : reason;
+        return base.length() > 40 ? base.substring(0, 40) : base;
     }
 
     public record ScrapeResult(
@@ -72,6 +84,7 @@ public class ScraperClient {
             if (!Boolean.TRUE.equals(json.get("ok"))) {
                 String reason = String.valueOf(json.getOrDefault("reason", "unknown"));
                 log.warn("Скрейпинг не удался для hh_id={}: {}", hhId, reason);
+                metrics.recordFailure("scrape", normalizeReason(reason));
                 return ScrapeResult.failure(reason);
             }
 
@@ -89,6 +102,7 @@ public class ScraperClient {
                 str(json.get("datePosted")), str(json.get("validThrough")));
         } catch (Exception e) {
             log.error("Ошибка обращения к scraper-сервису для hh_id={}: {}", hhId, e.getMessage());
+            metrics.recordFailure("scrape", "client_error");
             return ScrapeResult.failure("client_error: " + e.getMessage());
         }
     }
@@ -143,6 +157,7 @@ public class ScraperClient {
             if (!Boolean.TRUE.equals(json.get("ok"))) {
                 String reason = String.valueOf(json.getOrDefault("reason", "unknown"));
                 log.warn("Поиск по ссылке не удался (страница {}): {}", page, reason);
+                metrics.recordFailure("search", normalizeReason(reason));
                 return SearchPageResult.failure(reason);
             }
 
@@ -162,6 +177,7 @@ public class ScraperClient {
             return new SearchPageResult(true, null, items, lastPageLabel);
         } catch (Exception e) {
             log.error("Ошибка обращения к scraper-сервису (поиск по ссылке, страница {}): {}", page, e.getMessage());
+            metrics.recordFailure("search", "client_error");
             return SearchPageResult.failure("client_error: " + e.getMessage());
         }
     }
