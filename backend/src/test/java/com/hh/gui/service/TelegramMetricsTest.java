@@ -131,6 +131,41 @@ class TelegramMetricsTest {
     }
 
     @Test
+    void refreshPublishedRolling_setsGaugePerSearch() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        TelegramMetrics metrics = new TelegramMetrics(registry);
+
+        metrics.refreshPublishedRolling(java.util.Map.of("Без техстека", 5, "Интересная удалёнка", 2));
+
+        assertEquals(5.0, registry.find("vacancies_published_rolling_1h").tag("search", "Без техстека").gauge().value());
+        assertEquals(2.0, registry.find("vacancies_published_rolling_1h").tag("search", "Интересная удалёнка").gauge().value());
+    }
+
+    @Test
+    void refreshPublishedRolling_searchMissingFromLatestSnapshot_zeroedNotStale() {
+        // A DB-backed gauge, not a Counter — a search that published nothing THIS
+        // window must drop back to 0, not keep showing an earlier tick's value.
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        TelegramMetrics metrics = new TelegramMetrics(registry);
+
+        metrics.refreshPublishedRolling(java.util.Map.of("Без техстека", 5));
+        metrics.refreshPublishedRolling(java.util.Map.of());
+
+        assertEquals(0.0, registry.find("vacancies_published_rolling_1h").tag("search", "Без техстека").gauge().value());
+    }
+
+    @Test
+    void refreshCollectedRolling_setsGaugePerSource() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        TelegramMetrics metrics = new TelegramMetrics(registry);
+
+        metrics.refreshCollectedRolling(java.util.Map.of("hh", 40, "telegram", 15));
+
+        assertEquals(40.0, registry.find("vacancies_collected_rolling_1d").tag("source", "hh").gauge().value());
+        assertEquals(15.0, registry.find("vacancies_collected_rolling_1d").tag("source", "telegram").gauge().value());
+    }
+
+    @Test
     void recordSubscribers_setsGaugeToLatestValue() {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         TelegramMetrics metrics = new TelegramMetrics(registry);

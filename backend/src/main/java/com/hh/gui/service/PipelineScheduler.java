@@ -67,6 +67,7 @@ public class PipelineScheduler implements SchedulingConfigurer {
     private final ChannelPublisher channelPublisher;
     private final ChannelEngagementTracker engagementTracker;
     private final VacancyRepository vacancyRepo;
+    private final TelegramMetrics telegramMetrics;
 
     // How often to check for approved vacancies whose delayed_publish_at has arrived
     // (see ChannelPublisher.publishDueDelayed). A 5-minute delay needs a check
@@ -91,6 +92,15 @@ public class PipelineScheduler implements SchedulingConfigurer {
     // Subscriber count only needs to move slowly enough for day/week deltas in Grafana
     // (see ChannelEngagementTracker.checkSubscribers) — every few minutes would be
     // pure Bot API noise for a number that changes a handful of times a day at most.
+    // DB-backed rolling-window gauges (see TelegramMetrics.refreshPublishedRolling/
+    // refreshCollectedRolling) — cheap enough (two grouped COUNT queries) to run
+    // often; a short interval keeps the "publications per hour" panel close to
+    // real-time without depending on an in-memory counter that resets on restart.
+    private static final Duration ROLLING_METRICS_REFRESH_INTERVAL = Duration.ofMinutes(2);
+    // Same immediate-first-firing race as SUBSCRIBER_COUNT_INITIAL_DELAY below — push
+    // the first read past the boot-time schema-migration window.
+    private static final Duration ROLLING_METRICS_INITIAL_DELAY = Duration.ofMinutes(1);
+
     private static final Duration SUBSCRIBER_COUNT_CHECK_INTERVAL = Duration.ofHours(6);
     // Without an initial delay, a PeriodicTrigger's first firing happens immediately at
     // registration — which on every deploy restart races schemaNotReady() (see its
@@ -118,7 +128,8 @@ public class PipelineScheduler implements SchedulingConfigurer {
                               RuntimeConfig runtimeConfig, VacancyAiAnalyzer aiAnalyzer, SearchRepository searchRepo,
                               FreeModelUpdater freeModelUpdater, FeatureFlags featureFlags, SchemaMigrator schemaMigrator,
                               SubscriptionService subscriptionService, ChannelPublisher channelPublisher,
-                              ChannelEngagementTracker engagementTracker, VacancyRepository vacancyRepo) {
+                              ChannelEngagementTracker engagementTracker, VacancyRepository vacancyRepo,
+                              TelegramMetrics telegramMetrics) {
         this.pipelineService = pipelineService;
         this.profileFactory = profileFactory;
         this.runtimeConfig = runtimeConfig;
@@ -131,6 +142,7 @@ public class PipelineScheduler implements SchedulingConfigurer {
         this.channelPublisher = channelPublisher;
         this.engagementTracker = engagementTracker;
         this.vacancyRepo = vacancyRepo;
+        this.telegramMetrics = telegramMetrics;
     }
 
     @Override
@@ -157,6 +169,24 @@ public class PipelineScheduler implements SchedulingConfigurer {
         PeriodicTrigger retentionTrigger = new PeriodicTrigger(RETENTION_CHECK_INTERVAL);
         retentionTrigger.setInitialDelay(RETENTION_INITIAL_DELAY);
         registrar.addTriggerTask(this::runRetentionCleanup, retentionTrigger);
+        PeriodicTrigger rollingMetricsTrigger = new PeriodicTrigger(ROLLING_METRICS_REFRESH_INTERVAL);
+        rollingMetricsTrigger.setInitialDelay(ROLLING_METRICS_INITIAL_DELAY);
+        registrar.addTriggerTask(this::refreshRollingCountGauges, rollingMetricsTrigger);
+    }
+
+    /** See TelegramMetrics.refreshPublishedRolling/refreshCollectedRolling — DB-backed
+     *  gauges that survive app restarts, unlike the Counter-based metrics recorded
+     *  inline during discovery/publish (telegram_collected_total, channel_posts_published_total). */
+    private void refreshRollingCountGauges() {
+        if (schemaNotReady()) return;
+        try {
+            telegramMetrics.refreshPublishedRolling(
+                vacancyRepo.countPublishedSince(Instant.now().minus(Duration.ofHours(1)).toString()));
+            telegramMetrics.refreshCollectedRolling(
+                vacancyRepo.countCollectedSince(Instant.now().minus(Duration.ofDays(1)).toString()));
+        } catch (Exception e) {
+            log.error("Обновление rolling-метрик из БД завершилось ошибкой: {}", e.getMessage(), e);
+        }
     }
 
     /**
