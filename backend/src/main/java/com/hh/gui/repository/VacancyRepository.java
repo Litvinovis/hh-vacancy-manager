@@ -58,6 +58,7 @@ public class VacancyRepository {
             v.setAiReason(rs.getString("ai_reason"));
             v.setNoveltyColor(rs.getString("novelty_color"));
             v.setNoveltyNote(rs.getString("novelty_note"));
+            v.setModerationStatus(rs.getString("moderation_status"));
             v.setDescription(rs.getString("description"));
             v.setStatus(rs.getString("status"));
             v.setRejectionReason(rs.getString("rejection_reason"));
@@ -520,11 +521,58 @@ public class VacancyRepository {
             // small maxApproved, nothing past the first `limit` ever got queued at all:
             // verified live, 487 approved sat invisible behind the same already-queued 10.
             "AND queued_publish_at IS NULL " +
+            // A row already sitting in the moderation queue/awaiting the admin's tap
+            // must not be re-offered here — sendReport would queue a SECOND card for
+            // the exact same vacancy on the next pipeline tick otherwise (queuing
+            // doesn't touch notified, same reason queued_publish_at is excluded above).
+            "AND moderation_status = 'none' " +
             "AND NOT EXISTS (SELECT 1 FROM vacancies v2 WHERE v2.dedup_key = v1.dedup_key " +
             "AND v2.dedup_key != '' AND v2.person = v1.person AND v2.search_name = v1.search_name " +
             "AND v2.notified = 1) " +
             "ORDER BY ai_score DESC, published_at DESC LIMIT ?",
             rowMapper, person, searchName, minScore, limit);
+    }
+
+    // ── Manual moderation (see ModerationService) ──
+
+    /** Approved-but-unsent vacancies enter the queue here instead of going straight to
+     *  ChannelPublisher — see sendReport's moderation branch. */
+    public void markModerationQueued(List<Long> ids) {
+        String now = Instant.now().toString();
+        for (Long id : ids) {
+            jdbc.update("UPDATE vacancies SET moderation_status='queued', updated_at=? WHERE id=?", now, id);
+        }
+    }
+
+    /** The card currently awaiting the admin's tap — at most one at a time by design
+     *  (ModerationService.advanceQueue only sends the next card once this is empty),
+     *  but the query doesn't assume that; it just takes whichever is oldest if several
+     *  ever exist (e.g. after a bug or manual DB edit). */
+    public Optional<Vacancy> findCurrentSentForModeration() {
+        return jdbc.query("SELECT * FROM vacancies WHERE moderation_status='sent' ORDER BY id LIMIT 1", rowMapper)
+            .stream().findFirst();
+    }
+
+    /** Oldest still-waiting card — FIFO, so nothing queued early gets stuck behind newer
+     *  arrivals indefinitely. */
+    public Optional<Vacancy> findNextQueuedForModeration() {
+        return jdbc.query("SELECT * FROM vacancies WHERE moderation_status='queued' ORDER BY id LIMIT 1", rowMapper)
+            .stream().findFirst();
+    }
+
+    public void markModerationSent(Long id) {
+        jdbc.update("UPDATE vacancies SET moderation_status='sent', updated_at=? WHERE id=?", Instant.now().toString(), id);
+    }
+
+    public void markModerationApproved(Long id) {
+        jdbc.update("UPDATE vacancies SET moderation_status='approved', updated_at=? WHERE id=?", Instant.now().toString(), id);
+    }
+
+    /** Rejected vacancies are also marked notified — resolved, never published, same
+     *  "stops coming back" treatment sendReport already gives a similarity-dedup drop. */
+    public void markModerationRejected(Long id) {
+        jdbc.update("UPDATE vacancies SET moderation_status='rejected', notified=1, updated_at=? WHERE id=?",
+            Instant.now().toString(), id);
     }
 
     /**

@@ -77,6 +77,10 @@ public class SchemaMigrator implements ApplicationRunner {
         addColumnIfMissing("vacancies", "queued_publish_at", "TEXT DEFAULT NULL");
         addColumnIfMissing("vacancies", "novelty_color", "TEXT DEFAULT ''");
         addColumnIfMissing("vacancies", "novelty_note", "TEXT DEFAULT ''");
+        // none | queued | sent | approved | rejected — see ModerationService. Only
+        // touched for EDITORIAL (public-channel) searches when app.moderation.enabled;
+        // everything else stays 'none' forever.
+        addColumnIfMissing("vacancies", "moderation_status", "TEXT NOT NULL DEFAULT 'none'");
         addColumnIfMissing("subscriptions", "cancel_requested", "INTEGER NOT NULL DEFAULT 0");
         addColumnIfMissing("subscriptions", "renewal_reminder_sent_at", "TEXT DEFAULT NULL");
 

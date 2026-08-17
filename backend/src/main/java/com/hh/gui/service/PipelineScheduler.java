@@ -68,6 +68,7 @@ public class PipelineScheduler implements SchedulingConfigurer {
     private final ChannelEngagementTracker engagementTracker;
     private final VacancyRepository vacancyRepo;
     private final TelegramMetrics telegramMetrics;
+    private final ModerationService moderationService;
 
     // How often to check for approved vacancies whose delayed_publish_at has arrived
     // (see ChannelPublisher.publishDueDelayed). A 5-minute delay needs a check
@@ -129,7 +130,7 @@ public class PipelineScheduler implements SchedulingConfigurer {
                               FreeModelUpdater freeModelUpdater, FeatureFlags featureFlags, SchemaMigrator schemaMigrator,
                               SubscriptionService subscriptionService, ChannelPublisher channelPublisher,
                               ChannelEngagementTracker engagementTracker, VacancyRepository vacancyRepo,
-                              TelegramMetrics telegramMetrics) {
+                              TelegramMetrics telegramMetrics, ModerationService moderationService) {
         this.pipelineService = pipelineService;
         this.profileFactory = profileFactory;
         this.runtimeConfig = runtimeConfig;
@@ -143,6 +144,7 @@ public class PipelineScheduler implements SchedulingConfigurer {
         this.engagementTracker = engagementTracker;
         this.vacancyRepo = vacancyRepo;
         this.telegramMetrics = telegramMetrics;
+        this.moderationService = moderationService;
     }
 
     @Override
@@ -172,6 +174,20 @@ public class PipelineScheduler implements SchedulingConfigurer {
         PeriodicTrigger rollingMetricsTrigger = new PeriodicTrigger(ROLLING_METRICS_REFRESH_INTERVAL);
         rollingMetricsTrigger.setInitialDelay(ROLLING_METRICS_INITIAL_DELAY);
         registrar.addTriggerTask(this::refreshRollingCountGauges, rollingMetricsTrigger);
+        // Backstop only — ModerationService.resolveApprove/resolveReject already advance
+        // the queue synchronously right after a decision, so this mostly just covers the
+        // FIRST card after queueForModeration() runs (nothing "resolves" to trigger an
+        // advance yet) and the rare case a send silently failed.
+        registrar.addTriggerTask(this::runModerationQueueAdvance, new PeriodicTrigger(Duration.ofMinutes(1)));
+    }
+
+    private void runModerationQueueAdvance() {
+        if (schemaNotReady() || !featureFlags.isModerationEnabled()) return;
+        try {
+            moderationService.advanceQueue();
+        } catch (Exception e) {
+            log.error("Продвижение очереди модерации завершилось ошибкой: {}", e.getMessage(), e);
+        }
     }
 
     /** See TelegramMetrics.refreshPublishedRolling/refreshCollectedRolling — DB-backed

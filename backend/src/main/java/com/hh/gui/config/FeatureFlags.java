@@ -22,7 +22,11 @@ public class FeatureFlags {
     @Value("${app.subscriptions.enabled:false}")
     private boolean subscriptionsEnabled;
 
+    @Value("${app.moderation.enabled:false}")
+    private boolean moderationEnabled;
+
     public boolean isPublicFormatEnabled() { return publicFormatEnabled; }
     public boolean isDelayedPublishEnabled() { return delayedPublishEnabled; }
     public boolean isSubscriptionsEnabled() { return subscriptionsEnabled; }
+    public boolean isModerationEnabled() { return moderationEnabled; }
 }
