@@ -182,10 +182,15 @@ class VacancyDiscoveryTest {
     }
 
     @Test
-    void discoverFromTelegram_pathA_doesNotRecordCollectedMetric() {
-        // Path A hh_id is the real numeric hh.ru id, not "tg_<channel>_<id>" — no channel
-        // to tag, and it falls into the ordinary hh.ru pipeline anyway (see
-        // VacancyPipelineService.extractTgChannelFromHhId javadoc).
+    void discoverFromTelegram_pathA_countedAsHhRuNotTelegramChannel() {
+        // Path A hh_id is the real numeric hh.ru id, not "tg_<channel>_<id>" — no source
+        // channel to tag, and it falls into the ordinary hh.ru pipeline anyway (see
+        // VacancyPipelineService.extractTgChannelFromHhId javadoc). Regression: this used
+        // to fall through recordCollected's null-channel guard AND never reach
+        // recordVacanciesCollected("hh.ru", ...) either (that's only called from
+        // fromRss/fromUrl) — Path A candidates found via Telegram were invisible to every
+        // collection metric, live-confirmed as a 7x undercount of vacancies_collected_total
+        // vs the real DB row count.
         FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
             true, null, List.of(tgMsg("1", "Менеджер по продажам\nПодробности: https://ufa.hh.ru/vacancy/123456789")))));
         FakeTgRepo repo = new FakeTgRepo(Set.of());
@@ -195,6 +200,7 @@ class VacancyDiscoveryTest {
         discovery.fromTelegram(tgJob(), List.of("testchan"));
 
         assertTrue(registry.find("telegram_collected_total").meters().isEmpty());
+        assertEquals(1.0, registry.find("vacancies_collected_total").tag("source", "hh.ru").counter().count());
     }
 
     @Test
