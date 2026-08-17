@@ -12,6 +12,8 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 
@@ -40,15 +42,23 @@ public class ModerationBotPoller {
     @Value("${app.telegram.channel-bot-token:}")
     private String channelBotToken;
 
+    @Value("${app.data-dir}")
+    private String dataDir;
+
     private final FeatureFlags featureFlags;
     private final ModerationService moderationService;
     private final TelegramNotifier telegramNotifier;
     private final ObjectMapper mapper = new ObjectMapper();
 
     private volatile boolean running;
-    // In-memory only, same tradeoff as TelegramBotPoller.offset — a re-delivered update
-    // after a restart just re-runs an already-applied decision (markModerationApproved/
-    // Rejected are idempotent UPDATEs), harmless.
+    // Persisted to disk (see offsetFile/loadOffset/saveOffset) — UNLIKE
+    // TelegramBotPoller.offset, which really is safe to lose on restart (its
+    // command handlers are genuinely idempotent). This app redeploys many times a day;
+    // an in-memory-only offset here resets on every one of them, and Telegram then
+    // redelivers its whole backlog of not-yet-acknowledged callback_query taps —
+    // live-observed as dozens of vacancies auto-published with nobody touching a
+    // button. ModerationService.alreadySent is a second, independent safety net against
+    // the same failure mode, but the fix belongs here: don't create the replay at all.
     private volatile long offset = 0;
 
     public ModerationBotPoller(FeatureFlags featureFlags, ModerationService moderationService,
@@ -76,9 +86,32 @@ public class ModerationBotPoller {
             log.error("Модерация и подписки одновременно включены — оба поллера делят app.telegram.channel-bot-token " +
                 "и будут конфликтовать за getUpdates (см. javadoc ModerationBotPoller). Нужен отдельный токен для одного из них.");
         }
+        offset = loadOffset();
         running = true;
         Thread.ofVirtual().name("moderation-bot-poller").start(this::pollLoop);
-        log.info("Поллер модерации запущен (long-polling)");
+        log.info("Поллер модерации запущен (long-polling), offset={}", offset);
+    }
+
+    private Path offsetFile() {
+        return java.nio.file.Paths.get(dataDir, "moderation-offset.txt");
+    }
+
+    /** 0 (fetch everything Telegram is still holding) on first-ever run or any read
+     *  failure — never lets a corrupt/missing file crash startup. */
+    private long loadOffset() {
+        try {
+            return Long.parseLong(Files.readString(offsetFile()).trim());
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    private void saveOffset(long value) {
+        try {
+            Files.writeString(offsetFile(), String.valueOf(value));
+        } catch (Exception e) {
+            log.warn("Не удалось сохранить offset поллера модерации: {}", e.getMessage());
+        }
     }
 
     @PreDestroy
@@ -131,6 +164,12 @@ public class ModerationBotPoller {
                 continue;
             }
             offset = updateIdNum.longValue() + 1;
+            // Persisted BEFORE handleUpdate, not after: if the app dies mid-handling
+            // (crash, OOM-kill, deploy restart racing this exact instant), we want the
+            // NEXT boot to skip this update rather than replay it — a lost/never-applied
+            // decision is a stuck card the owner can just re-tap; a phantom republish
+            // from replaying it twice is the actual danger (see class javadoc).
+            saveOffset(offset);
             try {
                 handleUpdate(update);
             } catch (Exception e) {
