@@ -59,6 +59,7 @@ class VacancyPipelineServiceTest {
         private VacancyRepository repo;
         private TelegramNotifier notifier;
         private RuntimeConfig config = new RuntimeConfig();
+        private FeatureFlags featureFlags = new FeatureFlags();
         private com.hh.gui.ai.AiMetrics aiMetrics;
         private com.hh.gui.repository.SearchRepository searchRepo;
         private io.micrometer.core.instrument.MeterRegistry registry =
@@ -71,6 +72,7 @@ class VacancyPipelineServiceTest {
         Builder repo(VacancyRepository v) { this.repo = v; return this; }
         Builder notifier(TelegramNotifier v) { this.notifier = v; return this; }
         Builder config(RuntimeConfig v) { this.config = v; return this; }
+        Builder featureFlags(FeatureFlags v) { this.featureFlags = v; return this; }
         Builder aiMetrics(com.hh.gui.ai.AiMetrics v) { this.aiMetrics = v; return this; }
         Builder searchRepo(com.hh.gui.repository.SearchRepository v) { this.searchRepo = v; return this; }
         /** Only when a test asserts on the recorded metrics and needs the registry back. */
@@ -94,7 +96,7 @@ class VacancyPipelineServiceTest {
             VacancyDiscovery discovery = new VacancyDiscovery(null, scraper, telegram, analyzer, repo,
                 tgMetrics, engagement, cooldown, resolvedAiMetrics);
             return new VacancyPipelineService(scraper, analyzer, repo, notifier,
-                config, resolvedAiMetrics, new FeatureFlags(), null, tgMetrics, publisher, discovery, cooldown);
+                config, resolvedAiMetrics, featureFlags, null, tgMetrics, publisher, discovery, cooldown);
         }
     }
 
@@ -665,6 +667,21 @@ class VacancyPipelineServiceTest {
         }
     }
 
+    /** Public-format sends go through sendViaChannelBot, not send() — see TelegramNotifier. */
+    private static class RecordingChannelNotifier extends TelegramNotifier {
+        final List<String> sent = new ArrayList<>();
+        @Override
+        public boolean sendViaChannelBot(String message, String targetChatId) {
+            sent.add(message);
+            return true;
+        }
+    }
+
+    private static class TogglableFlags extends FeatureFlags {
+        @Override
+        public boolean isPublicFormatEnabled() { return true; }
+    }
+
     @Test
     void sendReport_similarityDuplicate_resolvedSoItStopsComingBack() throws Exception {
         // Регрессия: dedupeByKey-клоны самостоятельно разрешаются через SQL-guard
@@ -753,6 +770,83 @@ class VacancyPipelineServiceTest {
         sendReport(svc, List.of(candidate), job);
 
         assertEquals(1, notifier.sent.size(), "с реальным работодателем не должен сработать межканальный дедуп-фолбэк — вакансия должна уйти в отчёт");
+    }
+
+    // ── Качественный фильтр публичных постов: без компании И без зарплаты не публикуем ──
+
+    private SearchJob publicJob() {
+        SearchJob job = new SearchJob();
+        job.personName = "Все пользователи";
+        job.searchName = "Без техстека";
+        job.chatId = "-1004333110303";
+        job.publicFormat = true;
+        return job;
+    }
+
+    @Test
+    void sendReport_publicFormat_noCompanyAndNoSalary_isDroppedNotSent() throws Exception {
+        RuntimeConfig config = new RuntimeConfig();
+        config.setChannelNotificationsEnabled(true);
+        FakeSimilarityRepo repo = new FakeSimilarityRepo();
+        RecordingChannelNotifier notifier = new RecordingChannelNotifier();
+        VacancyPipelineService svc = service().repo(repo).notifier(notifier).config(config)
+            .featureFlags(new TogglableFlags()).build();
+
+        Vacancy candidate = vacancy("Оператор call-центра", "Подходит", 70);
+        candidate.setId(70L);
+        candidate.setCompany(""); // нет ни реального работодателя, ни @-заглушки
+        candidate.setDescription("Обязанности: приём звонков\nТребования: без опыта");
+        // salaryFrom/salaryTo остаются дефолтными (0) — как у vacancy() без явного вызова setSalaryFrom/To
+
+        sendReport(svc, List.of(candidate), publicJob());
+
+        assertTrue(notifier.sent.isEmpty(), "вакансия без компании и без зарплаты не должна публиковаться в канал");
+        assertEquals(List.of(70L), repo.markedNotified,
+            "отброшенная вакансия должна быть помечена notified, иначе findUnnotifiedApproved вернёт её снова");
+    }
+
+    @Test
+    void sendReport_publicFormat_hasSalaryButNoCompany_isKept() throws Exception {
+        RuntimeConfig config = new RuntimeConfig();
+        config.setChannelNotificationsEnabled(true);
+        FakeSimilarityRepo repo = new FakeSimilarityRepo();
+        RecordingChannelNotifier notifier = new RecordingChannelNotifier();
+        VacancyPipelineService svc = service().repo(repo).notifier(notifier).config(config)
+            .featureFlags(new TogglableFlags()).build();
+
+        Vacancy candidate = vacancy("Оператор call-центра", "Подходит", 70);
+        candidate.setId(71L);
+        candidate.setCompany("@rabota_onlaynr"); // заглушка — трактуется как "нет компании"
+        candidate.setSalaryFrom(40000);
+        candidate.setDescription("Обязанности: приём звонков\nТребования: без опыта");
+
+        sendReport(svc, List.of(candidate), publicJob());
+
+        assertEquals(1, notifier.sent.size(), "с указанной зарплатой отсутствие компании не должно блокировать публикацию");
+    }
+
+    @Test
+    void sendReport_personalFormat_noCompanyAndNoSalary_stillSent() throws Exception {
+        // Фильтр качества применяется только к публичному формату — личный поиск
+        // пользователя не должен терять вакансии просто из-за отсутствия этих полей.
+        RuntimeConfig config = new RuntimeConfig();
+        config.setNotificationsEnabled(true);
+        FakeSimilarityRepo repo = new FakeSimilarityRepo();
+        RecordingNotifier notifier = new RecordingNotifier();
+        VacancyPipelineService svc = service().repo(repo).notifier(notifier).config(config).build();
+
+        Vacancy candidate = vacancy("Продавец", "Подходит", 75);
+        candidate.setId(72L);
+        candidate.setCompany("");
+        candidate.setDescription("Обязанности: продавать\nТребования: опыт");
+
+        SearchJob job = new SearchJob();
+        job.personName = "Мама";
+        job.searchName = "Рядом с домом";
+
+        sendReport(svc, List.of(candidate), job);
+
+        assertEquals(1, notifier.sent.size(), "личный отчёт не фильтруется по компании/зарплате");
     }
 
     // ── Взаимное исключение прогонов одного поиска ──
