@@ -967,7 +967,7 @@ public class VacancyPipelineService {
                 // that happens to use the public template (if that combination is ever
                 // used) still publishes automatically, unmoderated.
                 if (featureFlags.isModerationEnabled() && job.kind != null && job.kind.isEditorial()) {
-                    moderationService.queueForModeration(approved, job);
+                    queueForModerationWithAutoApprove(approved, job);
                 } else {
                     channelPublisher.send(approved, job);
                 }
@@ -1011,6 +1011,36 @@ public class VacancyPipelineService {
         }
         log.info("Рассылка подписчикам ({} · {}, {} вакансий × {} подписчиков)",
             job.personName, job.searchName, approved.size(), chatIds.size());
+    }
+
+    /**
+     * Splits an EDITORIAL batch by RuntimeConfig.autoApproveScoreThreshold (0 = disabled,
+     * the default — everything goes to moderation as before): vacancies scoring at or
+     * above the threshold skip the human ✅/❌ and publish immediately, the rest queue for
+     * moderation exactly as always. A per-vacancy split, not all-or-nothing — a batch
+     * routinely mixes scores. Deliberately still logs the auto-approved count at INFO:
+     * the manual flow gives that visibility for free, and this shouldn't quietly cost it.
+     */
+    private void queueForModerationWithAutoApprove(List<Vacancy> approved, SearchJob job) {
+        int threshold = runtimeConfig.getAutoApproveScoreThreshold();
+        if (threshold <= 0) {
+            moderationService.queueForModeration(approved, job);
+            return;
+        }
+        List<Vacancy> autoApproved = approved.stream()
+            .filter(v -> v.getAiScore() != null && v.getAiScore() >= threshold)
+            .toList();
+        if (autoApproved.isEmpty()) {
+            moderationService.queueForModeration(approved, job);
+            return;
+        }
+        List<Vacancy> needsModeration = approved.stream().filter(v -> !autoApproved.contains(v)).toList();
+        log.info("Автоапрув (score >= {}) ({} · {}): {} вакансий опубликовано без модерации",
+            threshold, job.personName, job.searchName, autoApproved.size());
+        channelPublisher.send(autoApproved, job);
+        if (!needsModeration.isEmpty()) {
+            moderationService.queueForModeration(needsModeration, job);
+        }
     }
 
     /**
@@ -1067,7 +1097,7 @@ public class VacancyPipelineService {
 
             if (!duplicate) {
                 List<Vacancy> notified = notifiedByEmployerKey.computeIfAbsent(key,
-                    k -> vacancyRepo.findNotifiedByEmployer(job.personName, job.searchName, v.employerOrCompany()));
+                    k -> vacancyRepo.findNotifiedByEmployer(job.personName, job.searchName, job.chatId, v.employerOrCompany()));
                 duplicate = notified.stream().anyMatch(n ->
                     TextSimilarity.lineSimilarity(v.getDescription(), n.getDescription()) >= SIMILAR_DESCRIPTION_THRESHOLD);
             }
@@ -1084,7 +1114,7 @@ public class VacancyPipelineService {
             // can't misfire on two different real companies that both merely lack a key.
             if (!duplicate && v.employerOrCompany().startsWith("@")) {
                 if (unresolvedEmployerPool == null) {
-                    unresolvedEmployerPool = vacancyRepo.findWithUnresolvedEmployer(job.personName, job.searchName);
+                    unresolvedEmployerPool = vacancyRepo.findWithUnresolvedEmployer(job.personName, job.searchName, job.chatId);
                 }
                 List<Vacancy> pool = unresolvedEmployerPool;
                 duplicate = kept.stream().anyMatch(k -> k.employerOrCompany().startsWith("@")

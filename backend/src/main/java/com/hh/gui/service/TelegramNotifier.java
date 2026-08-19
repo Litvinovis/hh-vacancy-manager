@@ -140,7 +140,31 @@ public class TelegramNotifier {
      * Unlike doSend, this can't go through the plain sendMessage form body —
      * reply_markup is JSON, not a flat field.
      */
-    public boolean sendModerationCard(String message, long vacancyId) {
+    /**
+     * Sends a moderation card for a batch of one or more vacancies grouped into one
+     * message (see ModerationService.formatBatchCard) — one ✅/❌ row per vacancy, plus
+     * one extra "✅ Одобрить всё" row when there's more than one (pointless on a batch
+     * of one — that's just the individual button again). A single-vacancy batch is
+     * exactly what used to be the whole "one card per vacancy" shape, so there's no
+     * separate single-card method any more — this covers both.
+     */
+    public boolean sendModerationCardBatch(String message, java.util.List<Long> vacancyIds) {
+        StringBuilder rows = new StringBuilder();
+        for (Long id : vacancyIds) {
+            if (!rows.isEmpty()) rows.append(",");
+            rows.append("[{\"text\":\"✅ Опубликовать\",\"callback_data\":\"modpub:").append(id).append("\"},")
+                .append("{\"text\":\"❌ Отклонить\",\"callback_data\":\"modrej:").append(id).append("\"}]");
+        }
+        if (vacancyIds.size() > 1) {
+            if (!rows.isEmpty()) rows.append(",");
+            rows.append("[{\"text\":\"✅ Одобрить всё (").append(vacancyIds.size()).append(")\",")
+                .append("\"callback_data\":\"modpuball\"}]");
+        }
+        String replyMarkup = "{\"inline_keyboard\":[" + rows + "]}";
+        return sendModerationMessage(message, replyMarkup);
+    }
+
+    private boolean sendModerationMessage(String message, String replyMarkup) {
         if (channelBotToken == null || channelBotToken.isEmpty()) {
             log.warn("Токен канального Telegram-бота не настроен — карточка модерации не отправлена");
             return false;
@@ -149,10 +173,6 @@ public class TelegramNotifier {
             log.warn("app.telegram.chat-id не настроен — некуда отправить карточку модерации");
             return false;
         }
-        String replyMarkup = "{\"inline_keyboard\":[[" +
-            "{\"text\":\"✅ Опубликовать\",\"callback_data\":\"modpub:" + vacancyId + "\"}," +
-            "{\"text\":\"❌ Отклонить\",\"callback_data\":\"modrej:" + vacancyId + "\"}" +
-            "]]}";
         try {
             String url = apiBaseUrl + "/bot" + channelBotToken + "/sendMessage";
             HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
@@ -184,7 +204,7 @@ public class TelegramNotifier {
     /**
      * Removes a resolved moderation card entirely, rather than leaving its ✅/❌ buttons
      * sitting there clickable forever (Telegram doesn't grey out inline buttons on its
-     * own just because the vacancy was already decided). Same bot as sendModerationCard —
+     * own just because the vacancy was already decided). Same bot as sendModerationCardBatch —
      * only the bot that sent a message may delete it. Best-effort: a failure here is a
      * cosmetic leftover, not a reason to fail the decision that already went through.
      */

@@ -52,6 +52,13 @@ public class TelegramClient {
         }
     }
 
+    // "channel_not_found" means the sidecar's search box returned no matching row
+    // within its fixed wait (see tg-scraper/server.js openChannel) — that's a UI
+    // timing signal, not proof the channel is actually gone, so it's worth a couple
+    // of quick retries before treating it as a real failure for this tick.
+    private static final int NOT_FOUND_RETRIES = 2;
+    private static final long NOT_FOUND_RETRY_DELAY_MS = 3000;
+
     /**
      * Fetches up to {@code limit} of the most recent posts from a public channel.
      * A read timeout well above the connect timeout: the sidecar scrolls the
@@ -59,6 +66,21 @@ public class TelegramClient {
      * take longer than a typical HTTP client default.
      */
     public ChannelResult fetchChannel(String username, int limit) {
+        ChannelResult result = fetchChannelOnce(username, limit);
+        for (int attempt = 1; attempt <= NOT_FOUND_RETRIES && !result.ok() && "channel_not_found".equals(result.reason()); attempt++) {
+            log.debug("Telegram-канал @{}: channel_not_found, повтор {}/{}", username, attempt, NOT_FOUND_RETRIES);
+            try {
+                Thread.sleep(NOT_FOUND_RETRY_DELAY_MS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return result;
+            }
+            result = fetchChannelOnce(username, limit);
+        }
+        return result;
+    }
+
+    private ChannelResult fetchChannelOnce(String username, int limit) {
         try {
             String url = tgScraperBaseUrl + "/channel?username=" + URLEncoder.encode(username, StandardCharsets.UTF_8)
                 + "&limit=" + limit;

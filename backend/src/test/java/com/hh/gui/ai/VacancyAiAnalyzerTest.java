@@ -29,7 +29,8 @@ class VacancyAiAnalyzerTest {
         config.setAiProviders(List.of(
             new AiProviderConfig("test", "http://localhost:8089/mock", "test-key", "test/model")));
         AiProviderManager provider = new AiProviderManager(config, new AiMetrics(new SimpleMeterRegistry(), config));
-        analyzer = new VacancyAiAnalyzer(config, provider, new AiMetrics(new SimpleMeterRegistry(), config));
+        analyzer = new VacancyAiAnalyzer(config, provider, new AiMetrics(new SimpleMeterRegistry(), config),
+            new com.hh.gui.client.CurrencyRateService());
         setField(analyzer, "batchSizeDefault", 5);
         setField(analyzer, "mapper", mapper);
     }
@@ -529,7 +530,7 @@ class VacancyAiAnalyzerTest {
     private static class CountingAnalyzer extends VacancyAiAnalyzer {
         final java.util.List<Integer> llmBatchSizes = new java.util.ArrayList<>();
         CountingAnalyzer(RuntimeConfig config, AiProviderManager pm, AiMetrics metrics) {
-            super(config, pm, metrics);
+            super(config, pm, metrics, new com.hh.gui.client.CurrencyRateService());
         }
         @Override
         protected List<AiResult> prescreenBatchWithRetry(List<com.hh.gui.client.ScraperClient.SearchHit> batch, SearchJob job) {
@@ -627,7 +628,7 @@ class VacancyAiAnalyzerTest {
         private final RuntimeException failure;
         int calls = 0;
         FailingAnalyzer(RuntimeConfig config, AiProviderManager pm, AiMetrics metrics, RuntimeException failure) {
-            super(config, pm, metrics);
+            super(config, pm, metrics, new com.hh.gui.client.CurrencyRateService());
             this.failure = failure;
         }
         @Override

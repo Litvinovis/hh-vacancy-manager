@@ -506,6 +506,28 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // Deeper check than /health above (which only proves the Node process is
+  // answering HTTP, unconditionally — deploy.yml relies on that being fast and
+  // trivial, so it's left alone). This one asks whether the persistent Telegram
+  // Web session is actually alive and responsive — for a watchdog to poll (see
+  // the docs on tg-scraper monitoring), NOT to auto-restart from in here: this
+  // endpoint only observes, never launches or touches the browser as a side
+  // effect, since a health check that mutates state on every poll is its own bug.
+  if (url.pathname === '/health/session') {
+    if (!sharedPage || sharedPage.isClosed()) {
+      // Not necessarily a problem — e.g. right after a fresh restart, before the
+      // first scrape has run yet. The watchdog treats this as "not ready", not
+      // "broken", and only acts on a streak.
+      sendJson(res, 503, { ok: false, reason: 'no_active_session' });
+      return;
+    }
+    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000));
+    Promise.race([sharedPage.evaluate(() => true), timeout])
+      .then(() => sendJson(res, 200, { ok: true }))
+      .catch((e) => sendJson(res, 503, { ok: false, reason: `unresponsive: ${e.message}` }));
+    return;
+  }
+
   if (url.pathname === '/login/start' && req.method === 'POST') {
     readJsonBody(req)
       .then(({ phone }) => {

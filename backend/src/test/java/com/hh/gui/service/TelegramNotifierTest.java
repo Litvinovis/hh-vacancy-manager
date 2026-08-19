@@ -278,35 +278,53 @@ class TelegramNotifierTest {
         assertNull(notifier.getChatUsername("-100123"));
     }
 
-    // ── moderation cards (sent via the CHANNEL bot, see sendModerationCard's javadoc for why) ──
+    // ── moderation cards (sent via the CHANNEL bot, see sendModerationCardBatch's javadoc for why) ──
 
     @Test
-    void sendModerationCard_success_returnsTrueAndIncludesButtons() {
+    void sendModerationCardBatch_singleVacancy_sameShapeAsOldSingleCard() {
+        // Батч из одной вакансии — ровно то, чем раньше была единственная карточка
+        // (см. ModerationService: "по одной" всё ещё держится, просто через batch=1).
         ReflectionTestUtils.setField(notifier, "channelBotToken", "GOODTOKEN");
         ReflectionTestUtils.setField(notifier, "chatId", "-100123");
 
-        assertTrue(notifier.sendModerationCard("Оператор поддержки", 42L));
+        assertTrue(notifier.sendModerationCardBatch("Оператор поддержки", java.util.List.of(42L)));
 
         assertTrue(lastPath.get().contains("/botGOODTOKEN/sendMessage"), "должен уйти через канальный бот, не личный");
         assertTrue(lastRequestBody.get().contains("chat_id=-100123"));
         assertTrue(lastRequestBody.get().contains("modpub%3A42"), "callback_data кнопки \"Опубликовать\" должна нести id вакансии");
         assertTrue(lastRequestBody.get().contains("modrej%3A42"), "callback_data кнопки \"Отклонить\" должна нести id вакансии");
+        assertFalse(lastRequestBody.get().contains("modpuball"),
+            "единственная вакансия в батче — кнопка \"одобрить всё\" была бы дублем");
     }
 
     @Test
-    void sendModerationCard_missingChannelToken_returnsFalse() {
+    void sendModerationCardBatch_multipleVacancies_includesPerItemButtonsAndApproveAll() {
+        ReflectionTestUtils.setField(notifier, "channelBotToken", "GOODTOKEN");
+        ReflectionTestUtils.setField(notifier, "chatId", "-100123");
+
+        assertTrue(notifier.sendModerationCardBatch("Батч из трёх", java.util.List.of(1L, 2L, 3L)));
+
+        assertTrue(lastRequestBody.get().contains("modpub%3A1"));
+        assertTrue(lastRequestBody.get().contains("modrej%3A1"));
+        assertTrue(lastRequestBody.get().contains("modpub%3A2"));
+        assertTrue(lastRequestBody.get().contains("modpub%3A3"));
+        assertTrue(lastRequestBody.get().contains("modpuball"), "батч из нескольких вакансий должен нести кнопку \"одобрить всё\"");
+    }
+
+    @Test
+    void sendModerationCardBatch_missingChannelToken_returnsFalse() {
         ReflectionTestUtils.setField(notifier, "channelBotToken", "");
         ReflectionTestUtils.setField(notifier, "chatId", "-100123");
 
-        assertFalse(notifier.sendModerationCard("Текст", 1L));
+        assertFalse(notifier.sendModerationCardBatch("Текст", java.util.List.of(1L, 2L)));
     }
 
     @Test
-    void sendModerationCard_missingChatId_returnsFalse() {
+    void sendModerationCardBatch_missingChatId_returnsFalse() {
         ReflectionTestUtils.setField(notifier, "channelBotToken", "GOODTOKEN");
         ReflectionTestUtils.setField(notifier, "chatId", "");
 
-        assertFalse(notifier.sendModerationCard("Текст", 1L));
+        assertFalse(notifier.sendModerationCardBatch("Текст", java.util.List.of(1L)));
     }
 
     @Test

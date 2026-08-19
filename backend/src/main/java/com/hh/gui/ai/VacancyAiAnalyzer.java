@@ -72,16 +72,19 @@ public class VacancyAiAnalyzer {
     private final RuntimeConfig runtimeConfig;
     private final AiProviderManager providerManager;
     private final AiMetrics metrics;
+    private final com.hh.gui.client.CurrencyRateService currencyRates;
 
     // Rate limiter: free models need ~10-15s between requests to avoid 429
     private long lastRequestTime = 0;
 
     private final tools.jackson.databind.ObjectMapper mapper = new tools.jackson.databind.ObjectMapper();
 
-    public VacancyAiAnalyzer(RuntimeConfig runtimeConfig, AiProviderManager providerManager, AiMetrics metrics) {
+    public VacancyAiAnalyzer(RuntimeConfig runtimeConfig, AiProviderManager providerManager, AiMetrics metrics,
+                              com.hh.gui.client.CurrencyRateService currencyRates) {
         this.runtimeConfig = runtimeConfig;
         this.providerManager = providerManager;
         this.metrics = metrics;
+        this.currencyRates = currencyRates;
     }
 
     private int getBatchSize() {
@@ -506,7 +509,7 @@ public class VacancyAiAnalyzer {
             sb.append("Название: ").append(truncatePromptField(v.getTitle(), 200)).append("\n");
             sb.append("Работодатель: ").append(truncatePromptField(v.getCompany(), 150));
             sb.append(v.isTrustedEmployer() ? " (доверенный работодатель по hh.ru)\n" : "\n");
-            sb.append("Зарплата: ").append(SalaryFormatter.forPrompt(v)).append("\n");
+            sb.append("Зарплата: ").append(SalaryFormatter.forPrompt(v, currencyRates)).append("\n");
             if (v.getExperience() != null && !v.getExperience().isBlank()) {
                 sb.append("Опыт: ").append(v.getExperience()).append("\n");
             }

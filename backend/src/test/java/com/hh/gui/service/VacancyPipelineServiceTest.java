@@ -309,7 +309,7 @@ class VacancyPipelineServiceTest {
     /** Прескрин «всё подходит»: пустой список вердиктов = ни одного отсева. */
     private static class FakeAnalyzer extends VacancyAiAnalyzer {
         FakeAnalyzer(RuntimeConfig config) {
-            super(config, null, null);
+            super(config, null, null, null);
         }
         @Override
         public List<AiResult> prescreenHits(List<ScraperClient.SearchHit> hits, SearchJob job) {
@@ -384,7 +384,7 @@ class VacancyPipelineServiceTest {
     /** Отвечает вердиктом на всё, что прислали, и запоминает размер пакета, ушедшего в LLM. */
     private static class FakeBatchAnalyzer extends VacancyAiAnalyzer {
         final List<Integer> llmBatchSizes = new ArrayList<>();
-        FakeBatchAnalyzer(RuntimeConfig config) { super(config, null, null); }
+        FakeBatchAnalyzer(RuntimeConfig config) { super(config, null, null, null); }
         @Override
         public String computeCriteriaHash(SearchJob job) { return "hash"; }
         @Override
@@ -653,11 +653,11 @@ class VacancyPipelineServiceTest {
         final List<Long> markedModerationQueued = new ArrayList<>();
         FakeSimilarityRepo() { super(null); }
         @Override
-        public List<Vacancy> findNotifiedByEmployer(String person, String searchName, String employerName) {
+        public List<Vacancy> findNotifiedByEmployer(String person, String searchName, String chatId, String employerName) {
             return alreadyNotified;
         }
         @Override
-        public List<Vacancy> findWithUnresolvedEmployer(String person, String searchName) {
+        public List<Vacancy> findWithUnresolvedEmployer(String person, String searchName, String chatId) {
             return unresolvedEmployerPool;
         }
         @Override
@@ -914,6 +914,98 @@ class VacancyPipelineServiceTest {
 
         assertEquals(1, notifier.sent.size(), "без включённой модерации публикация должна идти как раньше");
         assertTrue(repo.markedModerationQueued.isEmpty());
+    }
+
+    // ── Автоапрув по score (выключен по умолчанию) ──
+
+    @Test
+    void sendReport_autoApproveThreshold_highScorePublishesDirectly() throws Exception {
+        RuntimeConfig config = new RuntimeConfig();
+        config.setChannelNotificationsEnabled(true);
+        config.setAutoApproveScoreThreshold(90);
+        FakeSimilarityRepo repo = new FakeSimilarityRepo();
+        RecordingChannelNotifier notifier = new RecordingChannelNotifier();
+        VacancyPipelineService svc = service().repo(repo).notifier(notifier).config(config)
+            .featureFlags(new ModerationEnabledFlags()).build();
+
+        Vacancy highScore = vacancy("Оператор поддержки", "Идеально подходит", 95);
+        highScore.setId(90L);
+        highScore.setSalaryFrom(50000);
+        highScore.setDescription("Обязанности: отвечать клиентам\nТребования: без опыта");
+
+        sendReport(svc, List.of(highScore), editorialJob());
+
+        assertEquals(1, notifier.sent.size(), "score выше порога — публикуется сразу, минуя модерацию");
+        assertTrue(repo.markedModerationQueued.isEmpty());
+    }
+
+    @Test
+    void sendReport_autoApproveThreshold_lowScoreStillQueuedForModeration() throws Exception {
+        RuntimeConfig config = new RuntimeConfig();
+        config.setChannelNotificationsEnabled(true);
+        config.setAutoApproveScoreThreshold(90);
+        FakeSimilarityRepo repo = new FakeSimilarityRepo();
+        RecordingChannelNotifier notifier = new RecordingChannelNotifier();
+        VacancyPipelineService svc = service().repo(repo).notifier(notifier).config(config)
+            .featureFlags(new ModerationEnabledFlags()).build();
+
+        Vacancy lowScore = vacancy("Оператор поддержки", "Подходит", 70);
+        lowScore.setId(91L);
+        lowScore.setSalaryFrom(50000);
+        lowScore.setDescription("Обязанности: отвечать клиентам\nТребования: без опыта");
+
+        sendReport(svc, List.of(lowScore), editorialJob());
+
+        assertTrue(notifier.sent.isEmpty(), "score ниже порога — как раньше, ждёт модерации");
+        assertEquals(List.of(91L), repo.markedModerationQueued);
+    }
+
+    @Test
+    void sendReport_autoApproveThreshold_mixedBatchSplitsCorrectly() throws Exception {
+        RuntimeConfig config = new RuntimeConfig();
+        config.setChannelNotificationsEnabled(true);
+        config.setAutoApproveScoreThreshold(90);
+        FakeSimilarityRepo repo = new FakeSimilarityRepo();
+        RecordingChannelNotifier notifier = new RecordingChannelNotifier();
+        VacancyPipelineService svc = service().repo(repo).notifier(notifier).config(config)
+            .featureFlags(new ModerationEnabledFlags()).build();
+
+        Vacancy highScore = vacancy("Оператор поддержки", "Идеально", 95);
+        highScore.setId(92L);
+        highScore.setSalaryFrom(50000);
+        highScore.setDescription("A");
+        Vacancy lowScore = vacancy("Курьер", "Подходит", 60);
+        lowScore.setId(93L);
+        lowScore.setSalaryFrom(40000);
+        lowScore.setDescription("B");
+
+        sendReport(svc, List.of(highScore, lowScore), editorialJob());
+
+        assertEquals(1, notifier.sent.size(), "только высокий score публикуется напрямую");
+        assertEquals(List.of(93L), repo.markedModerationQueued, "только низкий score идёт на модерацию");
+    }
+
+    @Test
+    void sendReport_autoApproveThresholdZero_disabledByDefault_allGoToModeration() throws Exception {
+        // Порог не задан (значение по умолчанию RuntimeConfig) — поведение не отличается
+        // от sendReport_editorialWithModerationEnabled_queuesInsteadOfPublishing.
+        RuntimeConfig config = new RuntimeConfig();
+        config.setChannelNotificationsEnabled(true);
+        assertEquals(0, config.getAutoApproveScoreThreshold(), "автоапрув должен быть выключен по умолчанию");
+        FakeSimilarityRepo repo = new FakeSimilarityRepo();
+        RecordingChannelNotifier notifier = new RecordingChannelNotifier();
+        VacancyPipelineService svc = service().repo(repo).notifier(notifier).config(config)
+            .featureFlags(new ModerationEnabledFlags()).build();
+
+        Vacancy veryHighScore = vacancy("Оператор поддержки", "Идеально", 100);
+        veryHighScore.setId(94L);
+        veryHighScore.setSalaryFrom(50000);
+        veryHighScore.setDescription("A");
+
+        sendReport(svc, List.of(veryHighScore), editorialJob());
+
+        assertTrue(notifier.sent.isEmpty(), "даже score=100 не должен обходить модерацию, если порог выключен");
+        assertEquals(List.of(94L), repo.markedModerationQueued);
     }
 
     @Test

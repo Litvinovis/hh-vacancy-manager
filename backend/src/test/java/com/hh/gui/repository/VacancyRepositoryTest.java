@@ -32,6 +32,10 @@ class VacancyRepositoryTest {
         jdbc.update("DELETE FROM history");
         jdbc.update("DELETE FROM tags");
         jdbc.update("DELETE FROM vacancies");
+        // Only the cross-search-dedup tests below touch these — cleaned here too so
+        // they stay isolated regardless of test execution order.
+        jdbc.update("DELETE FROM searches");
+        jdbc.update("DELETE FROM users");
     }
 
     // ── Save and Find ──
@@ -260,6 +264,72 @@ class VacancyRepositoryTest {
 
         assertEquals(1, counts.get("hh"), "запись старше окна не должна учитываться");
         assertEquals(1, counts.get("telegram"));
+    }
+
+    // ── findNotifiedByEmployer / findWithUnresolvedEmployer: cross-search dedup ──
+
+    /** Two EDITORIAL searches that both publish to the same Telegram channel, exactly
+     *  as production has "Без техстека" and "Интересная удалёнка" sharing one chat_id. */
+    private void insertTwoSearchesSharingOneChatId(String chatId) {
+        jdbc.update("INSERT INTO users (id, username, password_hash, display_name, role, city, created_at) "
+            + "VALUES (1, 'admin', 'x', 'Admin', 'admin', '', '2026-08-16')");
+        jdbc.update("INSERT INTO searches (id, user_id, name, queries, enabled, created_at, updated_at, chat_id) "
+            + "VALUES (201, 1, 'Search A', '[]', TRUE, '2026-08-16', '2026-08-16', ?)", chatId);
+        jdbc.update("INSERT INTO searches (id, user_id, name, queries, enabled, created_at, updated_at, chat_id) "
+            + "VALUES (202, 1, 'Search B', '[]', TRUE, '2026-08-16', '2026-08-16', ?)", chatId);
+    }
+
+    @Test
+    void findNotifiedByEmployer_scopedByChatId_seesAcrossDifferentSearches() {
+        insertTwoSearchesSharingOneChatId("-1004333110303");
+        Vacancy notifiedUnderSearchA = createTestVacancy("dup-1", "Эксперт-расчетчик ОСАГО", "new");
+        notifiedUnderSearchA.setSearchName("Search A");
+        notifiedUnderSearchA.setCompany("Т-Банк");
+        Vacancy saved = vacancyRepo.save(notifiedUnderSearchA);
+        jdbc.update("UPDATE vacancies SET search_id=201 WHERE id=?", saved.getId());
+        vacancyRepo.markNotified(List.of(saved.getId()));
+
+        // Реальный сценарий бага: тот же работодатель репостнул вакансию, она пришла
+        // через ДРУГОЙ поиск ("Search B"), но тот же канал (chat_id) уже видел её.
+        List<Vacancy> found = vacancyRepo.findNotifiedByEmployer("Другой person", "Search B",
+            "-1004333110303", "Т-Банк");
+
+        assertEquals(1, found.size(), "дубликат из другого поиска на тот же канал должен быть виден");
+        assertEquals(saved.getId(), found.get(0).getId());
+    }
+
+    @Test
+    void findNotifiedByEmployer_blankChatId_fallsBackToPersonSearchScope() {
+        Vacancy notified = createTestVacancy("dup-2", "Продавец", "new");
+        notified.setPerson("Мама");
+        notified.setSearchName("Рядом с домом");
+        notified.setCompany("Пятёрочка");
+        Vacancy saved = vacancyRepo.save(notified);
+        vacancyRepo.markNotified(List.of(saved.getId()));
+
+        // Личный отчёт без chat_id — разным людям законно повторять вакансии друг друга.
+        List<Vacancy> forDifferentPerson = vacancyRepo.findNotifiedByEmployer("Папа", "Своя работа",
+            null, "Пятёрочка");
+        List<Vacancy> forSamePerson = vacancyRepo.findNotifiedByEmployer("Мама", "Рядом с домом",
+            null, "Пятёрочка");
+
+        assertEquals(0, forDifferentPerson.size(), "без chat_id разные person/searchName не должны видеть друг друга");
+        assertEquals(1, forSamePerson.size());
+    }
+
+    @Test
+    void findWithUnresolvedEmployer_scopedByChatId_seesAcrossDifferentSearches() {
+        insertTwoSearchesSharingOneChatId("-1004333110303");
+        Vacancy notifiedUnderSearchA = createTestVacancy("dup-3", "Куратор в онлайн-школу", "new");
+        notifiedUnderSearchA.setSearchName("Search A");
+        notifiedUnderSearchA.setCompany("@somechannel");
+        Vacancy saved = vacancyRepo.save(notifiedUnderSearchA);
+        jdbc.update("UPDATE vacancies SET search_id=201 WHERE id=?", saved.getId());
+        vacancyRepo.markNotified(List.of(saved.getId()));
+
+        List<Vacancy> found = vacancyRepo.findWithUnresolvedEmployer("Другой person", "Search B", "-1004333110303");
+
+        assertEquals(1, found.size(), "@-фолбэк дубликат из другого поиска на тот же канал должен быть виден");
     }
 
     // ── resetScore ──

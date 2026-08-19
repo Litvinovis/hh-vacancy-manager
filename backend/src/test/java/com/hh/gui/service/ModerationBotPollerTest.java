@@ -90,4 +90,12 @@ class ModerationBotPollerTest {
     void parseVacancyId_null_returnsNull() {
         assertNull(ModerationBotPoller.parseVacancyId(null));
     }
+
+    @Test
+    void parseVacancyId_approveAllCallback_returnsNull() {
+        // "modpuball" carries no vacancy id at all — handleUpdate checks for it as a
+        // literal BEFORE calling parseVacancyId (see ModerationService.resolveApproveAll),
+        // this just documents that the general parser correctly has nothing to say about it.
+        assertNull(ModerationBotPoller.parseVacancyId("modpuball"));
+    }
 }

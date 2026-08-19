@@ -12,19 +12,29 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * Manual gate between AI approval and the public channel: an EDITORIAL vacancy that
- * passed everything else waits here — one Telegram card per vacancy, sent to the
- * owner's personal chat with ✅/❌ buttons — until a human taps a decision. No timeout;
- * a card just waits (see ModerationBotPoller for the callback_query side).
+ * Manual gate between AI approval and the public channel: EDITORIAL vacancies that
+ * passed everything else wait here — grouped into ONE Telegram card of up to
+ * {@link #MODERATION_BATCH_SIZE} vacancies at a time, sent to the owner's personal
+ * chat, each with its own ✅/❌ row plus (batches bigger than one) an "approve all"
+ * row — until a human resolves every vacancy in the batch, one way or another. No
+ * timeout; a card just waits (see ModerationBotPoller for the callback_query side).
  *
- * One card in flight at a time by design (advanceQueue only sends the next once the
- * current one is resolved) — a wall of unread cards defeats the point of reviewing
- * each one, which is exactly what "по одной" in the request meant.
+ * One BATCH in flight at a time by design (advanceQueue only sends the next batch
+ * once every vacancy in the current one is resolved) — a wall of unread cards
+ * defeats the point of reviewing each one, which is exactly what the original
+ * "по одной" request meant; grouping several vacancies into one message is a
+ * presentation change (less scrolling), not a return to publishing without review —
+ * every vacancy still gets its own explicit tap, "approve all" included, since the
+ * owner still has to look at the batch and choose to tap it.
  */
 @Service
 public class ModerationService {
 
     private static final Logger log = LoggerFactory.getLogger(ModerationService.class);
+
+    // Matches ChannelPublisher.PUBLISH_BATCH_SIZE — no reason for moderation cards to
+    // group differently than the batches they'll eventually turn into public posts.
+    static final int MODERATION_BATCH_SIZE = 5;
 
     private final VacancyRepository vacancyRepo;
     private final SearchProfileFactory profileFactory;
@@ -48,71 +58,116 @@ public class ModerationService {
         log.info("На модерацию поставлено {} вакансий ({} · {})", approved.size(), job.personName, job.searchName);
     }
 
-    /** Sends the next queued card, but only if nothing is currently awaiting a reply —
-     *  called both on a timer (PipelineScheduler) and right after a decision resolves,
-     *  so the next card shows up immediately rather than waiting for the next tick. */
+    /** Sends the next batch card, but only if nothing is currently awaiting a reply —
+     *  called both on a timer (PipelineScheduler) and right after every vacancy in the
+     *  current batch has been resolved, so the next batch shows up immediately rather
+     *  than waiting for the next tick. */
     public void advanceQueue() {
-        if (vacancyRepo.findCurrentSentForModeration().isPresent()) return;
-        Optional<Vacancy> next = vacancyRepo.findNextQueuedForModeration();
-        if (next.isEmpty()) return;
-        Vacancy v = next.get();
-        String card = "🔔 <b>На модерацию</b>\n\n" + VacancyPostFormatter.publicPost(v);
-        if (telegramNotifier.sendModerationCard(card, v.getId())) {
-            vacancyRepo.markModerationSent(v.getId());
+        if (!vacancyRepo.findAllSentForModeration().isEmpty()) return;
+        List<Vacancy> batch = vacancyRepo.findNextQueuedBatchForModeration(MODERATION_BATCH_SIZE);
+        if (batch.isEmpty()) return;
+        String card = formatBatchCard(batch);
+        List<Long> ids = batch.stream().map(Vacancy::getId).toList();
+        if (telegramNotifier.sendModerationCardBatch(card, ids)) {
+            vacancyRepo.markModerationSent(ids);
         } else {
-            log.warn("Не удалось отправить карточку модерации id={} — попробуем на следующем тике", v.getId());
+            log.warn("Не удалось отправить карточку модерации (батч из {}) — попробуем на следующем тике", batch.size());
         }
     }
 
-    /** ✅ tapped: publishes exactly like the automatic path would have (same
-     *  ChannelPublisher.send, immediate-or-paced per the search's own publishPaceMinutes),
-     *  just for this one vacancy instead of a whole approved batch.
-     *  @param messageId the tapped card's own message id, so it can be deleted afterward
-     *                    (see TelegramNotifier.deleteModerationCard) instead of leaving
-     *                    its ✅/❌ buttons sitting there clickable forever — null on the
-     *                    rare update shape that doesn't carry one, in which case there's
-     *                    just nothing to clean up. */
+    private String formatBatchCard(List<Vacancy> batch) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("🔔 <b>На модерацию");
+        if (batch.size() > 1) sb.append(" (").append(batch.size()).append(")");
+        sb.append("</b>\n\n");
+        for (int i = 0; i < batch.size(); i++) {
+            if (i > 0) sb.append("➖➖➖➖➖\n\n");
+            if (batch.size() > 1) sb.append(i + 1).append(". ");
+            sb.append(VacancyPostFormatter.publicPost(batch.get(i)));
+        }
+        return sb.toString();
+    }
+
+    /** ✅ tapped for ONE vacancy in the batch: publishes exactly like the automatic path
+     *  would have (same ChannelPublisher.send, immediate-or-paced per the search's own
+     *  publishPaceMinutes). The card stays up — other vacancies in the same batch may
+     *  still be unresolved — until {@link #finishItemInBatch} finds the batch empty.
+     *  @param messageId the tapped card's own message id, so it can be deleted once the
+     *                    WHOLE batch is resolved (see TelegramNotifier.deleteModerationCard)
+     *                    instead of leaving its buttons sitting there clickable forever —
+     *                    null on the rare update shape that doesn't carry one. */
     public void resolveApprove(Long vacancyId, Long messageId) {
         Optional<Vacancy> vacancyOpt = vacancyRepo.findById(vacancyId);
         if (vacancyOpt.isEmpty()) {
             log.warn("Модерация: вакансия id={} не найдена (approve)", vacancyId);
-            deleteCard(messageId);
-            advanceQueue();
+            finishItemInBatch(messageId);
             return;
         }
         Vacancy v = vacancyOpt.get();
         if (!alreadySent(v, vacancyId, "approve")) {
-            deleteCard(messageId);
-            advanceQueue(); // no-op unless the queue is somehow stuck with nothing 'sent'
+            finishItemInBatch(messageId);
             return;
         }
-        Optional<SearchJob> jobOpt = v.getSearchId() != null ? profileFactory.buildForSearchId(v.getSearchId()) : Optional.empty();
-        if (jobOpt.isEmpty()) {
-            log.warn("Модерация: не удалось восстановить поиск для вакансии id={} (search_id={}) — публикация отменена",
-                vacancyId, v.getSearchId());
-            vacancyRepo.markModerationRejected(vacancyId);
-            deleteCard(messageId);
-            advanceQueue();
+        approveOne(v);
+        finishItemInBatch(messageId);
+    }
+
+    /** ❌ tapped for ONE vacancy in the batch: resolved as never-publish, same as a
+     *  similarity-dedup drop. @param messageId see resolveApprove's javadoc. */
+    public void resolveReject(Long vacancyId, Long messageId) {
+        Optional<Vacancy> vacancyOpt = vacancyRepo.findById(vacancyId);
+        if (vacancyOpt.isPresent() && !alreadySent(vacancyOpt.get(), vacancyId, "reject")) {
+            finishItemInBatch(messageId);
             return;
         }
-        vacancyRepo.markModerationApproved(vacancyId);
-        channelPublisher.send(List.of(v), jobOpt.get());
+        vacancyRepo.markModerationRejected(vacancyId);
+        finishItemInBatch(messageId);
+    }
+
+    /**
+     * "✅ Одобрить всё" tapped: resolves EVERY vacancy still 'sent' in the current
+     * batch the same way a single ✅ tap would, then cleans up once for the whole
+     * batch. Faster than tapping each one, but still one explicit tap over the whole
+     * visible batch — not a bypass of review, just of per-item clicking (see class
+     * javadoc on why that distinction matters here).
+     */
+    public void resolveApproveAll(Long messageId) {
+        List<Vacancy> batch = vacancyRepo.findAllSentForModeration();
+        if (batch.isEmpty()) {
+            deleteCard(messageId);
+            return;
+        }
+        log.info("Модерация: «Одобрить всё» — {} вакансий", batch.size());
+        for (Vacancy v : batch) {
+            approveOne(v);
+        }
         deleteCard(messageId);
         advanceQueue();
     }
 
-    /** ❌ tapped: resolved as never-publish, same as a similarity-dedup drop.
-     *  @param messageId see resolveApprove's javadoc. */
-    public void resolveReject(Long vacancyId, Long messageId) {
-        Optional<Vacancy> vacancyOpt = vacancyRepo.findById(vacancyId);
-        if (vacancyOpt.isPresent() && !alreadySent(vacancyOpt.get(), vacancyId, "reject")) {
-            deleteCard(messageId);
-            advanceQueue();
+    /** Shared by resolveApprove and resolveApproveAll: publish this one vacancy via the
+     *  same path the automatic (unmoderated) flow uses, or reject it if its search was
+     *  deleted/disabled since it was queued — nothing sane to publish to. */
+    private void approveOne(Vacancy v) {
+        Optional<SearchJob> jobOpt = v.getSearchId() != null ? profileFactory.buildForSearchId(v.getSearchId()) : Optional.empty();
+        if (jobOpt.isEmpty()) {
+            log.warn("Модерация: не удалось восстановить поиск для вакансии id={} (search_id={}) — публикация отменена",
+                v.getId(), v.getSearchId());
+            vacancyRepo.markModerationRejected(v.getId());
             return;
         }
-        vacancyRepo.markModerationRejected(vacancyId);
-        deleteCard(messageId);
-        advanceQueue();
+        vacancyRepo.markModerationApproved(v.getId());
+        channelPublisher.send(List.of(v), jobOpt.get());
+    }
+
+    /** After resolving one item, cleans up the card and starts the next batch ONLY once
+     *  nothing in the current batch is still 'sent' — other vacancies in the same
+     *  message may still be waiting for their own tap. */
+    private void finishItemInBatch(Long messageId) {
+        if (vacancyRepo.findAllSentForModeration().isEmpty()) {
+            deleteCard(messageId);
+            advanceQueue();
+        }
     }
 
     private void deleteCard(Long messageId) {
@@ -121,7 +176,7 @@ public class ModerationService {
 
     /**
      * True only when the vacancy is still waiting on a decision ('sent' — the state
-     * advanceQueue put it in right before the card went out). ModerationBotPoller now
+     * advanceQueue put it in right before the batch went out). ModerationBotPoller now
      * persists its offset (see its javadoc), so a genuine restart-triggered replay of an
      * already-resolved callback_query shouldn't recur — but this guard stays as a second,
      * independent safety net regardless of the reason a stale/duplicate tap might arrive.

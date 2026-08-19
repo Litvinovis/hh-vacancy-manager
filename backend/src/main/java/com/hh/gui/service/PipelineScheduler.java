@@ -55,6 +55,11 @@ public class PipelineScheduler implements SchedulingConfigurer {
     // the very first scheduled run still catches a dead list within minutes.
     private static final Duration FREE_MODEL_REFRESH_INITIAL_DELAY = Duration.ofMinutes(10);
 
+    // CBR publishes new rates once a day; a daily refresh with a lightweight cache
+    // (see CurrencyRateService) is plenty, no need for anything finer-grained.
+    private static final Duration CURRENCY_RATES_REFRESH_INTERVAL = Duration.ofHours(24);
+    private static final Duration CURRENCY_RATES_REFRESH_INITIAL_DELAY = Duration.ofMinutes(2);
+
     private final VacancyPipelineService pipelineService;
     private final SearchProfileFactory profileFactory;
     private final RuntimeConfig runtimeConfig;
@@ -69,6 +74,7 @@ public class PipelineScheduler implements SchedulingConfigurer {
     private final VacancyRepository vacancyRepo;
     private final TelegramMetrics telegramMetrics;
     private final ModerationService moderationService;
+    private final com.hh.gui.client.CurrencyRateService currencyRateService;
 
     // How often to check for approved vacancies whose delayed_publish_at has arrived
     // (see ChannelPublisher.publishDueDelayed). A 5-minute delay needs a check
@@ -130,7 +136,8 @@ public class PipelineScheduler implements SchedulingConfigurer {
                               FreeModelUpdater freeModelUpdater, FeatureFlags featureFlags, SchemaMigrator schemaMigrator,
                               SubscriptionService subscriptionService, ChannelPublisher channelPublisher,
                               ChannelEngagementTracker engagementTracker, VacancyRepository vacancyRepo,
-                              TelegramMetrics telegramMetrics, ModerationService moderationService) {
+                              TelegramMetrics telegramMetrics, ModerationService moderationService,
+                              com.hh.gui.client.CurrencyRateService currencyRateService) {
         this.pipelineService = pipelineService;
         this.profileFactory = profileFactory;
         this.runtimeConfig = runtimeConfig;
@@ -145,6 +152,7 @@ public class PipelineScheduler implements SchedulingConfigurer {
         this.vacancyRepo = vacancyRepo;
         this.telegramMetrics = telegramMetrics;
         this.moderationService = moderationService;
+        this.currencyRateService = currencyRateService;
     }
 
     @Override
@@ -156,6 +164,9 @@ public class PipelineScheduler implements SchedulingConfigurer {
         PeriodicTrigger freeModelTrigger = new PeriodicTrigger(FREE_MODEL_REFRESH_INTERVAL);
         freeModelTrigger.setInitialDelay(FREE_MODEL_REFRESH_INITIAL_DELAY);
         registrar.addTriggerTask(this::refreshFreeModels, freeModelTrigger);
+        PeriodicTrigger currencyRatesTrigger = new PeriodicTrigger(CURRENCY_RATES_REFRESH_INTERVAL);
+        currencyRatesTrigger.setInitialDelay(CURRENCY_RATES_REFRESH_INITIAL_DELAY);
+        registrar.addTriggerTask(this::refreshCurrencyRates, currencyRatesTrigger);
         // Liveness re-checks of approved postings — a background chore that only eats
         // idle scraper capacity (see checkVacancyFreshness's own guards).
         PeriodicTrigger freshnessTrigger = new PeriodicTrigger(Duration.ofMinutes(10));
@@ -294,6 +305,14 @@ public class PipelineScheduler implements SchedulingConfigurer {
             freeModelUpdater.refresh();
         } catch (Exception e) {
             log.error("Плановое обновление free-моделей завершилось ошибкой: {}", e.getMessage(), e);
+        }
+    }
+
+    private void refreshCurrencyRates() {
+        try {
+            currencyRateService.refresh();
+        } catch (Exception e) {
+            log.error("Плановое обновление курсов валют завершилось ошибкой: {}", e.getMessage(), e);
         }
     }
 

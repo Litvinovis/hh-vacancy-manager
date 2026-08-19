@@ -59,6 +59,7 @@ public class VacancyRepository {
             v.setNoveltyColor(rs.getString("novelty_color"));
             v.setNoveltyNote(rs.getString("novelty_note"));
             v.setModerationStatus(rs.getString("moderation_status"));
+            v.setClickToken(rs.getString("click_token"));
             v.setDescription(rs.getString("description"));
             v.setStatus(rs.getString("status"));
             v.setRejectionReason(rs.getString("rejection_reason"));
@@ -544,24 +545,25 @@ public class VacancyRepository {
         }
     }
 
-    /** The card currently awaiting the admin's tap — at most one at a time by design
-     *  (ModerationService.advanceQueue only sends the next card once this is empty),
-     *  but the query doesn't assume that; it just takes whichever is oldest if several
-     *  ever exist (e.g. after a bug or manual DB edit). */
-    public Optional<Vacancy> findCurrentSentForModeration() {
-        return jdbc.query("SELECT * FROM vacancies WHERE moderation_status='sent' ORDER BY id LIMIT 1", rowMapper)
-            .stream().findFirst();
+    /** Every vacancy in the ONE batch card currently awaiting the admin's taps — at
+     *  most one batch in flight at a time by design (ModerationService.advanceQueue
+     *  only sends the next batch once this is empty). Order matches the numbering the
+     *  card itself was rendered with (see ModerationService.formatBatchCard). */
+    public List<Vacancy> findAllSentForModeration() {
+        return jdbc.query("SELECT * FROM vacancies WHERE moderation_status='sent' ORDER BY id", rowMapper);
     }
 
-    /** Oldest still-waiting card — FIFO, so nothing queued early gets stuck behind newer
-     *  arrivals indefinitely. */
-    public Optional<Vacancy> findNextQueuedForModeration() {
-        return jdbc.query("SELECT * FROM vacancies WHERE moderation_status='queued' ORDER BY id LIMIT 1", rowMapper)
-            .stream().findFirst();
+    /** Oldest still-waiting vacancies, up to {@code limit} — FIFO, so nothing queued
+     *  early gets stuck behind newer arrivals indefinitely. */
+    public List<Vacancy> findNextQueuedBatchForModeration(int limit) {
+        return jdbc.query("SELECT * FROM vacancies WHERE moderation_status='queued' ORDER BY id LIMIT ?", rowMapper, limit);
     }
 
-    public void markModerationSent(Long id) {
-        jdbc.update("UPDATE vacancies SET moderation_status='sent', updated_at=? WHERE id=?", Instant.now().toString(), id);
+    public void markModerationSent(List<Long> ids) {
+        String now = Instant.now().toString();
+        for (Long id : ids) {
+            jdbc.update("UPDATE vacancies SET moderation_status='sent', updated_at=? WHERE id=?", now, id);
+        }
     }
 
     public void markModerationApproved(Long id) {
@@ -701,9 +703,28 @@ public class VacancyRepository {
      * was invisible here. Verified live: "Т-Банк. Бизнес и процессы. Страхование"
      * (Эксперт-расчетчик ОСАГО) was reposted and both copies got approved and
      * published to the channel three minutes apart.
+     *
+     * Scoped by DESTINATION (chat_id) when the search has one, not by (person,
+     * searchName): two different EDITORIAL searches routinely share one output
+     * channel (e.g. "Без техстека" and "Интересная удалёнка" both feed the same
+     * chat_id) — a repost that lands in one search but not the other used to be
+     * invisible to this check even though the SAME readers would see it twice.
+     * Falls back to the old (person, searchName) scoping when chatId is blank —
+     * a personal (non-EDITORIAL) report has no shared public destination to dedupe
+     * against, and personal reports for different people are legitimately allowed
+     * to repeat each other.
      */
-    public List<Vacancy> findNotifiedByEmployer(String person, String searchName, String employerName) {
+    public List<Vacancy> findNotifiedByEmployer(String person, String searchName, String chatId, String employerName) {
         if (employerName == null || employerName.isBlank()) return List.of();
+        if (chatId != null && !chatId.isBlank()) {
+            return jdbc.query(
+                "SELECT v.* FROM vacancies v JOIN searches s ON v.search_id = s.id " +
+                "WHERE s.chat_id=? " +
+                "AND (v.notified=1 OR v.queued_publish_at IS NOT NULL OR v.moderation_status IN ('queued','sent')) " +
+                "AND LOWER(COALESCE(NULLIF(v.employer_name,''), v.company)) = LOWER(?) " +
+                "ORDER BY v.updated_at DESC LIMIT 50",
+                rowMapper, chatId, employerName);
+        }
         return jdbc.query(
             "SELECT * FROM vacancies WHERE person=? AND search_name=? " +
             "AND (notified=1 OR queued_publish_at IS NOT NULL OR moderation_status IN ('queued','sent')) " +
@@ -722,15 +743,60 @@ public class VacancyRepository {
      * unbounded-backlog concern as findNotifiedByEmployer, just a wider pool since
      * this spans every channel instead of one employer. Also includes rows still
      * awaiting a moderation decision ('queued'/'sent'), same reasoning as
+     * findNotifiedByEmployer's javadoc. Scoped by destination chat_id when available,
+     * falling back to (person, searchName) — same cross-search reasoning as
      * findNotifiedByEmployer's javadoc.
      */
-    public List<Vacancy> findWithUnresolvedEmployer(String person, String searchName) {
+    public List<Vacancy> findWithUnresolvedEmployer(String person, String searchName, String chatId) {
+        if (chatId != null && !chatId.isBlank()) {
+            return jdbc.query(
+                "SELECT v.* FROM vacancies v JOIN searches s ON v.search_id = s.id " +
+                "WHERE s.chat_id=? " +
+                "AND (v.notified=1 OR v.queued_publish_at IS NOT NULL OR v.moderation_status IN ('queued','sent')) " +
+                "AND COALESCE(NULLIF(v.employer_name,''), v.company) LIKE '@%' " +
+                "ORDER BY v.updated_at DESC LIMIT 100",
+                rowMapper, chatId);
+        }
         return jdbc.query(
             "SELECT * FROM vacancies WHERE person=? AND search_name=? " +
             "AND (notified=1 OR queued_publish_at IS NOT NULL OR moderation_status IN ('queued','sent')) " +
             "AND COALESCE(NULLIF(employer_name,''), company) LIKE '@%' " +
             "ORDER BY updated_at DESC LIMIT 100",
             rowMapper, person, searchName);
+    }
+
+    /**
+     * Rows a moderator explicitly rejected, most recent first — feeds
+     * RejectionReportService's weekly pattern surfacing (see its javadoc): the
+     * grouping/counting by channel and employer happens in Java, not here, since
+     * channel extraction from hh_id (TelegramPostParser.channelFromHhId) is a Java
+     * function with no SQL equivalent worth duplicating.
+     */
+    public List<Vacancy> findRejectedSince(String since, int limit) {
+        return jdbc.query(
+            "SELECT * FROM vacancies WHERE moderation_status='rejected' AND updated_at >= ? " +
+            "ORDER BY updated_at DESC LIMIT ?",
+            rowMapper, since, limit);
+    }
+
+    /** Assigns a click-tracking token — see ClickTrackingService, the only caller.
+     *  A no-op update on a row that already has one is harmless but avoided by the
+     *  caller (it checks getClickToken() first). */
+    public void setClickToken(Long id, String token) {
+        jdbc.update("UPDATE vacancies SET click_token=? WHERE id=?", token, id);
+    }
+
+    /** Looks up the vacancy a /go/{token} redirect is for. Empty if the token is
+     *  unknown — a stale/tampered link, not something to guess at. */
+    public Optional<Vacancy> findByClickToken(String token) {
+        return jdbc.query("SELECT * FROM vacancies WHERE click_token=?", rowMapper, token)
+            .stream().findFirst();
+    }
+
+    /** Records one click through /go/{token} — see ClickTrackingController. */
+    public void recordClick(Long vacancyId) {
+        jdbc.update("INSERT INTO vacancy_clicks (vacancy_id, clicked_at) VALUES (?, ?)",
+            vacancyId, Instant.now().toString());
     }
 
     /**

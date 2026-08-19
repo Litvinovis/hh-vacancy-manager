@@ -552,7 +552,7 @@ class VacancyDiscoveryTest {
     /** Прескрин «всё подходит»: пустой список вердиктов = ни одного отсева. */
     private static class FakeAnalyzer extends VacancyAiAnalyzer {
         FakeAnalyzer(RuntimeConfig config) {
-            super(config, null, null);
+            super(config, null, null, null);
         }
         @Override
         public List<AiResult> prescreenHits(List<ScraperClient.SearchHit> hits, SearchJob job) {

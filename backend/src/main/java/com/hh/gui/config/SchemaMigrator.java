@@ -81,6 +81,7 @@ public class SchemaMigrator implements ApplicationRunner {
         // touched for EDITORIAL (public-channel) searches when app.moderation.enabled;
         // everything else stays 'none' forever.
         addColumnIfMissing("vacancies", "moderation_status", "TEXT NOT NULL DEFAULT 'none'");
+        addColumnIfMissing("vacancies", "click_token", "TEXT DEFAULT NULL");
         addColumnIfMissing("subscriptions", "cancel_requested", "INTEGER NOT NULL DEFAULT 0");
         addColumnIfMissing("subscriptions", "renewal_reminder_sent_at", "TEXT DEFAULT NULL");
 

@@ -2,6 +2,7 @@ package com.hh.gui.controller;
 
 import com.hh.gui.model.SearchConfig;
 import com.hh.gui.model.User;
+import com.hh.gui.service.RejectionReportService;
 import com.hh.gui.service.SearchService;
 import com.hh.gui.service.UserService;
 import org.springframework.http.ResponseEntity;
@@ -27,10 +28,23 @@ public class AdminController {
 
     private final UserService userService;
     private final SearchService searchService;
+    private final RejectionReportService rejectionReportService;
 
-    public AdminController(UserService userService, SearchService searchService) {
+    public AdminController(UserService userService, SearchService searchService,
+                            RejectionReportService rejectionReportService) {
         this.userService = userService;
         this.searchService = searchService;
+        this.rejectionReportService = rejectionReportService;
+    }
+
+    /** v1 of the moderation feedback loop (see RejectionReportService) — top rejected
+     *  (channel, employer) combos over the trailing {@code days}, for a human to act on. */
+    @GetMapping("/rejection-report")
+    public ResponseEntity<?> rejectionReport(@RequestParam(defaultValue = "7") int days,
+                                              @RequestParam(defaultValue = "20") int limit,
+                                              @RequestAttribute("currentUser") User currentUser) {
+        if (!currentUser.isAdmin()) return forbidden();
+        return ResponseEntity.ok(rejectionReportService.topPatterns(days, limit));
     }
 
     @GetMapping("/global-searches")
