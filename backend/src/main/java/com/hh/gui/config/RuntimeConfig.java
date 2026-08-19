@@ -144,6 +144,12 @@ public class RuntimeConfig {
     private volatile int httpReadTimeoutMs = 120000;
     private volatile int scraperReadTimeoutMs = 240000;
     private volatile int minScore = 50;
+    // 0 = disabled (default) — same "0 means off" convention as cooldownHours below.
+    // A vacancy scoring at or above this on an EDITORIAL search skips human moderation
+    // entirely and publishes straight away. Off by default: ships alongside
+    // RejectionReportService (see AdminController's /api/admin/rejection-report) so a
+    // sane value can be picked from actual rejection data, not a guess.
+    private volatile int autoApproveScoreThreshold = 0;
     private volatile int maxApproved = 10;
     private volatile int cooldownHours = 0;
     private volatile int pipelineBatchSize = 10;
@@ -275,6 +281,12 @@ public class RuntimeConfig {
                 "Вакансии с меньшим скором не попадают в отчёт.",
                 "number", 0, 100, minScore),
 
+            SettingDescriptor.of("autoApproveScoreThreshold", "Порог автоапрува",
+                "AI-скор (0-100), при достижении которого вакансия из редакционного поиска " +
+                "публикуется в канал МИНУЯ модерацию человеком. 0 = выключено (по умолчанию) — " +
+                "все редакционные вакансии всегда идут через модератора.",
+                "number", 0, 100, autoApproveScoreThreshold),
+
             SettingDescriptor.of("maxApproved", "Лимит уведомлений",
                 "Максимальное количество одобренных вакансий в одном Telegram-уведомлении. " +
                 "Ограничивает размер одного сообщения.",
@@ -347,6 +359,7 @@ public class RuntimeConfig {
                     case "httpReadTimeoutMs" -> setHttpReadTimeoutMs(toInt(value, errors, key, 10000, 300000));
                     case "scraperReadTimeoutMs" -> setScraperReadTimeoutMs(toInt(value, errors, key, 30000, 600000));
                     case "minScore" -> setMinScore(toInt(value, errors, key, 0, 100));
+                    case "autoApproveScoreThreshold" -> setAutoApproveScoreThreshold(toInt(value, errors, key, 0, 100));
                     case "maxApproved" -> setMaxApproved(toInt(value, errors, key, 1, 50));
                     case "cooldownHours" -> setCooldownHours(toInt(value, errors, key, 0, 72));
                     case "pipelineBatchSize" -> setPipelineBatchSize(toInt(value, errors, key, 1, 100));
@@ -392,6 +405,7 @@ public class RuntimeConfig {
         m.put("httpReadTimeoutMs", httpReadTimeoutMs);
         m.put("scraperReadTimeoutMs", scraperReadTimeoutMs);
         m.put("minScore", minScore);
+        m.put("autoApproveScoreThreshold", autoApproveScoreThreshold);
         m.put("maxApproved", maxApproved);
         m.put("cooldownHours", cooldownHours);
         m.put("pipelineBatchSize", pipelineBatchSize);
@@ -486,6 +500,9 @@ public class RuntimeConfig {
 
     public int getMinScore() { return minScore; }
     public void setMinScore(int v) { this.minScore = v; }
+
+    public int getAutoApproveScoreThreshold() { return autoApproveScoreThreshold; }
+    public void setAutoApproveScoreThreshold(int v) { this.autoApproveScoreThreshold = v; }
 
     public int getMaxApproved() { return maxApproved; }
     public void setMaxApproved(int v) { this.maxApproved = v; }
