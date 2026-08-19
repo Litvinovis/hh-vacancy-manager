@@ -545,24 +545,25 @@ public class VacancyRepository {
         }
     }
 
-    /** The card currently awaiting the admin's tap — at most one at a time by design
-     *  (ModerationService.advanceQueue only sends the next card once this is empty),
-     *  but the query doesn't assume that; it just takes whichever is oldest if several
-     *  ever exist (e.g. after a bug or manual DB edit). */
-    public Optional<Vacancy> findCurrentSentForModeration() {
-        return jdbc.query("SELECT * FROM vacancies WHERE moderation_status='sent' ORDER BY id LIMIT 1", rowMapper)
-            .stream().findFirst();
+    /** Every vacancy in the ONE batch card currently awaiting the admin's taps — at
+     *  most one batch in flight at a time by design (ModerationService.advanceQueue
+     *  only sends the next batch once this is empty). Order matches the numbering the
+     *  card itself was rendered with (see ModerationService.formatBatchCard). */
+    public List<Vacancy> findAllSentForModeration() {
+        return jdbc.query("SELECT * FROM vacancies WHERE moderation_status='sent' ORDER BY id", rowMapper);
     }
 
-    /** Oldest still-waiting card — FIFO, so nothing queued early gets stuck behind newer
-     *  arrivals indefinitely. */
-    public Optional<Vacancy> findNextQueuedForModeration() {
-        return jdbc.query("SELECT * FROM vacancies WHERE moderation_status='queued' ORDER BY id LIMIT 1", rowMapper)
-            .stream().findFirst();
+    /** Oldest still-waiting vacancies, up to {@code limit} — FIFO, so nothing queued
+     *  early gets stuck behind newer arrivals indefinitely. */
+    public List<Vacancy> findNextQueuedBatchForModeration(int limit) {
+        return jdbc.query("SELECT * FROM vacancies WHERE moderation_status='queued' ORDER BY id LIMIT ?", rowMapper, limit);
     }
 
-    public void markModerationSent(Long id) {
-        jdbc.update("UPDATE vacancies SET moderation_status='sent', updated_at=? WHERE id=?", Instant.now().toString(), id);
+    public void markModerationSent(List<Long> ids) {
+        String now = Instant.now().toString();
+        for (Long id : ids) {
+            jdbc.update("UPDATE vacancies SET moderation_status='sent', updated_at=? WHERE id=?", now, id);
+        }
     }
 
     public void markModerationApproved(Long id) {

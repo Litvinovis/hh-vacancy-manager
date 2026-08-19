@@ -29,7 +29,7 @@ import java.util.Map;
  * poller (TelegramBotPoller) only runs when app.subscriptions.enabled, which is off
  * today, so this borrows an otherwise-idle slot — see the conflict check in start().
  * Cards still land in the owner's personal DM (app.telegram.chat-id) regardless of
- * which bot identity sent them — see TelegramNotifier.sendModerationCard.
+ * which bot identity sent them — see TelegramNotifier.sendModerationCardBatch.
  *
  * Entirely inert while FeatureFlags.moderationEnabled is false — see start().
  */
@@ -192,6 +192,13 @@ public class ModerationBotPoller {
         if (callback.get("message") instanceof Map<?, ?> message
                 && message.get("message_id") instanceof Number messageIdNum) {
             messageId = messageIdNum.longValue();
+        }
+
+        // No vacancy id — acts on every vacancy currently in the batch (see
+        // ModerationService.resolveApproveAll), not one specific row.
+        if ("modpuball".equals(data)) {
+            moderationService.resolveApproveAll(messageId);
+            return;
         }
 
         Long vacancyId = parseVacancyId(data);
