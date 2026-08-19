@@ -693,12 +693,20 @@ public class VacancyRepository {
      * Verified live: two copies of "Куратор в онлайн-школу" (same channel, same
      * fallback employer) both sat notified=0 with nothing queued yet, invisible to
      * each other across two separate analyze/approve passes.
+     *
+     * Vacancies still awaiting a moderation DECISION (moderation_status 'queued' or
+     * 'sent') are included too, for the same reason: a repost of the same employer's
+     * job can arrive while an earlier copy is sitting in a moderator's Telegram queue,
+     * not yet approved — so it has neither notified=1 nor queued_publish_at yet, and
+     * was invisible here. Verified live: "Т-Банк. Бизнес и процессы. Страхование"
+     * (Эксперт-расчетчик ОСАГО) was reposted and both copies got approved and
+     * published to the channel three minutes apart.
      */
     public List<Vacancy> findNotifiedByEmployer(String person, String searchName, String employerName) {
         if (employerName == null || employerName.isBlank()) return List.of();
         return jdbc.query(
             "SELECT * FROM vacancies WHERE person=? AND search_name=? " +
-            "AND (notified=1 OR queued_publish_at IS NOT NULL) " +
+            "AND (notified=1 OR queued_publish_at IS NOT NULL OR moderation_status IN ('queued','sent')) " +
             "AND LOWER(COALESCE(NULLIF(employer_name,''), company)) = LOWER(?) " +
             "ORDER BY updated_at DESC LIMIT 50",
             rowMapper, person, searchName, employerName);
@@ -712,12 +720,14 @@ public class VacancyRepository {
      * employer, is invisible to findNotifiedByEmployer's per-employer-key scoping
      * since the two channels' fallback employer values differ. LIMIT 100: same
      * unbounded-backlog concern as findNotifiedByEmployer, just a wider pool since
-     * this spans every channel instead of one employer.
+     * this spans every channel instead of one employer. Also includes rows still
+     * awaiting a moderation decision ('queued'/'sent'), same reasoning as
+     * findNotifiedByEmployer's javadoc.
      */
     public List<Vacancy> findWithUnresolvedEmployer(String person, String searchName) {
         return jdbc.query(
             "SELECT * FROM vacancies WHERE person=? AND search_name=? " +
-            "AND (notified=1 OR queued_publish_at IS NOT NULL) " +
+            "AND (notified=1 OR queued_publish_at IS NOT NULL OR moderation_status IN ('queued','sent')) " +
             "AND COALESCE(NULLIF(employer_name,''), company) LIKE '@%' " +
             "ORDER BY updated_at DESC LIMIT 100",
             rowMapper, person, searchName);
