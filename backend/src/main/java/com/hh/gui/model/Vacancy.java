@@ -26,6 +26,10 @@ public class Vacancy {
     // through dedicated repository methods (markModerationQueued etc.), not the general
     // save()/update() path — same pattern as ai_verdict via updateAiResult.
     private String moderationStatus;
+    // Set lazily by ClickTrackingService, only once app.public-base-url is configured —
+    // most rows never get one. See schema.sql's column comment for why it's opaque
+    // rather than just the row's own id.
+    private String clickToken;
     private String description;
     private String status;
     private String rejectionReason;
@@ -114,6 +118,9 @@ public class Vacancy {
 
     public String getModerationStatus() { return moderationStatus; }
     public void setModerationStatus(String moderationStatus) { this.moderationStatus = moderationStatus; }
+
+    public String getClickToken() { return clickToken; }
+    public void setClickToken(String clickToken) { this.clickToken = clickToken; }
 
     public String getNoveltyNote() { return noveltyNote; }
     public void setNoveltyNote(String noveltyNote) { this.noveltyNote = noveltyNote; }

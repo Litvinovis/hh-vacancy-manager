@@ -139,6 +139,12 @@ CREATE TABLE IF NOT EXISTS vacancies (
     -- the regular `notified` flag once actually sent — this isn't a second
     -- destination like delayed_publish_at, just a paced primary one.
     queued_publish_at TEXT DEFAULT NULL,
+    -- Opaque per-row token for the /go/{token} click-tracking redirect (see
+    -- ClickTrackingController) — NOT the row's own id, so a reader can't infer
+    -- table size / row count from a link they were sent. Generated lazily by
+    -- ClickTrackingService only once app.public-base-url is actually configured;
+    -- most rows never get one.
+    click_token TEXT DEFAULT NULL,
     UNIQUE(hh_id, person, search_name)
 );
 
@@ -170,6 +176,15 @@ CREATE TABLE IF NOT EXISTS history (
     action TEXT NOT NULL,
     details TEXT DEFAULT '',
     created_at TEXT NOT NULL DEFAULT ''
+);
+
+-- One row per click through /go/{token} (see ClickTrackingController) — a table,
+-- not just a counter column, so "did today's post get clicked today" can actually
+-- be answered later, the same way this app's own daily log/publication audits work.
+CREATE TABLE IF NOT EXISTS vacancy_clicks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    vacancy_id INTEGER NOT NULL REFERENCES vacancies(id) ON DELETE CASCADE,
+    clicked_at TEXT NOT NULL
 );
 
 -- Paid early-access subscribers of the Telegram bot (see FeatureFlags.subscriptionsEnabled

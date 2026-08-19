@@ -59,6 +59,7 @@ public class VacancyRepository {
             v.setNoveltyColor(rs.getString("novelty_color"));
             v.setNoveltyNote(rs.getString("novelty_note"));
             v.setModerationStatus(rs.getString("moderation_status"));
+            v.setClickToken(rs.getString("click_token"));
             v.setDescription(rs.getString("description"));
             v.setStatus(rs.getString("status"));
             v.setRejectionReason(rs.getString("rejection_reason"));
@@ -775,6 +776,26 @@ public class VacancyRepository {
             "SELECT * FROM vacancies WHERE moderation_status='rejected' AND updated_at >= ? " +
             "ORDER BY updated_at DESC LIMIT ?",
             rowMapper, since, limit);
+    }
+
+    /** Assigns a click-tracking token — see ClickTrackingService, the only caller.
+     *  A no-op update on a row that already has one is harmless but avoided by the
+     *  caller (it checks getClickToken() first). */
+    public void setClickToken(Long id, String token) {
+        jdbc.update("UPDATE vacancies SET click_token=? WHERE id=?", token, id);
+    }
+
+    /** Looks up the vacancy a /go/{token} redirect is for. Empty if the token is
+     *  unknown — a stale/tampered link, not something to guess at. */
+    public Optional<Vacancy> findByClickToken(String token) {
+        return jdbc.query("SELECT * FROM vacancies WHERE click_token=?", rowMapper, token)
+            .stream().findFirst();
+    }
+
+    /** Records one click through /go/{token} — see ClickTrackingController. */
+    public void recordClick(Long vacancyId) {
+        jdbc.update("INSERT INTO vacancy_clicks (vacancy_id, clicked_at) VALUES (?, ?)",
+            vacancyId, Instant.now().toString());
     }
 
     /**
