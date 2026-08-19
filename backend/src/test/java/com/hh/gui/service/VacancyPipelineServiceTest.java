@@ -653,11 +653,11 @@ class VacancyPipelineServiceTest {
         final List<Long> markedModerationQueued = new ArrayList<>();
         FakeSimilarityRepo() { super(null); }
         @Override
-        public List<Vacancy> findNotifiedByEmployer(String person, String searchName, String employerName) {
+        public List<Vacancy> findNotifiedByEmployer(String person, String searchName, String chatId, String employerName) {
             return alreadyNotified;
         }
         @Override
-        public List<Vacancy> findWithUnresolvedEmployer(String person, String searchName) {
+        public List<Vacancy> findWithUnresolvedEmployer(String person, String searchName, String chatId) {
             return unresolvedEmployerPool;
         }
         @Override

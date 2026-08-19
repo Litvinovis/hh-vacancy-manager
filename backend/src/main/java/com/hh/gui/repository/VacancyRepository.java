@@ -701,9 +701,28 @@ public class VacancyRepository {
      * was invisible here. Verified live: "Т-Банк. Бизнес и процессы. Страхование"
      * (Эксперт-расчетчик ОСАГО) was reposted and both copies got approved and
      * published to the channel three minutes apart.
+     *
+     * Scoped by DESTINATION (chat_id) when the search has one, not by (person,
+     * searchName): two different EDITORIAL searches routinely share one output
+     * channel (e.g. "Без техстека" and "Интересная удалёнка" both feed the same
+     * chat_id) — a repost that lands in one search but not the other used to be
+     * invisible to this check even though the SAME readers would see it twice.
+     * Falls back to the old (person, searchName) scoping when chatId is blank —
+     * a personal (non-EDITORIAL) report has no shared public destination to dedupe
+     * against, and personal reports for different people are legitimately allowed
+     * to repeat each other.
      */
-    public List<Vacancy> findNotifiedByEmployer(String person, String searchName, String employerName) {
+    public List<Vacancy> findNotifiedByEmployer(String person, String searchName, String chatId, String employerName) {
         if (employerName == null || employerName.isBlank()) return List.of();
+        if (chatId != null && !chatId.isBlank()) {
+            return jdbc.query(
+                "SELECT v.* FROM vacancies v JOIN searches s ON v.search_id = s.id " +
+                "WHERE s.chat_id=? " +
+                "AND (v.notified=1 OR v.queued_publish_at IS NOT NULL OR v.moderation_status IN ('queued','sent')) " +
+                "AND LOWER(COALESCE(NULLIF(v.employer_name,''), v.company)) = LOWER(?) " +
+                "ORDER BY v.updated_at DESC LIMIT 50",
+                rowMapper, chatId, employerName);
+        }
         return jdbc.query(
             "SELECT * FROM vacancies WHERE person=? AND search_name=? " +
             "AND (notified=1 OR queued_publish_at IS NOT NULL OR moderation_status IN ('queued','sent')) " +
@@ -722,9 +741,20 @@ public class VacancyRepository {
      * unbounded-backlog concern as findNotifiedByEmployer, just a wider pool since
      * this spans every channel instead of one employer. Also includes rows still
      * awaiting a moderation decision ('queued'/'sent'), same reasoning as
+     * findNotifiedByEmployer's javadoc. Scoped by destination chat_id when available,
+     * falling back to (person, searchName) — same cross-search reasoning as
      * findNotifiedByEmployer's javadoc.
      */
-    public List<Vacancy> findWithUnresolvedEmployer(String person, String searchName) {
+    public List<Vacancy> findWithUnresolvedEmployer(String person, String searchName, String chatId) {
+        if (chatId != null && !chatId.isBlank()) {
+            return jdbc.query(
+                "SELECT v.* FROM vacancies v JOIN searches s ON v.search_id = s.id " +
+                "WHERE s.chat_id=? " +
+                "AND (v.notified=1 OR v.queued_publish_at IS NOT NULL OR v.moderation_status IN ('queued','sent')) " +
+                "AND COALESCE(NULLIF(v.employer_name,''), v.company) LIKE '@%' " +
+                "ORDER BY v.updated_at DESC LIMIT 100",
+                rowMapper, chatId);
+        }
         return jdbc.query(
             "SELECT * FROM vacancies WHERE person=? AND search_name=? " +
             "AND (notified=1 OR queued_publish_at IS NOT NULL OR moderation_status IN ('queued','sent')) " +

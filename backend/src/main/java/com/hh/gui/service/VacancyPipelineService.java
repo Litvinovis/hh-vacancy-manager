@@ -1067,7 +1067,7 @@ public class VacancyPipelineService {
 
             if (!duplicate) {
                 List<Vacancy> notified = notifiedByEmployerKey.computeIfAbsent(key,
-                    k -> vacancyRepo.findNotifiedByEmployer(job.personName, job.searchName, v.employerOrCompany()));
+                    k -> vacancyRepo.findNotifiedByEmployer(job.personName, job.searchName, job.chatId, v.employerOrCompany()));
                 duplicate = notified.stream().anyMatch(n ->
                     TextSimilarity.lineSimilarity(v.getDescription(), n.getDescription()) >= SIMILAR_DESCRIPTION_THRESHOLD);
             }
@@ -1084,7 +1084,7 @@ public class VacancyPipelineService {
             // can't misfire on two different real companies that both merely lack a key.
             if (!duplicate && v.employerOrCompany().startsWith("@")) {
                 if (unresolvedEmployerPool == null) {
-                    unresolvedEmployerPool = vacancyRepo.findWithUnresolvedEmployer(job.personName, job.searchName);
+                    unresolvedEmployerPool = vacancyRepo.findWithUnresolvedEmployer(job.personName, job.searchName, job.chatId);
                 }
                 List<Vacancy> pool = unresolvedEmployerPool;
                 duplicate = kept.stream().anyMatch(k -> k.employerOrCompany().startsWith("@")
