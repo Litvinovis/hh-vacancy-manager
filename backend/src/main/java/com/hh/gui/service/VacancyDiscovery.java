@@ -56,6 +56,16 @@ public class VacancyDiscovery {
     private final ScrapeCooldown scrapeCooldown;
     private final com.hh.gui.ai.AiMetrics metrics;
 
+    // Consecutive-failure streak per Telegram source channel, across scheduler ticks —
+    // TelegramClient.fetchChannel already retries a single-tick "channel_not_found"
+    // a couple of times, so a streak here means several WHOLE TICKS in a row failed
+    // (hours apart, not seconds). One bad tick is noise; only a sustained streak is
+    // worth calling out louder than the per-tick WARN already logs. In-memory and
+    // reset on app restart, same as this app's other in-process counters (e.g.
+    // TelegramMetrics) — not worth persisting for what's purely an escalation signal.
+    private final Map<String, Integer> consecutiveChannelFailures = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final int CHANNEL_FAILURE_ESCALATION_THRESHOLD = 5;
+
     public VacancyDiscovery(HhApiClient hhApiClient, ScraperClient scraperClient, TelegramClient telegramClient,
                             VacancyAiAnalyzer aiAnalyzer, VacancyRepository vacancyRepo,
                             TelegramMetrics telegramMetrics, ChannelEngagementTracker engagementTracker,
@@ -241,8 +251,14 @@ public class VacancyDiscovery {
             TelegramClient.ChannelResult result = telegramClient.fetchChannel(channel, 100);
             if (!result.ok()) {
                 log.warn("Telegram-канал @{} ({} · {}) недоступен: {}", channel, job.personName, job.searchName, result.reason());
+                int streak = consecutiveChannelFailures.merge(channel, 1, Integer::sum);
+                if (streak == CHANNEL_FAILURE_ESCALATION_THRESHOLD) {
+                    log.warn("Telegram-канал @{} недоступен {} тиков подряд — похоже не на разовый блип, стоит проверить вручную",
+                        channel, streak);
+                }
                 continue;
             }
+            consecutiveChannelFailures.remove(channel);
             // SMM engagement snapshot for this SOURCE channel (where vacancies are found,
             // not the app's own output channel — see ChannelEngagementTracker.checkOwnChannels for that) —
             // summed across whatever's currently visible in the scrape, refreshed on every
