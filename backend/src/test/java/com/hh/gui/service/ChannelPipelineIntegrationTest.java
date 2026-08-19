@@ -57,8 +57,9 @@ class ChannelPipelineIntegrationTest {
         TelegramClient telegramClient() { return new CannedTelegramClient(); }
 
         @Bean @Primary
-        VacancyAiAnalyzer analyzer(RuntimeConfig config, AiProviderManager providers, AiMetrics metrics) {
-            return new PromptCapturingAnalyzer(config, providers, metrics);
+        VacancyAiAnalyzer analyzer(RuntimeConfig config, AiProviderManager providers, AiMetrics metrics,
+                                    com.hh.gui.client.CurrencyRateService currencyRates) {
+            return new PromptCapturingAnalyzer(config, providers, metrics, currencyRates);
         }
 
         @Bean @Primary

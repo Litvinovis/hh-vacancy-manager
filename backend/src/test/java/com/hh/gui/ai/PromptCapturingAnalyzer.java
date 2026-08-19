@@ -21,8 +21,9 @@ public class PromptCapturingAnalyzer extends VacancyAiAnalyzer {
     public String verdict = "yes";
     public int score = 85;
 
-    public PromptCapturingAnalyzer(RuntimeConfig runtimeConfig, AiProviderManager providerManager, AiMetrics metrics) {
-        super(runtimeConfig, providerManager, metrics);
+    public PromptCapturingAnalyzer(RuntimeConfig runtimeConfig, AiProviderManager providerManager, AiMetrics metrics,
+                                    com.hh.gui.client.CurrencyRateService currencyRates) {
+        super(runtimeConfig, providerManager, metrics, currencyRates);
     }
 
     @Override

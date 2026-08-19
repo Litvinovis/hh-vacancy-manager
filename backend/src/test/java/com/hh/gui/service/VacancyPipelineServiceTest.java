@@ -309,7 +309,7 @@ class VacancyPipelineServiceTest {
     /** Прескрин «всё подходит»: пустой список вердиктов = ни одного отсева. */
     private static class FakeAnalyzer extends VacancyAiAnalyzer {
         FakeAnalyzer(RuntimeConfig config) {
-            super(config, null, null);
+            super(config, null, null, null);
         }
         @Override
         public List<AiResult> prescreenHits(List<ScraperClient.SearchHit> hits, SearchJob job) {
@@ -384,7 +384,7 @@ class VacancyPipelineServiceTest {
     /** Отвечает вердиктом на всё, что прислали, и запоминает размер пакета, ушедшего в LLM. */
     private static class FakeBatchAnalyzer extends VacancyAiAnalyzer {
         final List<Integer> llmBatchSizes = new ArrayList<>();
-        FakeBatchAnalyzer(RuntimeConfig config) { super(config, null, null); }
+        FakeBatchAnalyzer(RuntimeConfig config) { super(config, null, null, null); }
         @Override
         public String computeCriteriaHash(SearchJob job) { return "hash"; }
         @Override

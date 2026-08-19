@@ -113,7 +113,7 @@ class PipelineSchedulerTest {
 
     static class FakeAnalyzer extends VacancyAiAnalyzer {
         boolean rateLimited = false;
-        FakeAnalyzer(RuntimeConfig config) { super(config, null, new AiMetrics(new SimpleMeterRegistry(), config)); }
+        FakeAnalyzer(RuntimeConfig config) { super(config, null, new AiMetrics(new SimpleMeterRegistry(), config), null); }
         @Override
         public boolean isRateLimited() { return rateLimited; }
     }
@@ -123,6 +123,12 @@ class PipelineSchedulerTest {
         FakeFreeModelUpdater(RuntimeConfig config) { super(config, null); }
         @Override
         public java.util.Map<String, Object> refresh() { refreshes++; return java.util.Map.of(); }
+    }
+
+    static class FakeCurrencyRateService extends com.hh.gui.client.CurrencyRateService {
+        int refreshes = 0;
+        @Override
+        public void refresh() { refreshes++; }
     }
 
     static class FakeSchemaMigrator extends SchemaMigrator {
@@ -204,6 +210,7 @@ class PipelineSchedulerTest {
     private FakeSearchRepo searchRepo;
     private FakeAnalyzer analyzer;
     private FakeFreeModelUpdater freeModels;
+    private FakeCurrencyRateService currencyRates;
     private FakeSchemaMigrator schema;
     private FakeSubscriptions subscriptions;
     private FakePublisher publisher;
@@ -223,6 +230,7 @@ class PipelineSchedulerTest {
         searchRepo = new FakeSearchRepo();
         analyzer = new FakeAnalyzer(config);
         freeModels = new FakeFreeModelUpdater(config);
+        currencyRates = new FakeCurrencyRateService();
         schema = new FakeSchemaMigrator();
         subscriptions = new FakeSubscriptions();
         publisher = new FakePublisher();
@@ -233,7 +241,7 @@ class PipelineSchedulerTest {
         telegramMetrics = new TelegramMetrics(metricsRegistry);
         scheduler = new PipelineScheduler(pipeline, profiles, config, analyzer, searchRepo,
             freeModels, flags, schema, subscriptions, publisher, engagement, vacancyRepo,
-            telegramMetrics, null);
+            telegramMetrics, null, currencyRates);
     }
 
     private List<TriggerTask> tasks() {
@@ -273,7 +281,7 @@ class PipelineSchedulerTest {
 
     @Test
     void configureTasks_registersEveryTrigger() {
-        assertEquals(14, tasks().size(),
+        assertEquals(15, tasks().size(),
             "все триггеры должны быть зарегистрированы — молча пропавший = молча не работающая функция");
     }
 
@@ -407,7 +415,7 @@ class PipelineSchedulerTest {
             }
         };
         scheduler = new PipelineScheduler(pipeline, profiles, config, analyzer, searchRepo,
-            freeModels, flags, schema, subscriptions, publisher, engagement, throwing, telegramMetrics, null);
+            freeModels, flags, schema, subscriptions, publisher, engagement, throwing, telegramMetrics, null, currencyRates);
 
         assertDoesNotThrow(this::runAllTasks);
     }
@@ -552,7 +560,7 @@ class PipelineSchedulerTest {
         };
         scheduler = new PipelineScheduler(pipeline, profiles, config, analyzer, searchRepo,
             freeModels, flags, schema, subscriptions, exploding, engagement, vacancyRepo,
-            new TelegramMetrics(new SimpleMeterRegistry()), null);
+            new TelegramMetrics(new SimpleMeterRegistry()), null, currencyRates);
 
         assertDoesNotThrow(this::runAllTasks);
     }
@@ -603,7 +611,7 @@ class PipelineSchedulerTest {
         // от него, а не скоро — на каждом рестарте (а деплоев в день много) подписчики/
         // просмотры/реакции в Grafana показывали "No data" до 6 часов. Проверяем, что
         // первое срабатывание сдвинуто на initialDelay (~5 мин), а не на "сейчас".
-        Trigger trigger = tasks().get(8).getTrigger();
+        Trigger trigger = tasks().get(9).getTrigger();
         Instant now = Instant.now();
         SimpleTriggerContext freshContext = new SimpleTriggerContext(); // как сразу после регистрации, ничего ещё не выполнялось
 
