@@ -764,6 +764,20 @@ public class VacancyRepository {
     }
 
     /**
+     * Rows a moderator explicitly rejected, most recent first — feeds
+     * RejectionReportService's weekly pattern surfacing (see its javadoc): the
+     * grouping/counting by channel and employer happens in Java, not here, since
+     * channel extraction from hh_id (TelegramPostParser.channelFromHhId) is a Java
+     * function with no SQL equivalent worth duplicating.
+     */
+    public List<Vacancy> findRejectedSince(String since, int limit) {
+        return jdbc.query(
+            "SELECT * FROM vacancies WHERE moderation_status='rejected' AND updated_at >= ? " +
+            "ORDER BY updated_at DESC LIMIT ?",
+            rowMapper, since, limit);
+    }
+
+    /**
      * Approved postings due for a liveness re-check on hh.ru (see
      * VacancyPipelineService.checkVacancyFreshness): only 'yes' verdicts anyone
      * actually sees, not yet known closed, last confirmed (or first saved) more
