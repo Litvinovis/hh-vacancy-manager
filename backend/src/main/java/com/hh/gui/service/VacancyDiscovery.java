@@ -278,6 +278,14 @@ public class VacancyDiscovery {
                     v.setScrapeStatus("pending");
                     v.setDedupKey(DedupKeys.compute(v.getTitle(), null));
                 } else {
+                    // Baseline this channel's collected/verdict counters at 0 before this
+                    // run's save loop (below) can burst them straight from "never existed"
+                    // to a real value between two Prometheus scrapes — see
+                    // TelegramMetrics.preRegisterChannel's javadoc. Only reached for a
+                    // channel that actually produced a Path B candidate this run, so a
+                    // channel that's 100% Path A (see the sibling test) still has no
+                    // footprint in these counters at all.
+                    telegramMetrics.preRegisterChannel(channel);
                     // Path B: the post itself is the only source — never write its own
                     // wording anywhere downstream except AI analysis input; the public
                     // post text this pipeline eventually sends out is AI-generated from

@@ -40,6 +40,25 @@ public class TelegramMetrics {
         this.registry = registry;
     }
 
+    /**
+     * Registers this channel's per-channel counters (at 0, if not already registered)
+     * without incrementing anything — called once per scrape, before any candidates
+     * from this channel are recorded. Without this, a channel whose entire activity in
+     * a 24h window lands in a single burst on a freshly-created counter is invisible
+     * to Grafana's increase(): Prometheus's increase() diffs the first and last SAMPLED
+     * value inside the window, and a counter born mid-burst has no earlier zero sample
+     * to diff against. Verified live: "noexperience" saved 36 candidates in one run —
+     * the raw counter correctly read 36, but the 24h dashboard panel showed 0.
+     */
+    public void preRegisterChannel(String channel) {
+        if (channel == null) return;
+        registry.counter("telegram_collected_total", "application", "hh-gui", "channel", channel);
+        registry.counter("telegram_approved_total", "application", "hh-gui", "channel", channel);
+        registry.counter("telegram_rejected_total", "application", "hh-gui", "channel", channel);
+        registry.counter("telegram_fraud_total", "application", "hh-gui", "channel", channel);
+        registry.counter("telegram_published_total", "application", "hh-gui", "channel", channel);
+    }
+
     /** A new Path B candidate was saved for this channel (VacancyDiscovery.fromTelegram). */
     public void recordCollected(String channel) {
         if (channel == null) return;
