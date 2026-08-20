@@ -28,7 +28,10 @@ import java.util.concurrent.ConcurrentHashMap;
 public class CurrencyRateService {
 
     private static final Logger log = LoggerFactory.getLogger(CurrencyRateService.class);
-    private static final String CBR_DAILY_RATES_URL = "https://www.cbr.ru/scripts/XML_daily.asp";
+    // Not final — tests point this at a local HttpServer serving a real CBR-shaped
+    // response, to catch a feed schema change instead of just testing our own parser
+    // against fixtures we made up (see CurrencyRateServiceTest).
+    private String cbrDailyRatesUrl = "https://www.cbr.ru/scripts/XML_daily.asp";
 
     private final Map<String, Double> rubPerUnit = new ConcurrentHashMap<>();
 
@@ -42,7 +45,7 @@ public class CurrencyRateService {
             factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
             DocumentBuilder builder = factory.newDocumentBuilder();
 
-            HttpURLConnection conn = (HttpURLConnection) new URL(CBR_DAILY_RATES_URL).openConnection();
+            HttpURLConnection conn = (HttpURLConnection) new URL(cbrDailyRatesUrl).openConnection();
             conn.setConnectTimeout(10000);
             conn.setReadTimeout(15000);
             Document doc = builder.parse(conn.getInputStream());
