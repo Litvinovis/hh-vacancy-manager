@@ -193,7 +193,7 @@ public class PipelineScheduler implements SchedulingConfigurer {
     }
 
     private void runModerationQueueAdvance() {
-        if (schemaNotReady() || !featureFlags.isModerationEnabled()) return;
+        if (schemaNotReady() || !featureFlags.isModerationEnabled() || runtimeConfig.isModerationAuto()) return;
         try {
             moderationService.advanceQueue();
         } catch (Exception e) {

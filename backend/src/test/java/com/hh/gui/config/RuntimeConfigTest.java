@@ -35,6 +35,8 @@ class RuntimeConfigTest {
         assertFalse(config.isNotificationsEnabled());
         assertEquals(5, config.getAiBatchSize());
         assertTrue(config.isPipelineEnabled());
+        assertEquals("auto", config.getModerationMode());
+        assertTrue(config.isModerationAuto());
     }
 
     // ═══════ toMap ═══════
@@ -62,7 +64,8 @@ class RuntimeConfigTest {
         assertTrue(m.containsKey("aiBatchSize"));
         assertTrue(m.containsKey("pipelineEnabled"));
         assertTrue(m.containsKey("cardPrescreenBatchSize"));
-        assertEquals(20, m.size());
+        assertTrue(m.containsKey("moderationMode"));
+        assertEquals(21, m.size());
     }
 
     // ═══════ Descriptors ═══════
@@ -70,7 +73,7 @@ class RuntimeConfigTest {
     @Test
     void descriptorsCoversAllKeys() {
         List<RuntimeConfig.SettingDescriptor> descs = config.getDescriptors();
-        assertEquals(19, descs.size());
+        assertEquals(20, descs.size());
         Set<String> keys = new HashSet<>();
         for (var d : descs) {
             assertNotNull(d.key);
@@ -148,6 +151,23 @@ class RuntimeConfigTest {
         Map<String, String> errors = config.apply(updates);
         assertTrue(errors.isEmpty());
         assertEquals("0 0 8 * * *", config.getDailyCron());
+    }
+
+    @Test
+    void applyValidModerationMode() {
+        Map<String, Object> updates = Map.of("moderationMode", "single");
+        Map<String, String> errors = config.apply(updates);
+        assertTrue(errors.isEmpty());
+        assertEquals("single", config.getModerationMode());
+        assertFalse(config.isModerationAuto());
+    }
+
+    @Test
+    void applyRejectsUnknownModerationMode() {
+        Map<String, Object> updates = Map.of("moderationMode", "yolo");
+        Map<String, String> errors = config.apply(updates);
+        assertTrue(errors.containsKey("moderationMode"));
+        assertEquals("auto", config.getModerationMode(), "невалидное значение не должно применяться");
     }
 
     @Test

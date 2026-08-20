@@ -965,8 +965,12 @@ public class VacancyPipelineService {
                 // to EDITORIAL specifically, not just usePublicFormat, since that's what
                 // "публичный канал" was scoped to when this was requested — a PERSONAL job
                 // that happens to use the public template (if that combination is ever
-                // used) still publishes automatically, unmoderated.
-                if (featureFlags.isModerationEnabled() && job.kind != null && job.kind.isEditorial()) {
+                // used) still publishes automatically, unmoderated. Also bypassed entirely
+                // when RuntimeConfig.moderationMode is "auto" — a live switch independent of
+                // FeatureFlags.moderationEnabled (which gates whether the subsystem exists at
+                // all), so the human gate can be paused/resumed without a redeploy.
+                if (featureFlags.isModerationEnabled() && job.kind != null && job.kind.isEditorial()
+                        && !runtimeConfig.isModerationAuto()) {
                     queueForModerationWithAutoApprove(approved, job);
                 } else {
                     channelPublisher.send(approved, job);
