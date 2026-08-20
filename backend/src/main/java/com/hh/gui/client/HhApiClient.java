@@ -15,8 +15,10 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * HH.ru RSS client — discovery only.
@@ -32,17 +34,66 @@ import java.util.*;
 public class HhApiClient {
 
     private static final Logger log = LoggerFactory.getLogger(HhApiClient.class);
-    private static final String RSS_BASE = "https://hh.ru/search/vacancy/rss";
+    // Not final — tests point this at a local HttpServer to exercise the circuit
+    // breaker without hitting the real hh.ru (see HhApiClientTest).
+    private String rssBase = "https://hh.ru/search/vacancy/rss";
     // A 2026-08-04..07 incident showed ~73% of RSS fetches failing (DNS/connection-level,
     // no HTTP response ever received) while other RSS calls in between succeeded fine —
     // a transient blip, not a real block. One retry recovers most of those.
     private static final int RSS_MAX_ATTEMPTS = 2;
     private static final long RSS_RETRY_DELAY_MS = 3000;
 
+    // Circuit breaker: a 5xx from hh.ru means the server itself is struggling, not a
+    // per-query fluke (unlike DDoS-Guard 403s or DNS blips, which RSS_MAX_ATTEMPTS
+    // already retries) — hammering it from every search on every pipeline tick during
+    // a real outage only makes things worse. After CIRCUIT_BREAKER_THRESHOLD consecutive
+    // 5xx responses, every query short-circuits (no HTTP call at all) for
+    // CIRCUIT_BREAKER_COOLDOWN; the next call after cooldown acts as an implicit
+    // half-open trial — success closes the circuit, another 5xx re-opens it.
+    private static final int CIRCUIT_BREAKER_THRESHOLD = 3;
+    private static final Duration CIRCUIT_BREAKER_COOLDOWN = Duration.ofMinutes(10);
+
+    private final AtomicInteger consecutive5xx = new AtomicInteger(0);
+    private volatile Instant circuitOpenedAt;
+
     private final RuntimeConfig runtimeConfig;
 
     public HhApiClient(RuntimeConfig runtimeConfig) {
         this.runtimeConfig = runtimeConfig;
+    }
+
+    /** Thrown by httpGet specifically for 5xx — distinguishes "hh.ru is degraded" from
+     *  every other failure mode (403, DNS, timeout) that already has its own handling. */
+    private static class HhServerErrorException extends RuntimeException {
+        final int statusCode;
+        HhServerErrorException(int statusCode) {
+            super("HTTP " + statusCode);
+            this.statusCode = statusCode;
+        }
+    }
+
+    private boolean circuitOpen() {
+        Instant openedAt = circuitOpenedAt;
+        return openedAt != null && Instant.now().isBefore(openedAt.plus(CIRCUIT_BREAKER_COOLDOWN));
+    }
+
+    private void recordServerError() {
+        int failures = consecutive5xx.incrementAndGet();
+        if (failures >= CIRCUIT_BREAKER_THRESHOLD) {
+            boolean wasOpen = circuitOpenedAt != null;
+            circuitOpenedAt = Instant.now();
+            if (!wasOpen) {
+                log.warn("HH RSS: цепь разомкнута после {} подряд 5xx от hh.ru — опрос приостановлен на {} мин",
+                    failures, CIRCUIT_BREAKER_COOLDOWN.toMinutes());
+            }
+        }
+    }
+
+    private void recordSuccess() {
+        if (consecutive5xx.getAndSet(0) >= CIRCUIT_BREAKER_THRESHOLD) {
+            log.info("HH RSS: hh.ru снова отвечает нормально — цепь замкнута");
+        }
+        circuitOpenedAt = null;
     }
 
     /**
@@ -51,7 +102,11 @@ public class HhApiClient {
      */
     public List<Vacancy> fetchRss(String query, int area, String schedule, int salaryMin) {
         List<Vacancy> results = new ArrayList<>();
-        StringBuilder url = new StringBuilder(RSS_BASE);
+        if (circuitOpen()) {
+            log.debug("HH RSS: цепь разомкнута — пропускаем '{}' до восстановления hh.ru", query);
+            return results;
+        }
+        StringBuilder url = new StringBuilder(rssBase);
         url.append("?text=").append(URLEncoder.encode(query, StandardCharsets.UTF_8));
         url.append("&area=").append(area);
         url.append("&per_page=20");
@@ -86,8 +141,12 @@ public class HhApiClient {
                 }
 
                 log.info("HH RSS: получено {} ID для '{}' (area={}, schedule={})", results.size(), query, area, schedule);
+                recordSuccess();
                 return results;
             } catch (Exception e) {
+                if (e instanceof HhServerErrorException) {
+                    recordServerError();
+                }
                 if (attempt == RSS_MAX_ATTEMPTS) {
                     log.error("Ошибка HH RSS для '{}': {}: {}", query, e.getClass().getSimpleName(), e.getMessage());
                     return results;
@@ -115,6 +174,10 @@ public class HhApiClient {
         conn.setReadTimeout(runtimeConfig.getHttpReadTimeoutMs() > 0 ? Math.min(runtimeConfig.getHttpReadTimeoutMs(), 30000) : 30000);
 
         int code = conn.getResponseCode();
+        if (code >= 500) {
+            log.warn("HTTP {} (сервер) от {}", code, urlStr);
+            throw new HhServerErrorException(code);
+        }
         if (code != 200) {
             log.warn("HTTP {} от {}", code, urlStr);
             return null;

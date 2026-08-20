@@ -935,6 +935,19 @@ function renderSettingsForm(values, providers) {
           </select>
           <input type="number" class="settings-num-mini" data-key="${d.key}_custom" placeholder="мс" min="${d.min||1}" max="${d.max||86400000}" style="display:${selVal ? 'none' : 'inline-block'}">
         </div>`;
+    } else if (d.key === 'moderationMode') {
+      const modeOpts = [
+        { v: 'auto', l: 'Авто — публикация без ручного одобрения' },
+        { v: 'single', l: 'По одной — карточка на одну вакансию' },
+        { v: 'batch', l: 'Батчем — карточка на несколько вакансий' },
+      ];
+      html += `
+        <div class="settings-row">
+          <div class="settings-label">${escHtml(d.label)} ${tooltip}</div>
+          <select class="settings-sel" data-key="${d.key}">
+            ${modeOpts.map(o => `<option value="${o.v}" ${o.v === val ? 'selected' : ''}>${o.l}</option>`).join('')}
+          </select>
+        </div>`;
     } else if (d.key === 'dailyCron') {
       const selVal = dailyCronOpts.find(o => o.v === val) ? val : '';
       html += `

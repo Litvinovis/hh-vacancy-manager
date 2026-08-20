@@ -98,7 +98,7 @@ class VacancyPipelineServiceTest {
                 new ChannelEngagementTracker(searchRepo, telegram, notifier, tgMetrics);
             VacancyDiscovery discovery = new VacancyDiscovery(null, scraper, telegram, analyzer, repo,
                 tgMetrics, engagement, cooldown, resolvedAiMetrics);
-            ModerationService moderationService = new ModerationService(repo, profileFactory, publisher, notifier);
+            ModerationService moderationService = new ModerationService(repo, profileFactory, publisher, notifier, config);
             return new VacancyPipelineService(scraper, analyzer, repo, notifier,
                 config, resolvedAiMetrics, featureFlags, null, tgMetrics, publisher, discovery, cooldown,
                 moderationService);
@@ -878,6 +878,7 @@ class VacancyPipelineServiceTest {
     void sendReport_editorialWithModerationEnabled_queuesInsteadOfPublishing() throws Exception {
         RuntimeConfig config = new RuntimeConfig();
         config.setChannelNotificationsEnabled(true);
+        config.setModerationMode("batch");
         FakeSimilarityRepo repo = new FakeSimilarityRepo();
         RecordingChannelNotifier notifier = new RecordingChannelNotifier();
         VacancyPipelineService svc = service().repo(repo).notifier(notifier).config(config)
@@ -916,12 +917,36 @@ class VacancyPipelineServiceTest {
         assertTrue(repo.markedModerationQueued.isEmpty());
     }
 
+    @Test
+    void sendReport_editorialWithModerationModeAuto_publishesDirectlyDespiteFeatureFlagOn() throws Exception {
+        // moderationMode по умолчанию "auto" — даже когда подсистема модерации включена
+        // флагом (ModerationEnabledFlags), человеческий гейт не срабатывает.
+        RuntimeConfig config = new RuntimeConfig();
+        config.setChannelNotificationsEnabled(true);
+        assertEquals("auto", config.getModerationMode(), "режим модерации должен быть auto по умолчанию");
+        FakeSimilarityRepo repo = new FakeSimilarityRepo();
+        RecordingChannelNotifier notifier = new RecordingChannelNotifier();
+        VacancyPipelineService svc = service().repo(repo).notifier(notifier).config(config)
+            .featureFlags(new ModerationEnabledFlags()).build();
+
+        Vacancy candidate = vacancy("Оператор поддержки", "Подходит", 75);
+        candidate.setId(83L);
+        candidate.setSalaryFrom(50000);
+        candidate.setDescription("Обязанности: отвечать клиентам\nТребования: без опыта");
+
+        sendReport(svc, List.of(candidate), editorialJob());
+
+        assertEquals(1, notifier.sent.size(), "auto — публикация сразу, без ручной модерации");
+        assertTrue(repo.markedModerationQueued.isEmpty());
+    }
+
     // ── Автоапрув по score (выключен по умолчанию) ──
 
     @Test
     void sendReport_autoApproveThreshold_highScorePublishesDirectly() throws Exception {
         RuntimeConfig config = new RuntimeConfig();
         config.setChannelNotificationsEnabled(true);
+        config.setModerationMode("batch");
         config.setAutoApproveScoreThreshold(90);
         FakeSimilarityRepo repo = new FakeSimilarityRepo();
         RecordingChannelNotifier notifier = new RecordingChannelNotifier();
@@ -943,6 +968,7 @@ class VacancyPipelineServiceTest {
     void sendReport_autoApproveThreshold_lowScoreStillQueuedForModeration() throws Exception {
         RuntimeConfig config = new RuntimeConfig();
         config.setChannelNotificationsEnabled(true);
+        config.setModerationMode("batch");
         config.setAutoApproveScoreThreshold(90);
         FakeSimilarityRepo repo = new FakeSimilarityRepo();
         RecordingChannelNotifier notifier = new RecordingChannelNotifier();
@@ -964,6 +990,7 @@ class VacancyPipelineServiceTest {
     void sendReport_autoApproveThreshold_mixedBatchSplitsCorrectly() throws Exception {
         RuntimeConfig config = new RuntimeConfig();
         config.setChannelNotificationsEnabled(true);
+        config.setModerationMode("batch");
         config.setAutoApproveScoreThreshold(90);
         FakeSimilarityRepo repo = new FakeSimilarityRepo();
         RecordingChannelNotifier notifier = new RecordingChannelNotifier();
@@ -991,6 +1018,7 @@ class VacancyPipelineServiceTest {
         // от sendReport_editorialWithModerationEnabled_queuesInsteadOfPublishing.
         RuntimeConfig config = new RuntimeConfig();
         config.setChannelNotificationsEnabled(true);
+        config.setModerationMode("batch");
         assertEquals(0, config.getAutoApproveScoreThreshold(), "автоапрув должен быть выключен по умолчанию");
         FakeSimilarityRepo repo = new FakeSimilarityRepo();
         RecordingChannelNotifier notifier = new RecordingChannelNotifier();

@@ -163,6 +163,13 @@ public class RuntimeConfig {
     private volatile int aiBatchSize = 5;
     private volatile boolean pipelineEnabled = true;
     private volatile int cardPrescreenBatchSize = 30;
+    // "auto" = EDITORIAL vacancies publish straight to the channel, no human gate at all
+    // (current default — manual review paused). "single"/"batch" restore ModerationService's
+    // human ✅/❌ gate, one card at a time or grouped up to MODERATION_BATCH_SIZE respectively —
+    // see ModerationService.effectiveBatchSize(). Only takes effect when
+    // FeatureFlags.moderationEnabled is also true (that flag gates the subsystem's existence,
+    // this one picks its behavior).
+    private volatile String moderationMode = "auto";
 
     // ═══════ Persistence ═══════
 
@@ -324,7 +331,14 @@ public class RuntimeConfig {
             SettingDescriptor.of("cardPrescreenBatchSize", "Размер пачки прескрининга карточек",
                 "Сколько карточек из выдачи (без полного скрейпинга) отправляется за один AI-запрос " +
                 "на предварительную фильтрацию \"похоже/не похоже на интересную вакансию\".",
-                "number", 1, 100, cardPrescreenBatchSize)
+                "number", 1, 100, cardPrescreenBatchSize),
+
+            SettingDescriptor.of("moderationMode", "Режим модерации",
+                "auto — редакционные вакансии публикуются в канал сразу, без ручного одобрения. " +
+                "single — карточка на одну вакансию за раз (ручное одобрение). " +
+                "batch — карточка сразу на несколько вакансий (текущий батч-режим). " +
+                "Применяется только для редакционных (EDITORIAL) поисков.",
+                "select", null, null, moderationMode)
         );
     }
 
@@ -368,6 +382,7 @@ public class RuntimeConfig {
                     case "aiBatchSize" -> setAiBatchSize(toInt(value, errors, key, 1, 50));
                     case "pipelineEnabled" -> setPipelineEnabled(toBool(value, errors, key));
                     case "cardPrescreenBatchSize" -> setCardPrescreenBatchSize(toInt(value, errors, key, 1, 100));
+                    case "moderationMode" -> setModerationMode(toEnum(value, errors, key, "auto", "single", "batch"));
                     default -> errors.put(key, "Неизвестный параметр: " + key);
                 }
             } catch (IllegalArgumentException e) {
@@ -414,6 +429,7 @@ public class RuntimeConfig {
         m.put("aiBatchSize", aiBatchSize);
         m.put("pipelineEnabled", pipelineEnabled);
         m.put("cardPrescreenBatchSize", cardPrescreenBatchSize);
+        m.put("moderationMode", moderationMode);
         return m;
     }
 
@@ -452,6 +468,17 @@ public class RuntimeConfig {
             if ("false".equalsIgnoreCase(s)) return false;
         }
         errors.put(key, "Неверный тип: ожидается true/false");
+        throw new IllegalArgumentException(errors.get(key));
+    }
+
+    private String toEnum(Object value, Map<String, String> errors, String key, String... allowed) {
+        if (value instanceof String s) {
+            String trimmed = s.trim();
+            for (String a : allowed) {
+                if (a.equals(trimmed)) return trimmed;
+            }
+        }
+        errors.put(key, "Значение должно быть одним из: " + String.join(", ", allowed));
         throw new IllegalArgumentException(errors.get(key));
     }
 
@@ -527,6 +554,10 @@ public class RuntimeConfig {
 
     public int getCardPrescreenBatchSize() { return cardPrescreenBatchSize; }
     public void setCardPrescreenBatchSize(int v) { this.cardPrescreenBatchSize = v; }
+
+    public String getModerationMode() { return moderationMode; }
+    public void setModerationMode(String v) { this.moderationMode = v; }
+    public boolean isModerationAuto() { return "auto".equals(moderationMode); }
 
     // ═══════ Дескриптор для UI ═══════
 

@@ -1,5 +1,6 @@
 package com.hh.gui.service;
 
+import com.hh.gui.config.RuntimeConfig;
 import com.hh.gui.model.SearchJob;
 import com.hh.gui.model.Vacancy;
 import com.hh.gui.repository.VacancyRepository;
@@ -34,19 +35,31 @@ public class ModerationService {
 
     // Matches ChannelPublisher.PUBLISH_BATCH_SIZE — no reason for moderation cards to
     // group differently than the batches they'll eventually turn into public posts.
+    // Used for RuntimeConfig.moderationMode="batch"; "single" mode uses 1 instead —
+    // see effectiveBatchSize().
     static final int MODERATION_BATCH_SIZE = 5;
 
     private final VacancyRepository vacancyRepo;
     private final SearchProfileFactory profileFactory;
     private final ChannelPublisher channelPublisher;
     private final TelegramNotifier telegramNotifier;
+    private final RuntimeConfig runtimeConfig;
 
     public ModerationService(VacancyRepository vacancyRepo, SearchProfileFactory profileFactory,
-                              ChannelPublisher channelPublisher, TelegramNotifier telegramNotifier) {
+                              ChannelPublisher channelPublisher, TelegramNotifier telegramNotifier,
+                              RuntimeConfig runtimeConfig) {
         this.vacancyRepo = vacancyRepo;
         this.profileFactory = profileFactory;
         this.channelPublisher = channelPublisher;
         this.telegramNotifier = telegramNotifier;
+        this.runtimeConfig = runtimeConfig;
+    }
+
+    /** "single" mode groups one vacancy per card (the original design); "batch" (and
+     *  "auto", though auto never reaches here since VacancyPipelineService bypasses
+     *  moderation entirely in that mode) group up to MODERATION_BATCH_SIZE. */
+    private int effectiveBatchSize() {
+        return "single".equals(runtimeConfig.getModerationMode()) ? 1 : MODERATION_BATCH_SIZE;
     }
 
     /** Called from sendReport instead of channelPublisher.send, for EDITORIAL jobs while
@@ -64,7 +77,7 @@ public class ModerationService {
      *  than waiting for the next tick. */
     public void advanceQueue() {
         if (!vacancyRepo.findAllSentForModeration().isEmpty()) return;
-        List<Vacancy> batch = vacancyRepo.findNextQueuedBatchForModeration(MODERATION_BATCH_SIZE);
+        List<Vacancy> batch = vacancyRepo.findNextQueuedBatchForModeration(effectiveBatchSize());
         if (batch.isEmpty()) return;
         String card = formatBatchCard(batch);
         List<Long> ids = batch.stream().map(Vacancy::getId).toList();

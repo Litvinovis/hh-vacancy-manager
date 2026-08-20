@@ -1,5 +1,6 @@
 package com.hh.gui.service;
 
+import com.hh.gui.config.RuntimeConfig;
 import com.hh.gui.model.SearchJob;
 import com.hh.gui.model.Vacancy;
 import com.hh.gui.repository.VacancyRepository;
@@ -113,7 +114,8 @@ class ModerationServiceTest {
     private FakeProfileFactory profileFactory = new FakeProfileFactory();
     private RecordingChannelPublisher publisher = new RecordingChannelPublisher();
     private RecordingNotifier notifier = new RecordingNotifier();
-    private ModerationService service = new ModerationService(repo, profileFactory, publisher, notifier);
+    private RuntimeConfig runtimeConfig = new RuntimeConfig();
+    private ModerationService service = new ModerationService(repo, profileFactory, publisher, notifier, runtimeConfig);
 
     /** Realistic precondition: advanceQueue put it here right before the card went
      *  out, and that's the only state resolveApprove/resolveReject are meant to act
@@ -198,6 +200,20 @@ class ModerationServiceTest {
         assertEquals(ModerationService.MODERATION_BATCH_SIZE, notifier.sentBatches.get(0).size(),
             "батч ограничен MODERATION_BATCH_SIZE, оставшееся ждёт следующего тика");
         assertEquals(ModerationService.MODERATION_BATCH_SIZE, repo.sentMarks.size());
+    }
+
+    @Test
+    void advanceQueue_singleMode_sendsOneVacancyPerCard() {
+        runtimeConfig.setModerationMode("single");
+        for (long id = 1; id <= 3; id++) {
+            repo.put(queuedVacancy(id, 10L, "Вакансия " + id));
+        }
+
+        service.advanceQueue();
+
+        assertEquals(1, notifier.sentCards.size());
+        assertEquals(1, notifier.sentBatches.get(0).size(), "single-режим — по одной вакансии в карточке");
+        assertEquals(1, repo.sentMarks.size());
     }
 
     @Test
