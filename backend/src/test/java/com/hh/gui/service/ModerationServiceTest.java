@@ -217,6 +217,35 @@ class ModerationServiceTest {
     }
 
     @Test
+    void advanceQueue_batchModeExplicit_groupsUpToBatchSize() {
+        // Same as the default (auto behaves like batch for effectiveBatchSize purposes),
+        // but pinned explicitly so that coupling isn't just accidental.
+        runtimeConfig.setModerationMode("batch");
+        for (long id = 1; id <= 7; id++) {
+            repo.put(queuedVacancy(id, 10L, "Вакансия " + id));
+        }
+
+        service.advanceQueue();
+
+        assertEquals(ModerationService.MODERATION_BATCH_SIZE, notifier.sentBatches.get(0).size());
+    }
+
+    @Test
+    void advanceQueue_unrecognizedModeValue_fallsBackToBatchSize() {
+        // Defensive fallback (effectiveBatchSize only special-cases "single") — protects
+        // against a stale/corrupted runtime-config.json value from an old version.
+        runtimeConfig.setModerationMode("garbage-legacy-value");
+        for (long id = 1; id <= 7; id++) {
+            repo.put(queuedVacancy(id, 10L, "Вакансия " + id));
+        }
+
+        service.advanceQueue();
+
+        assertEquals(ModerationService.MODERATION_BATCH_SIZE, notifier.sentBatches.get(0).size(),
+            "нераспознанное значение режима не должно ломать advanceQueue");
+    }
+
+    @Test
     void advanceQueue_sendFails_doesNotMarkSent() {
         notifier.sendResult = false;
         repo.put(queuedVacancy(5, 10L, "Оператор поддержки"));

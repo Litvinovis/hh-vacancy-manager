@@ -9,6 +9,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -85,6 +86,42 @@ class HhApiClientTest {
 
         assertEquals(0, consecutive5xx().get());
         assertNull(circuitOpenedAt());
+    }
+
+    @Test
+    void fetchRss_cooldownElapsed_allowsTrialRequestThroughAndClosesOnSuccess() {
+        responseCode = 503;
+        client.fetchRss("java", 1, null, 0);
+        client.fetchRss("java", 1, null, 0); // opens the circuit
+        assertNotNull(circuitOpenedAt());
+        int hitsWhileOpen = hitCount.get();
+
+        // Simulate the 10-minute cooldown having elapsed, instead of actually waiting.
+        ReflectionTestUtils.setField(client, "circuitOpenedAt", Instant.now().minus(Duration.ofMinutes(11)));
+
+        responseCode = 200; // hh.ru has recovered
+        client.fetchRss("java", 1, null, 0);
+
+        assertTrue(hitCount.get() > hitsWhileOpen, "после истечения cooldown пробный запрос должен реально уйти на сервер");
+        assertNull(circuitOpenedAt(), "успешный пробный запрос должен полностью замкнуть цепь");
+        assertEquals(0, consecutive5xx().get());
+    }
+
+    @Test
+    void fetchRss_trialRequestAfterCooldownStillFails_reopensCircuitWithFreshCooldown() {
+        responseCode = 503;
+        client.fetchRss("java", 1, null, 0);
+        client.fetchRss("java", 1, null, 0); // opens the circuit
+        assertNotNull(circuitOpenedAt());
+
+        ReflectionTestUtils.setField(client, "circuitOpenedAt", Instant.now().minus(Duration.ofMinutes(11)));
+
+        client.fetchRss("java", 1, null, 0); // trial — responseCode is still 503
+
+        Instant reopenedAt = circuitOpenedAt();
+        assertNotNull(reopenedAt, "неудачный пробный запрос должен снова разомкнуть цепь");
+        assertTrue(reopenedAt.isAfter(Instant.now().minus(Duration.ofMinutes(1))),
+            "cooldown должен отсчитываться заново от момента неудачного пробного запроса");
     }
 
     @Test

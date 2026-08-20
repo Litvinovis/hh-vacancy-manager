@@ -171,6 +171,23 @@ class RuntimeConfigTest {
     }
 
     @Test
+    void applyRejectsModerationModeWrongCase() {
+        // toEnum matches exactly — "AUTO"/"Single" aren't silently normalized.
+        Map<String, Object> updates = Map.of("moderationMode", "SINGLE");
+        Map<String, String> errors = config.apply(updates);
+        assertTrue(errors.containsKey("moderationMode"));
+        assertEquals("auto", config.getModerationMode());
+    }
+
+    @Test
+    void applyRejectsModerationModeNonStringType() {
+        Map<String, Object> updates = Map.of("moderationMode", 42);
+        Map<String, String> errors = config.apply(updates);
+        assertTrue(errors.containsKey("moderationMode"));
+        assertEquals("auto", config.getModerationMode());
+    }
+
+    @Test
     void applyStringValueAsInt() {
         Map<String, Object> updates = Map.of("maxPerRun", "100");
         Map<String, String> errors = config.apply(updates);

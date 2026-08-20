@@ -20,7 +20,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class ClickRateLimiter {
 
     public static final int MAX_REQUESTS_PER_WINDOW = 30;
-    static final Duration WINDOW = Duration.ofMinutes(1);
+    // Not static/final — tests shrink this to exercise the window-rollover path without
+    // actually waiting a minute (see ClickRateLimiterTest).
+    private Duration window = Duration.ofMinutes(1);
     private static final Duration RETENTION = Duration.ofHours(1);
 
     private record Window(AtomicInteger count, Instant windowStart) {}
@@ -34,7 +36,7 @@ public class ClickRateLimiter {
         String key = ip == null ? "" : ip;
         Instant now = Instant.now();
         Window w = byIp.compute(key, (k, prev) -> {
-            if (prev == null || prev.windowStart().plus(WINDOW).isBefore(now)) {
+            if (prev == null || prev.windowStart().plus(window).isBefore(now)) {
                 return new Window(new AtomicInteger(1), now);
             }
             prev.count().incrementAndGet();

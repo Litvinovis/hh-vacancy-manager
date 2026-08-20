@@ -1,6 +1,9 @@
 package com.hh.gui.service;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.test.util.ReflectionTestUtils;
+
+import java.time.Duration;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -36,5 +39,20 @@ class ClickRateLimiterTest {
     void allow_nullIp_treatedAsSingleSharedKeyNotACrash() {
         ClickRateLimiter limiter = new ClickRateLimiter();
         assertTrue(limiter.allow(null));
+    }
+
+    @Test
+    void allow_windowElapsed_countResetsAndRequestsAllowedAgain() throws InterruptedException {
+        ClickRateLimiter limiter = new ClickRateLimiter();
+        ReflectionTestUtils.setField(limiter, "window", Duration.ofMillis(50));
+
+        for (int i = 0; i < ClickRateLimiter.MAX_REQUESTS_PER_WINDOW; i++) {
+            limiter.allow("1.2.3.4");
+        }
+        assertFalse(limiter.allow("1.2.3.4"), "лимит исчерпан в текущем окне");
+
+        Thread.sleep(100); // дождаться истечения искусственно укороченного окна
+
+        assertTrue(limiter.allow("1.2.3.4"), "новое окно — счётчик должен сброситься");
     }
 }

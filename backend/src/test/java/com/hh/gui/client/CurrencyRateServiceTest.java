@@ -148,4 +148,78 @@ class CurrencyRateServiceTest {
 
         assertEquals(92.4531, service.rubPerUnit("USD"), 0.0001, "неудачный рефреш не должен стирать прошлый кэш");
     }
+
+    @Test
+    void refresh_zeroNominal_entrySkippedWithoutAbortingRestOfFeed() {
+        // The `if (nominal <= 0) continue;` guard — a CBR feed entry with Nominal=0
+        // would otherwise divide by zero.
+        responseXml =
+            "<?xml version=\"1.0\" encoding=\"windows-1251\"?>\n" +
+            "<ValCurs Date=\"20.08.2026\" name=\"Foreign Currency Market\">\n" +
+            "<Valute ID=\"R01235\">\n" +
+            "<CharCode>USD</CharCode>\n" +
+            "<Nominal>0</Nominal>\n" +
+            "<Value>92,4531</Value>\n" +
+            "</Valute>\n" +
+            "<Valute ID=\"R01239\">\n" +
+            "<CharCode>EUR</CharCode>\n" +
+            "<Nominal>1</Nominal>\n" +
+            "<Value>100,1234</Value>\n" +
+            "</Valute>\n" +
+            "</ValCurs>";
+
+        service.refresh();
+
+        assertNull(service.rubPerUnit("USD"), "Nominal=0 должен быть пропущен, а не делить на ноль");
+        assertEquals(100.1234, service.rubPerUnit("EUR"), 0.0001, "остальной фид не должен пострадать");
+    }
+
+    @Test
+    void refresh_nonNumericValue_entrySkippedWithoutAbortingRestOfFeed() {
+        // NumberFormatException path — a malformed/empty Value shouldn't crash the parse.
+        responseXml =
+            "<?xml version=\"1.0\" encoding=\"windows-1251\"?>\n" +
+            "<ValCurs Date=\"20.08.2026\" name=\"Foreign Currency Market\">\n" +
+            "<Valute ID=\"R01235\">\n" +
+            "<CharCode>USD</CharCode>\n" +
+            "<Nominal>1</Nominal>\n" +
+            "<Value>н/д</Value>\n" +
+            "</Valute>\n" +
+            "<Valute ID=\"R01239\">\n" +
+            "<CharCode>EUR</CharCode>\n" +
+            "<Nominal>1</Nominal>\n" +
+            "<Value>100,1234</Value>\n" +
+            "</Valute>\n" +
+            "</ValCurs>";
+
+        service.refresh();
+
+        assertNull(service.rubPerUnit("USD"), "нечисловой Value должен быть пропущен, а не падать");
+        assertEquals(100.1234, service.rubPerUnit("EUR"), 0.0001, "остальной фид не должен пострадать");
+    }
+
+    @Test
+    void refresh_currencyMissingFromNewFeed_keepsStaleRateInsteadOfClearing() {
+        // Documented design (see CurrencyRateService javadoc): entries are merged in,
+        // not a full wipe-then-fill, so a currency that temporarily drops out of one
+        // day's feed doesn't go from "stale rate" to "no rate at all".
+        service.refresh(); // USD, EUR, CNY all present
+        assertEquals(92.4531, service.rubPerUnit("USD"), 0.0001);
+
+        responseXml =
+            "<?xml version=\"1.0\" encoding=\"windows-1251\"?>\n" +
+            "<ValCurs Date=\"21.08.2026\" name=\"Foreign Currency Market\">\n" +
+            "<Valute ID=\"R01239\">\n" +
+            "<CharCode>EUR</CharCode>\n" +
+            "<Nominal>1</Nominal>\n" +
+            "<Value>101,0000</Value>\n" +
+            "</Valute>\n" +
+            "</ValCurs>"; // USD dropped out of this day's feed
+
+        service.refresh();
+
+        assertEquals(92.4531, service.rubPerUnit("USD"), 0.0001,
+            "USD выпал из нового фида, но старое значение должно остаться в кэше");
+        assertEquals(101.0000, service.rubPerUnit("EUR"), 0.0001, "EUR должен обновиться новым значением");
+    }
 }
