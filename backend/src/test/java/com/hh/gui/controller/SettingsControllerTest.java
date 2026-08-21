@@ -184,14 +184,10 @@ class SettingsControllerTest {
     }
 
     @Test
-    void updateProviders_reorderedListWithMaskedValue_matchesByPositionNotByName() {
-        // Documented design: the old-vs-new comparison is purely positional (index in the
-        // new list vs the same index in the old list) — it does NOT match providers by
-        // name/url. If the admin reorders providers in the UI while leaving an untouched
-        // (masked) key in its form field, the masked string gets compared against a
-        // DIFFERENT provider's old key at that index, the comparison fails, and the mask
-        // string itself ("sk-1...abcd") is stored as the new "key". This test pins down
-        // that real, currently-possible failure mode rather than asserting it can't happen.
+    void updateProviders_reorderedListWithMaskedValue_matchesByNameNotPosition() {
+        // The old-vs-new comparison matches by provider name, not list index — reordering
+        // providers in the UI while leaving an untouched (masked) key in its form field
+        // must still resolve to that provider's real old key.
         init();
         config.setAiProviders(List.of(
             new AiProviderConfig("First", "u1", "sk-1234567890abcd", "m1"),
@@ -207,9 +203,25 @@ class SettingsControllerTest {
 
         List<AiProviderConfig> saved = config.getAiProviders();
         assertEquals("First", saved.get(1).getName());
-        assertNotEquals("sk-1234567890abcd", saved.get(1).getApiKey(),
-            "позиционное сравнение не находит совпадения после перестановки — реальный ключ теряется");
-        assertEquals(firstsMaskedKey, saved.get(1).getApiKey(), "вместо этого сохраняется буквально маска");
+        assertEquals("sk-1234567890abcd", saved.get(1).getApiKey(),
+            "сравнение по имени должно найти реальный ключ 'First' даже после перестановки");
+    }
+
+    @Test
+    void updateProviders_duplicateOldNames_matchesFirstOccurrence() {
+        // Edge case of name-based matching: if the old list somehow has two providers
+        // sharing a name, the lookup deterministically keeps the first one rather than
+        // crashing or picking arbitrarily on each call.
+        init();
+        config.setAiProviders(List.of(
+            new AiProviderConfig("Dup", "u1", "sk-first-0000", "m1"),
+            new AiProviderConfig("Dup", "u2", "sk-second-0000", "m2")
+        ));
+        String maskedFirst = "sk-f...0000";
+
+        controller.updateProviders(List.of(providerMap("Dup", "u1", maskedFirst, "m1")), admin());
+
+        assertEquals("sk-first-0000", config.getAiProviders().get(0).getApiKey());
     }
 
     @Test
