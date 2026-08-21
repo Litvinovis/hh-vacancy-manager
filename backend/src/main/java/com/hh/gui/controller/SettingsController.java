@@ -120,10 +120,15 @@ public class SettingsController {
         if (!currentUser.isAdmin()) return forbidden();
 
         // GET /providers now sends only masked keys, so the edit form round-trips a
-        // masked value for any provider the admin didn't retype a new key for. Compare
-        // positionally against the previously stored list and keep the real key in that
-        // case — otherwise every save would overwrite it with the mask string itself.
+        // masked value for any provider the admin didn't retype a new key for. Match
+        // against the previously stored list by name (not position — reordering the
+        // list would otherwise pair a provider with the wrong old entry and save the
+        // mask string itself as its real key) and keep the real key in that case.
         List<AiProviderConfig> oldProviders = runtimeConfig.getAiProviders();
+        Map<String, AiProviderConfig> oldByName = new LinkedHashMap<>();
+        for (AiProviderConfig o : oldProviders) {
+            oldByName.putIfAbsent(o.getName(), o);
+        }
         List<AiProviderConfig> providers = new ArrayList<>();
         for (Map<String, Object> m : providersList) {
             AiProviderConfig p = new AiProviderConfig();
@@ -133,7 +138,7 @@ public class SettingsController {
             p.setUrl(url != null ? url.toString() : "");
             Object key = m.get("apiKey");
             String incomingKey = key != null ? key.toString() : "";
-            AiProviderConfig old = providers.size() < oldProviders.size() ? oldProviders.get(providers.size()) : null;
+            AiProviderConfig old = oldByName.get(p.getName());
             if (old != null && incomingKey.equals(maskKey(old.getApiKey()))) {
                 p.setApiKey(old.getApiKey());
             } else {
