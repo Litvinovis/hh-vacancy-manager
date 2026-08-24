@@ -85,7 +85,7 @@ class ModerationServiceTest {
     private static class RecordingChannelPublisher extends ChannelPublisher {
         final List<Vacancy> sentVacancies = new ArrayList<>();
         SearchJob sentJob;
-        RecordingChannelPublisher() { super(null, null, null, null, null); }
+        RecordingChannelPublisher() { super(null, null, null, null, null, null); }
         @Override
         void send(List<Vacancy> approved, SearchJob job) {
             sentVacancies.addAll(approved);

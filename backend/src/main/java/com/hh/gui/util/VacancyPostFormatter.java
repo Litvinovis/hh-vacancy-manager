@@ -26,12 +26,17 @@ public final class VacancyPostFormatter {
     private static final int MAX_TITLE_CHARS = 150;
     private static final int MAX_REASON_CHARS = 300;
 
-    private static final Map<String, String> NOVELTY_EMOJI = Map.of("red", "🔴", "yellow", "🟡", "green", "🟢");
+    // Package-private: VkPostFormatter reuses this too — same colour vocabulary, different
+    // destination.
+    static final Map<String, String> NOVELTY_EMOJI = Map.of("red", "🔴", "yellow", "🟡", "green", "🟢");
 
-    /** The four fields both shapes need, prepared identically for both. */
-    private record Fields(String title, String company, String salary, String reason) {}
+    /** The four fields both shapes need, prepared identically for both.
+     *  Package-private: VkPostFormatter reuses this so title/reason truncation and the
+     *  "@channel placeholder isn't a real company" fallback never drift between the two
+     *  destinations' otherwise-independent renderers. */
+    record Fields(String title, String company, String salary, String reason) {}
 
-    private static Fields fields(Vacancy v) {
+    static Fields fields(Vacancy v) {
         boolean hasRealCompany = hasRealCompany(v);
         return new Fields(
             truncate(v.getTitle(), MAX_TITLE_CHARS),
@@ -131,7 +136,7 @@ public final class VacancyPostFormatter {
         return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;");
     }
 
-    private static String capitalize(String s) {
+    static String capitalize(String s) {
         if (s == null || s.isEmpty()) return s;
         return Character.toUpperCase(s.charAt(0)) + s.substring(1);
     }

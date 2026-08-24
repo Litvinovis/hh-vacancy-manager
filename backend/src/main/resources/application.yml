@@ -51,6 +51,16 @@ app:
     # All default off; flip via env var once the corresponding prerequisite is ready.
     public-format-enabled: ${TELEGRAM_PUBLIC_FORMAT_ENABLED:false}
     delayed-publish-enabled: ${TELEGRAM_DELAYED_PUBLISH_ENABLED:false}
+  vk:
+    # Group API access token (Сообщество → Управление → Работа с API → Создать ключ,
+    # права "Стена") — never a user token, so posts stay attributed to the community
+    # itself (from_group=1 in VkNotifier), same reasoning as Telegram's separate
+    # channel-bot-token being its own identity.
+    access-token: ${VK_ACCESS_TOKEN:}
+    # Numeric community id (positive — vk.com/club<id> or the "ID сообщества" field in
+    # settings). VkNotifier negates it itself for wall.post's owner_id.
+    group-id: ${VK_GROUP_ID:}
+    api-version: ${VK_API_VERSION:5.199}
   subscriptions:
     enabled: ${SUBSCRIPTIONS_ENABLED:false}
     # Shared secret the payment provider's webhook must present (see

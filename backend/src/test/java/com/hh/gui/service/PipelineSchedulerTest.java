@@ -151,7 +151,7 @@ class PipelineSchedulerTest {
     static class FakePublisher extends ChannelPublisher {
         int queuedTicks = 0;
         int delayedTicks = 0;
-        FakePublisher() { super(null, null, null, null, null); }
+        FakePublisher() { super(null, null, null, null, null, null); }
         @Override
         public void publishDueQueued(int limit) { queuedTicks++; }
         @Override
