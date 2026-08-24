@@ -160,6 +160,11 @@ public class RuntimeConfig {
     // the other (e.g. keep testing the channel while personal alerts stay off, or vice
     // versa) — see VacancyPipelineService.sendReport.
     private volatile boolean channelNotificationsEnabled = false;
+    // Mirrors every public-channel Telegram post (send/doPublishDueQueued/publishDueDelayed
+    // in ChannelPublisher) into the VK community configured via app.vk.* — see VkNotifier.
+    // Independent master switch, same reasoning as channelNotificationsEnabled: the VK
+    // token/group id can be wired in application.yml well before this is flipped on.
+    private volatile boolean vkEnabled = false;
     private volatile int aiBatchSize = 5;
     private volatile boolean pipelineEnabled = true;
     private volatile int cardPrescreenBatchSize = 30;
@@ -318,6 +323,11 @@ public class RuntimeConfig {
                 "Включить/выключить публикацию вакансий в публичный канал/подписчикам (не влияет на личные уведомления).",
                 "boolean", null, null, channelNotificationsEnabled),
 
+            SettingDescriptor.of("vkEnabled", "Кросс-пост в VK",
+                "Дублировать каждый публичный пост (канал Telegram) в сообщество VK. Требует настроенных " +
+                "app.vk.access-token и app.vk.group-id — без них посты просто не уходят и пишутся в лог.",
+                "boolean", null, null, vkEnabled),
+
             SettingDescriptor.of("aiBatchSize", "Размер пачки AI",
                 "Количество вакансий, отправляемых в одном AI-запросе. " +
                 "Большие пачки экономят токены промпта, но увеличивают риск таймаута.",
@@ -379,6 +389,7 @@ public class RuntimeConfig {
                     case "pipelineBatchSize" -> setPipelineBatchSize(toInt(value, errors, key, 1, 100));
                     case "notificationsEnabled" -> setNotificationsEnabled(toBool(value, errors, key));
                     case "channelNotificationsEnabled" -> setChannelNotificationsEnabled(toBool(value, errors, key));
+                    case "vkEnabled" -> setVkEnabled(toBool(value, errors, key));
                     case "aiBatchSize" -> setAiBatchSize(toInt(value, errors, key, 1, 50));
                     case "pipelineEnabled" -> setPipelineEnabled(toBool(value, errors, key));
                     case "cardPrescreenBatchSize" -> setCardPrescreenBatchSize(toInt(value, errors, key, 1, 100));
@@ -426,6 +437,7 @@ public class RuntimeConfig {
         m.put("pipelineBatchSize", pipelineBatchSize);
         m.put("notificationsEnabled", notificationsEnabled);
         m.put("channelNotificationsEnabled", channelNotificationsEnabled);
+        m.put("vkEnabled", vkEnabled);
         m.put("aiBatchSize", aiBatchSize);
         m.put("pipelineEnabled", pipelineEnabled);
         m.put("cardPrescreenBatchSize", cardPrescreenBatchSize);
@@ -545,6 +557,9 @@ public class RuntimeConfig {
 
     public boolean isChannelNotificationsEnabled() { return channelNotificationsEnabled; }
     public void setChannelNotificationsEnabled(boolean v) { this.channelNotificationsEnabled = v; }
+
+    public boolean isVkEnabled() { return vkEnabled; }
+    public void setVkEnabled(boolean v) { this.vkEnabled = v; }
 
     public int getAiBatchSize() { return aiBatchSize; }
     public void setAiBatchSize(int v) { this.aiBatchSize = v; }

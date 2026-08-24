@@ -42,16 +42,18 @@ class ChannelPublisherTest {
         private TelegramNotifier notifier = new TelegramNotifier();
         private RuntimeConfig config = new RuntimeConfig();
         private SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        private VkNotifier vk = new VkNotifier();
 
         Builder repo(VacancyRepository v) { this.repo = v; return this; }
         Builder searchRepo(SearchRepository v) { this.searchRepo = v; return this; }
         Builder notifier(TelegramNotifier v) { this.notifier = v; return this; }
         Builder config(RuntimeConfig v) { this.config = v; return this; }
+        Builder vk(VkNotifier v) { this.vk = v; return this; }
         /** Only when a test asserts on the recorded metrics and needs the registry back. */
         Builder metricsRegistry(SimpleMeterRegistry v) { this.registry = v; return this; }
 
         ChannelPublisher build() {
-            return new ChannelPublisher(repo, searchRepo, notifier, new TelegramMetrics(registry), config);
+            return new ChannelPublisher(repo, searchRepo, notifier, new TelegramMetrics(registry), config, vk);
         }
     }
 
@@ -132,6 +134,16 @@ class ChannelPublisherTest {
         public boolean sendViaChannelBot(String message, String targetChatId) {
             if (sendResult) sentMessages.add(message);
             return sendResult;
+        }
+    }
+
+    private static class RecordingVkNotifier extends VkNotifier {
+        final List<String> posted = new ArrayList<>();
+        boolean postResult = true;
+        @Override
+        public boolean post(String message) {
+            if (postResult) posted.add(message);
+            return postResult;
         }
     }
 
@@ -370,5 +382,80 @@ class ChannelPublisherTest {
             vacancy(1, "tg_testchan_1", "Первая"), vacancy(2, "tg_testchan_2", "Вторая")));
         assertTrue(out.contains("➖➖➖➖➖"), out);
         assertTrue(out.indexOf("Первая") < out.indexOf("Вторая"), "порядок вакансий должен сохраняться");
+    }
+
+    // ── зеркалирование в VK ──
+
+    @Test
+    void send_vkEnabledAndTelegramSucceeds_mirrorsEachVacancyToVk() {
+        FakeDueQueueRepo repo = new FakeDueQueueRepo();
+        RecordingChannelBotNotifier notifier = new RecordingChannelBotNotifier();
+        RecordingVkNotifier vk = new RecordingVkNotifier();
+        RuntimeConfig config = new RuntimeConfig();
+        config.setVkEnabled(true);
+        ChannelPublisher publisher = publisher().repo(repo).notifier(notifier).vk(vk).config(config).build();
+        SearchJob job = job();
+        job.publishPaceMinutes = null;
+
+        publisher.send(List.of(vacancy(1, "tg_testchan_1", "Первая"), vacancy(2, "tg_testchan_2", "Вторая")), job);
+
+        assertEquals(2, vk.posted.size(), "каждая успешно отправленная в Telegram вакансия должна уйти и в VK");
+        assertTrue(vk.posted.get(0).contains("Первая"));
+        assertTrue(vk.posted.get(1).contains("Вторая"));
+    }
+
+    @Test
+    void send_vkDisabled_neverCallsVk() {
+        FakeDueQueueRepo repo = new FakeDueQueueRepo();
+        RecordingChannelBotNotifier notifier = new RecordingChannelBotNotifier();
+        RecordingVkNotifier vk = new RecordingVkNotifier();
+        RuntimeConfig config = new RuntimeConfig();
+        config.setVkEnabled(false);
+        ChannelPublisher publisher = publisher().repo(repo).notifier(notifier).vk(vk).config(config).build();
+        SearchJob job = job();
+        job.publishPaceMinutes = null;
+
+        publisher.send(List.of(vacancy(1, "tg_testchan_1", "Первая")), job);
+
+        assertTrue(vk.posted.isEmpty(), "vkEnabled=false не должен трогать VkNotifier вообще");
+    }
+
+    @Test
+    void send_telegramSendFails_vkNeverCalledForThatVacancy() {
+        // No separate vk_notified column to retry off — mirroring a post Telegram itself
+        // never managed to send would desync the two platforms' content silently.
+        FakeDueQueueRepo repo = new FakeDueQueueRepo();
+        RecordingChannelBotNotifier notifier = new RecordingChannelBotNotifier();
+        notifier.sendResult = false;
+        RecordingVkNotifier vk = new RecordingVkNotifier();
+        RuntimeConfig config = new RuntimeConfig();
+        config.setVkEnabled(true);
+        ChannelPublisher publisher = publisher().repo(repo).notifier(notifier).vk(vk).config(config).build();
+        SearchJob job = job();
+        job.publishPaceMinutes = null;
+
+        publisher.send(List.of(vacancy(1, "tg_testchan_1", "Первая")), job);
+
+        assertTrue(vk.posted.isEmpty());
+    }
+
+    @Test
+    void publishDueQueued_vkEnabled_mirrorsEachVacancySeparately_notOneCombinedPost() {
+        // Telegram combines the whole batch into one message (see the "combines" test
+        // above); VK gets one post per vacancy regardless — no combined-post convention
+        // was worth inventing for a platform with no equivalent divider style in use here.
+        FakeDueQueueRepo repo = new FakeDueQueueRepo();
+        repo.due = List.of(vacancy(1, "tg_testchan_1", "Оператор чата"), vacancy(2, "tg_testchan_2", "Ассистент"));
+        RecordingChannelBotNotifier notifier = new RecordingChannelBotNotifier();
+        RecordingVkNotifier vk = new RecordingVkNotifier();
+        RuntimeConfig config = new RuntimeConfig();
+        config.setChannelNotificationsEnabled(true);
+        config.setVkEnabled(true);
+
+        publisher().repo(repo).searchRepo(searchRepoWithChat("-100999")).notifier(notifier).vk(vk).config(config)
+            .build().doPublishDueQueued(50);
+
+        assertEquals(1, notifier.sentMessages.size(), "Telegram по-прежнему получает один комбинированный пост");
+        assertEquals(2, vk.posted.size(), "VK получает по одному посту на вакансию");
     }
 }

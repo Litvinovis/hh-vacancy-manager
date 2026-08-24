@@ -8,6 +8,7 @@ import com.hh.gui.repository.SearchRepository;
 import com.hh.gui.repository.VacancyRepository;
 import com.hh.gui.util.TelegramPostParser;
 import com.hh.gui.util.VacancyPostFormatter;
+import com.hh.gui.util.VkPostFormatter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -62,15 +63,35 @@ public class ChannelPublisher {
     private final TelegramNotifier telegramNotifier;
     private final TelegramMetrics telegramMetrics;
     private final RuntimeConfig runtimeConfig;
+    private final VkNotifier vkNotifier;
 
     public ChannelPublisher(VacancyRepository vacancyRepo, SearchRepository searchRepo,
                             TelegramNotifier telegramNotifier, TelegramMetrics telegramMetrics,
-                            RuntimeConfig runtimeConfig) {
+                            RuntimeConfig runtimeConfig, VkNotifier vkNotifier) {
         this.vacancyRepo = vacancyRepo;
         this.searchRepo = searchRepo;
         this.telegramNotifier = telegramNotifier;
         this.telegramMetrics = telegramMetrics;
         this.runtimeConfig = runtimeConfig;
+        this.vkNotifier = vkNotifier;
+    }
+
+    /**
+     * Best-effort VK mirror of a post that already went out to Telegram — gated on
+     * RuntimeConfig.vkEnabled, called only after the Telegram send it mirrors actually
+     * succeeded. Deliberately not tied into Telegram's own retry/notified bookkeeping:
+     * a VK failure here is logged and dropped rather than retried, since there is no
+     * separate "vk_notified" column to drive a retry off without re-sending to Telegram
+     * too. One post per vacancy, even when several vacancies went out as one combined
+     * Telegram message (VK has no equivalent "divider" convention worth inventing here).
+     */
+    private void mirrorToVk(List<Vacancy> vacancies) {
+        if (!runtimeConfig.isVkEnabled()) return;
+        for (Vacancy v : vacancies) {
+            if (!vkNotifier.post(VkPostFormatter.publicPost(v))) {
+                log.warn("Не удалось продублировать в VK вакансию id={}", v.getId());
+            }
+        }
     }
 
     /**
@@ -93,6 +114,7 @@ public class ChannelPublisher {
             if (telegramNotifier.sendViaChannelBot(VacancyPostFormatter.publicPost(v), job.chatId)) {
                 vacancyRepo.markNotified(List.of(v.getId()));
                 telegramMetrics.recordChannelPost(job.searchName);
+                mirrorToVk(List.of(v));
                 notifiedCount++;
             } else {
                 log.warn("Не удалось опубликовать вакансию id={} ({} · {}) — останется неуведомлённой",
@@ -232,6 +254,7 @@ public class ChannelPublisher {
                     telegramMetrics.recordPublished(TelegramPostParser.channelFromHhId(v.getHhId()));
                     telegramMetrics.recordChannelPost(searchName);
                 }
+                mirrorToVk(batch);
             } else {
                 log.warn("Публикация из очереди не удалась для батча из {} вакансий (search_id={})", batch.size(), entry.getKey());
             }
@@ -272,6 +295,7 @@ public class ChannelPublisher {
                 if (telegramNotifier.sendViaChannelBot(VacancyPostFormatter.publicPost(v), delayedChatId)) {
                     vacancyRepo.markDelayedNotified(List.of(v.getId()));
                     telegramMetrics.recordChannelPost(searchName);
+                    mirrorToVk(List.of(v));
                 } else {
                     log.warn("Отложенная публикация не удалась для id={} (search_id={})", v.getId(), entry.getKey());
                 }

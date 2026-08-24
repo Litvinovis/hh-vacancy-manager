@@ -65,7 +65,8 @@ class RuntimeConfigTest {
         assertTrue(m.containsKey("pipelineEnabled"));
         assertTrue(m.containsKey("cardPrescreenBatchSize"));
         assertTrue(m.containsKey("moderationMode"));
-        assertEquals(21, m.size());
+        assertTrue(m.containsKey("vkEnabled"));
+        assertEquals(22, m.size());
     }
 
     // ═══════ Descriptors ═══════
@@ -73,7 +74,7 @@ class RuntimeConfigTest {
     @Test
     void descriptorsCoversAllKeys() {
         List<RuntimeConfig.SettingDescriptor> descs = config.getDescriptors();
-        assertEquals(20, descs.size());
+        assertEquals(21, descs.size());
         Set<String> keys = new HashSet<>();
         for (var d : descs) {
             assertNotNull(d.key);

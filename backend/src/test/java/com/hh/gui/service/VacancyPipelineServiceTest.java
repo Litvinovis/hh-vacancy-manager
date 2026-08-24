@@ -93,7 +93,7 @@ class VacancyPipelineServiceTest {
                 ? aiMetrics : new com.hh.gui.ai.AiMetrics(registry, new RuntimeConfig());
             // Wired the same way production is, so a test that does reach the public-format
             // path gets real publishing behaviour rather than a null collaborator.
-            ChannelPublisher publisher = new ChannelPublisher(repo, searchRepo, notifier, tgMetrics, config);
+            ChannelPublisher publisher = new ChannelPublisher(repo, searchRepo, notifier, tgMetrics, config, new VkNotifier());
             ChannelEngagementTracker engagement =
                 new ChannelEngagementTracker(searchRepo, telegram, notifier, tgMetrics);
             VacancyDiscovery discovery = new VacancyDiscovery(null, scraper, telegram, analyzer, repo,
