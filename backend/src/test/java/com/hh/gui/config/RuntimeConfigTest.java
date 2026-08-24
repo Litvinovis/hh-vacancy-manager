@@ -37,6 +37,8 @@ class RuntimeConfigTest {
         assertTrue(config.isPipelineEnabled());
         assertEquals("auto", config.getModerationMode());
         assertTrue(config.isModerationAuto());
+        assertFalse(config.isVkRadarEnabled());
+        assertEquals("", config.getVkRadarSourceGroups());
     }
 
     // ═══════ toMap ═══════
@@ -66,7 +68,9 @@ class RuntimeConfigTest {
         assertTrue(m.containsKey("cardPrescreenBatchSize"));
         assertTrue(m.containsKey("moderationMode"));
         assertTrue(m.containsKey("vkEnabled"));
-        assertEquals(22, m.size());
+        assertTrue(m.containsKey("vkRadarEnabled"));
+        assertTrue(m.containsKey("vkRadarSourceGroups"));
+        assertEquals(24, m.size());
     }
 
     // ═══════ Descriptors ═══════
@@ -74,7 +78,7 @@ class RuntimeConfigTest {
     @Test
     void descriptorsCoversAllKeys() {
         List<RuntimeConfig.SettingDescriptor> descs = config.getDescriptors();
-        assertEquals(21, descs.size());
+        assertEquals(23, descs.size());
         Set<String> keys = new HashSet<>();
         for (var d : descs) {
             assertNotNull(d.key);
@@ -186,6 +190,45 @@ class RuntimeConfigTest {
         Map<String, String> errors = config.apply(updates);
         assertTrue(errors.containsKey("moderationMode"));
         assertEquals("auto", config.getModerationMode());
+    }
+
+    @Test
+    void applyValidVkRadarSourceGroups() {
+        Map<String, Object> updates = Map.of("vkRadarSourceGroups", "123456, 789");
+        Map<String, String> errors = config.apply(updates);
+        assertTrue(errors.isEmpty());
+        assertEquals("123456, 789", config.getVkRadarSourceGroups());
+    }
+
+    @Test
+    void applyEmptyVkRadarSourceGroups_allowed() {
+        Map<String, Object> updates = Map.of("vkRadarSourceGroups", "");
+        Map<String, String> errors = config.apply(updates);
+        assertTrue(errors.isEmpty(), "пустой список источников — валидное состояние (радару нечего сканировать)");
+    }
+
+    @Test
+    void applyRejectsVkRadarSourceGroupsWithMinus() {
+        // owner_id negation happens in code — the setting itself must be the bare
+        // positive id, same convention as VK_GROUP_ID, or VkReaderClient would double-negate.
+        Map<String, Object> updates = Map.of("vkRadarSourceGroups", "-123456");
+        Map<String, String> errors = config.apply(updates);
+        assertTrue(errors.containsKey("vkRadarSourceGroups"));
+    }
+
+    @Test
+    void applyRejectsVkRadarSourceGroupsNonNumeric() {
+        Map<String, Object> updates = Map.of("vkRadarSourceGroups", "remotevibe");
+        Map<String, String> errors = config.apply(updates);
+        assertTrue(errors.containsKey("vkRadarSourceGroups"));
+    }
+
+    @Test
+    void applyValidVkRadarEnabled() {
+        Map<String, Object> updates = Map.of("vkRadarEnabled", true);
+        Map<String, String> errors = config.apply(updates);
+        assertTrue(errors.isEmpty());
+        assertTrue(config.isVkRadarEnabled());
     }
 
     @Test

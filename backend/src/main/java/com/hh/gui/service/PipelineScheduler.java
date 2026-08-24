@@ -1,5 +1,6 @@
 package com.hh.gui.service;
 
+import com.hh.gui.ai.CommentRadarService;
 import com.hh.gui.ai.FreeModelUpdater;
 import com.hh.gui.ai.VacancyAiAnalyzer;
 import com.hh.gui.config.FeatureFlags;
@@ -75,6 +76,7 @@ public class PipelineScheduler implements SchedulingConfigurer {
     private final TelegramMetrics telegramMetrics;
     private final ModerationService moderationService;
     private final com.hh.gui.client.CurrencyRateService currencyRateService;
+    private final CommentRadarService commentRadarService;
 
     // How often to check for approved vacancies whose delayed_publish_at has arrived
     // (see ChannelPublisher.publishDueDelayed). A 5-minute delay needs a check
@@ -131,13 +133,19 @@ public class PipelineScheduler implements SchedulingConfigurer {
     // than once a day) — same reasoning as FREE_MODEL_REFRESH_INITIAL_DELAY.
     private static final Duration RETENTION_INITIAL_DELAY = Duration.ofMinutes(10);
 
+    // Low frequency deliberately — this reads OTHER people's public communities with a
+    // personal token, not the app's own group token; see CommentRadarService's javadoc
+    // and the plan's Risks section for why this stays infrequent and read-only.
+    private static final Duration VK_RADAR_SCAN_INTERVAL = Duration.ofHours(5);
+
     public PipelineScheduler(VacancyPipelineService pipelineService, SearchProfileFactory profileFactory,
                               RuntimeConfig runtimeConfig, VacancyAiAnalyzer aiAnalyzer, SearchRepository searchRepo,
                               FreeModelUpdater freeModelUpdater, FeatureFlags featureFlags, SchemaMigrator schemaMigrator,
                               SubscriptionService subscriptionService, ChannelPublisher channelPublisher,
                               ChannelEngagementTracker engagementTracker, VacancyRepository vacancyRepo,
                               TelegramMetrics telegramMetrics, ModerationService moderationService,
-                              com.hh.gui.client.CurrencyRateService currencyRateService) {
+                              com.hh.gui.client.CurrencyRateService currencyRateService,
+                              CommentRadarService commentRadarService) {
         this.pipelineService = pipelineService;
         this.profileFactory = profileFactory;
         this.runtimeConfig = runtimeConfig;
@@ -153,6 +161,7 @@ public class PipelineScheduler implements SchedulingConfigurer {
         this.telegramMetrics = telegramMetrics;
         this.moderationService = moderationService;
         this.currencyRateService = currencyRateService;
+        this.commentRadarService = commentRadarService;
     }
 
     @Override
@@ -190,6 +199,17 @@ public class PipelineScheduler implements SchedulingConfigurer {
         // FIRST card after queueForModeration() runs (nothing "resolves" to trigger an
         // advance yet) and the rare case a send silently failed.
         registrar.addTriggerTask(this::runModerationQueueAdvance, new PeriodicTrigger(Duration.ofMinutes(1)));
+        registrar.addTriggerTask(this::runVkRadarScan, new PeriodicTrigger(VK_RADAR_SCAN_INTERVAL));
+    }
+
+    private void runVkRadarScan() {
+        if (schemaNotReady() || !runtimeConfig.isVkRadarEnabled()) return;
+        try {
+            int saved = commentRadarService.scanAll();
+            if (saved > 0) log.info("Радар VK: сохранено {} новых находок", saved);
+        } catch (Exception e) {
+            log.error("Скан радара VK завершился ошибкой: {}", e.getMessage(), e);
+        }
     }
 
     private void runModerationQueueAdvance() {
