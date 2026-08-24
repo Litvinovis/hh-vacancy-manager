@@ -61,6 +61,13 @@ app:
     # settings). VkNotifier negates it itself for wall.post's owner_id.
     group-id: ${VK_GROUP_ID:}
     api-version: ${VK_API_VERSION:5.199}
+    # A PERSONAL user token, deliberately separate from access-token above — the group
+    # token can't read anything at all (wall.get/wall.get on its own wall both fail with
+    # "Group authorization failed", verified live), so finding candidate posts in OTHER
+    # communities (see VkReaderClient/CommentRadarService) needs a real user token with
+    # read (wall) rights. Read-only by contract: nothing in this codebase ever posts,
+    # comments, or sends anything using this token — a human always does that manually.
+    user-read-token: ${VK_USER_READ_TOKEN:}
   subscriptions:
     enabled: ${SUBSCRIPTIONS_ENABLED:false}
     # Shared secret the payment provider's webhook must present (see

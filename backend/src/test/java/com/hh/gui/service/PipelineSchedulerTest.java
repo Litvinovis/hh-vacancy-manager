@@ -131,6 +131,13 @@ class PipelineSchedulerTest {
         public void refresh() { refreshes++; }
     }
 
+    static class FakeCommentRadarService extends com.hh.gui.ai.CommentRadarService {
+        int scans = 0;
+        FakeCommentRadarService() { super(null, null, null, new RuntimeConfig()); }
+        @Override
+        public int scanAll() { scans++; return 0; }
+    }
+
     static class FakeSchemaMigrator extends SchemaMigrator {
         boolean ready = true;
         FakeSchemaMigrator() { super(null); }
@@ -241,7 +248,7 @@ class PipelineSchedulerTest {
         telegramMetrics = new TelegramMetrics(metricsRegistry);
         scheduler = new PipelineScheduler(pipeline, profiles, config, analyzer, searchRepo,
             freeModels, flags, schema, subscriptions, publisher, engagement, vacancyRepo,
-            telegramMetrics, null, currencyRates);
+            telegramMetrics, null, currencyRates, null);
     }
 
     private List<TriggerTask> tasks() {
@@ -281,7 +288,7 @@ class PipelineSchedulerTest {
 
     @Test
     void configureTasks_registersEveryTrigger() {
-        assertEquals(15, tasks().size(),
+        assertEquals(16, tasks().size(),
             "все триггеры должны быть зарегистрированы — молча пропавший = молча не работающая функция");
     }
 
@@ -345,6 +352,54 @@ class PipelineSchedulerTest {
         assertTrue(pipeline.telegramRuns.isEmpty());
         assertTrue(pipeline.analyzedAll.isEmpty());
         assertEquals(1, publisher.queuedTicks, "публикация модель не зовёт и продолжается");
+    }
+
+    // ── радар VK ──
+
+    private PipelineScheduler schedulerWithRadar(FakeCommentRadarService radar) {
+        return new PipelineScheduler(pipeline, profiles, config, analyzer, searchRepo,
+            freeModels, flags, schema, subscriptions, publisher, engagement, vacancyRepo,
+            telegramMetrics, null, currencyRates, radar);
+    }
+
+    @Test
+    void vkRadarDisabled_scanNeverRuns() {
+        config.setVkRadarEnabled(false);
+        FakeCommentRadarService radar = new FakeCommentRadarService();
+
+        runAllTasksOf(schedulerWithRadar(radar));
+
+        assertEquals(0, radar.scans);
+    }
+
+    @Test
+    void vkRadarEnabled_schemaReady_scanRuns() {
+        config.setVkRadarEnabled(true);
+        schema.ready = true;
+        FakeCommentRadarService radar = new FakeCommentRadarService();
+
+        runAllTasksOf(schedulerWithRadar(radar));
+
+        assertEquals(1, radar.scans);
+    }
+
+    @Test
+    void vkRadarEnabled_schemaNotReady_scanSkipped() {
+        config.setVkRadarEnabled(true);
+        schema.ready = false;
+        FakeCommentRadarService radar = new FakeCommentRadarService();
+
+        runAllTasksOf(schedulerWithRadar(radar));
+
+        assertEquals(0, radar.scans, "как и остальные задачи, скан ждёт готовности схемы после деплоя");
+    }
+
+    /** Same as runAllTasks(), just for a scheduler instance other than the field —
+     *  needed here because this scheduler needs its own FakeCommentRadarService per test. */
+    private void runAllTasksOf(PipelineScheduler s) {
+        ScheduledTaskRegistrar registrar = new ScheduledTaskRegistrar();
+        s.configureTasks(registrar);
+        for (TriggerTask task : registrar.getTriggerTaskList()) task.getRunnable().run();
     }
 
     // ── retention ──
@@ -415,7 +470,7 @@ class PipelineSchedulerTest {
             }
         };
         scheduler = new PipelineScheduler(pipeline, profiles, config, analyzer, searchRepo,
-            freeModels, flags, schema, subscriptions, publisher, engagement, throwing, telegramMetrics, null, currencyRates);
+            freeModels, flags, schema, subscriptions, publisher, engagement, throwing, telegramMetrics, null, currencyRates, null);
 
         assertDoesNotThrow(this::runAllTasks);
     }
@@ -560,7 +615,7 @@ class PipelineSchedulerTest {
         };
         scheduler = new PipelineScheduler(pipeline, profiles, config, analyzer, searchRepo,
             freeModels, flags, schema, subscriptions, exploding, engagement, vacancyRepo,
-            new TelegramMetrics(new SimpleMeterRegistry()), null, currencyRates);
+            new TelegramMetrics(new SimpleMeterRegistry()), null, currencyRates, null);
 
         assertDoesNotThrow(this::runAllTasks);
     }

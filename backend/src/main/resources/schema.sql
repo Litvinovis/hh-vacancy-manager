@@ -222,6 +222,30 @@ CREATE TABLE IF NOT EXISTS subscriptions (
 -- a column that doesn't exist yet on an existing DB.
 CREATE INDEX IF NOT EXISTS idx_sub_status ON subscriptions(status);
 
+-- Semi-automatic "comment radar" findings — a post in some OTHER community that looks
+-- like someone asking about remote-work job search. The app only finds candidates and
+-- drafts a reply via AI; a human always posts the actual comment from their own VK
+-- profile (see CommentRadarService/VkReaderClient) — nothing here is ever auto-sent.
+CREATE TABLE IF NOT EXISTS comment_radar_findings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    -- 'vk' is the only implemented source right now; 'telegram' is reserved for a
+    -- previously-planned but unimplemented sibling feature, so this column exists to
+    -- avoid a schema migration if that gets built later.
+    platform TEXT NOT NULL DEFAULT 'vk',
+    source_ref TEXT NOT NULL,
+    post_id TEXT NOT NULL,
+    post_link TEXT NOT NULL,
+    author_hint TEXT DEFAULT '',
+    post_text TEXT NOT NULL,
+    matched_keyword TEXT DEFAULT '',
+    draft_reply TEXT DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'new',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(platform, post_id)
+);
+CREATE INDEX IF NOT EXISTS idx_radar_status ON comment_radar_findings(status);
+
 CREATE INDEX IF NOT EXISTS idx_vac_hh_id ON vacancies(hh_id);
 CREATE INDEX IF NOT EXISTS idx_vac_status ON vacancies(status);
 CREATE INDEX IF NOT EXISTS idx_vac_score ON vacancies(ai_score);

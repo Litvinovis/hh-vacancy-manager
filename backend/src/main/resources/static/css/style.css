@@ -500,6 +500,13 @@ a { color: inherit; }
 .provider-field-full { grid-column: 1 / -1; }
 .provider-textarea { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 7px 9px; color: var(--ink); font-size: 12.5px; font-family: 'Nunito Sans', sans-serif; resize: vertical; min-height: 52px; }
 .provider-textarea:focus { border-color: var(--accent); outline: none; }
+.muted { color: var(--muted); font-size: 13px; padding: 12px 4px; }
+.radar-post-text { padding: 12px 14px 6px; font-size: 13.5px; line-height: 1.4; }
+.radar-meta { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 0 14px 8px; font-size: 12px; }
+.radar-meta a { color: var(--accent); }
+.radar-keyword { color: var(--muted); }
+.radar-draft { width: calc(100% - 28px); margin: 0 14px 10px; }
+.provider-card .dacts { padding: 0 14px 14px; margin-bottom: 0; }
 .admin-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .admin-table th { text-align: left; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .03em; padding: 8px 10px; border-bottom: 1px solid var(--rule); }
 .admin-table td { padding: 9px 10px; border-bottom: 1px solid var(--rule-soft); vertical-align: middle; }

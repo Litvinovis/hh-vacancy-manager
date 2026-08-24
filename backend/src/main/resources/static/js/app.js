@@ -924,6 +924,12 @@ function renderSettingsForm(values, providers) {
             <span class="slider"></span>
           </label>
         </div>`;
+    } else if (d.type === 'text') {
+      html += `
+        <div class="settings-row">
+          <div class="settings-label">${escHtml(d.label)} ${tooltip}</div>
+          <input type="text" class="settings-num" data-key="${d.key}" value="${escHtml(val ?? '')}">
+        </div>`;
     } else if (d.key === 'pipelineIntervalMs') {
       const selVal = intervalOpts.find(o => o.v === val) ? val : '';
       html += `
@@ -1034,6 +1040,8 @@ async function saveSettings() {
       if (desc && desc.min !== null && v < desc.min) { toast(`✗ ${desc.label}: минимум ${desc.min}`, 'err'); return; }
       if (desc && desc.max !== null && v > desc.max) { toast(`✗ ${desc.label}: максимум ${desc.max}`, 'err'); return; }
       updates[key] = v;
+    } else if (el.type === 'text') {
+      updates[key] = el.value;
     }
   });
 
@@ -1732,6 +1740,101 @@ async function adminDeleteUser(id) {
   }
 }
 
+// ═══════ COMMENT RADAR (VK) ═══════
+// Находки радара — посты в ЧУЖИХ VK-сообществах, похожие на вопрос про поиск удалённой
+// работы (см. CommentRadarService). Отправка комментария — ВСЕГДА вручную, живым
+// человеком из своего VK-профиля: кнопка «Скопировать» — единственное, что уходит
+// куда-либо автоматически (в буфер обмена), «Отправлено»/«Отклонить» только меняют
+// статус находки в БД, ничего не постят.
+async function showRadarModal() {
+  let modal = document.getElementById('radar-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'radar-modal';
+    modal.className = 'modal-overlay';
+    document.body.appendChild(modal);
+  }
+  try {
+    const data = await api('/radar/findings?status=new&limit=50');
+    renderRadarModal(data.findings || []);
+  } catch (e) {
+    toast('✗ Ошибка загрузки находок радара: ' + e.message, 'err');
+  }
+}
+
+function closeRadarModal() {
+  const modal = document.getElementById('radar-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+function radarFindingCardHtml(f) {
+  return `
+    <div class="provider-card" data-finding-id="${f.id}">
+      <div class="radar-post-text">${escHtml(f.postText)}</div>
+      <div class="radar-meta">
+        <a href="${escHtml(f.postLink)}" target="_blank" rel="noopener">Открыть в VK ↗</a>
+        ${f.matchedKeyword ? `<span class="radar-keyword">по фразе: «${escHtml(f.matchedKeyword)}»</span>` : ''}
+      </div>
+      <textarea class="provider-textarea radar-draft" rows="3">${escHtml(f.draftReply || '')}</textarea>
+      <div class="dacts">
+        <button class="act" onclick="radarCopyDraft(this)">📋 Скопировать</button>
+        <button class="act act-app" onclick="radarSetStatus(this, 'sent')">✓ Отправлено</button>
+        <button class="act act-rej" onclick="radarSetStatus(this, 'rejected')">✕ Отклонить</button>
+      </div>
+    </div>`;
+}
+
+function renderRadarModal(findings) {
+  const modal = document.getElementById('radar-modal');
+  const cards = findings.length
+    ? findings.map(radarFindingCardHtml).join('')
+    : '<p class="muted">Новых находок нет.</p>';
+
+  modal.innerHTML = `
+    <div class="modal-box modal-box-wide">
+      <div class="modal-head"><h3>📡 Радар комментариев — VK</h3><button class="modal-x" onclick="closeRadarModal()">✕</button></div>
+      <div class="modal-body">
+        <div class="providers-list">${cards}</div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-ghost" onclick="closeRadarModal()">Закрыть</button>
+        <button class="btn btn-prim" onclick="radarScanNow()">🔍 Сканировать сейчас</button>
+      </div>
+    </div>`;
+  modal.style.display = 'flex';
+}
+
+async function radarScanNow() {
+  try {
+    const result = await api('/radar/scan-now', { method: 'POST' });
+    toast(`✓ Скан завершён — новых находок: ${result.saved}`, 'ok');
+    showRadarModal();
+  } catch (e) {
+    toast('✗ ' + e.message, 'err');
+  }
+}
+
+function radarCopyDraft(btn) {
+  const card = btn.closest('.provider-card');
+  const text = card.querySelector('.radar-draft').value;
+  navigator.clipboard.writeText(text)
+    .then(() => toast('✓ Скопировано в буфер обмена', 'ok'))
+    .catch(() => toast('✗ Не удалось скопировать', 'err'));
+}
+
+async function radarSetStatus(btn, status) {
+  const card = btn.closest('.provider-card');
+  const id = card.dataset.findingId;
+  const draftReply = card.querySelector('.radar-draft').value;
+  try {
+    await api(`/radar/${id}/status`, { method: 'POST', body: JSON.stringify({ status, draftReply }) });
+    toast(status === 'sent' ? '✓ Отмечено как отправленное' : '✓ Отклонено', 'ok');
+    card.remove();
+  } catch (e) {
+    toast('✗ ' + e.message, 'err');
+  }
+}
+
 // ═══════ MOBILE SIDEBAR ═══════
 // На узких экранах сайдбар раньше просто скрывался (display:none) — на телефоне
 // не было ни статусных фильтров, ни кнопок запуска. Теперь он выезжает по ☰.
@@ -1804,6 +1907,7 @@ function applyCurrentUser(user) {
     badge.innerHTML = `<b>${escHtml(user.displayName)}</b>${user.role === 'admin' ? '<span class="role-tag">admin</span>' : ''}`;
   }
   document.getElementById('btn-admin')?.classList.toggle('hidden', user.role !== 'admin');
+  document.getElementById('btn-radar')?.classList.toggle('hidden', user.role !== 'admin');
   document.getElementById('btn-settings')?.classList.toggle('hidden', user.role !== 'admin');
   // Переключение уведомлений — admin-only на бэкенде (POST /settings/notifications
   // отвечает 403); обычному пользователю кнопка давала только ошибку.

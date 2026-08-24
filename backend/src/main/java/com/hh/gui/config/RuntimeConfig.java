@@ -175,6 +175,17 @@ public class RuntimeConfig {
     // FeatureFlags.moderationEnabled is also true (that flag gates the subsystem's existence,
     // this one picks its behavior).
     private volatile String moderationMode = "auto";
+    // Master switch for the VK "comment radar" scan (PipelineScheduler.runVkRadarScan) —
+    // off by default, same reasoning as vkEnabled: the source list below and the personal
+    // read token (app.vk.user-read-token) can be wired up well before this flips on.
+    private volatile boolean vkRadarEnabled = false;
+    // Comma-separated NUMERIC VK community ids (same bare-number format as VK_GROUP_ID,
+    // no leading "-") to scan for candidate posts — empty means the scan has nothing to
+    // do yet. Deliberately a flat setting, not its own CRUD table: a handful of curated
+    // sources is the whole point (see the radar's plan doc for why this isn't a global
+    // VK search), same "no separate table for a short list" call as radarSourceChats in
+    // the sibling Telegram design.
+    private volatile String vkRadarSourceGroups = "";
 
     // ═══════ Persistence ═══════
 
@@ -348,7 +359,18 @@ public class RuntimeConfig {
                 "single — карточка на одну вакансию за раз (ручное одобрение). " +
                 "batch — карточка сразу на несколько вакансий (текущий батч-режим). " +
                 "Применяется только для редакционных (EDITORIAL) поисков.",
-                "select", null, null, moderationMode)
+                "select", null, null, moderationMode),
+
+            SettingDescriptor.of("vkRadarEnabled", "Радар комментариев VK",
+                "Периодически искать в указанных ниже VK-сообществах посты про поиск удалённой работы и " +
+                "готовить черновик комментария через AI. Отправка — всегда вручную человеком, автопостинга нет. " +
+                "Требует настроенного app.vk.user-read-token и непустого списка источников.",
+                "boolean", null, null, vkRadarEnabled),
+
+            SettingDescriptor.of("vkRadarSourceGroups", "Источники для радара VK",
+                "Числовые ID сообществ VK для сканирования (через запятую, без минуса — тот же формат, " +
+                "что ID сообщества в настройках кросс-поста). Пусто — радару нечего сканировать.",
+                "text", null, null, vkRadarSourceGroups)
         );
     }
 
@@ -394,6 +416,8 @@ public class RuntimeConfig {
                     case "pipelineEnabled" -> setPipelineEnabled(toBool(value, errors, key));
                     case "cardPrescreenBatchSize" -> setCardPrescreenBatchSize(toInt(value, errors, key, 1, 100));
                     case "moderationMode" -> setModerationMode(toEnum(value, errors, key, "auto", "single", "batch"));
+                    case "vkRadarEnabled" -> setVkRadarEnabled(toBool(value, errors, key));
+                    case "vkRadarSourceGroups" -> setVkRadarSourceGroups(toCommunityIdList(value, errors, key));
                     default -> errors.put(key, "Неизвестный параметр: " + key);
                 }
             } catch (IllegalArgumentException e) {
@@ -438,6 +462,8 @@ public class RuntimeConfig {
         m.put("notificationsEnabled", notificationsEnabled);
         m.put("channelNotificationsEnabled", channelNotificationsEnabled);
         m.put("vkEnabled", vkEnabled);
+        m.put("vkRadarEnabled", vkRadarEnabled);
+        m.put("vkRadarSourceGroups", vkRadarSourceGroups);
         m.put("aiBatchSize", aiBatchSize);
         m.put("pipelineEnabled", pipelineEnabled);
         m.put("cardPrescreenBatchSize", cardPrescreenBatchSize);
@@ -508,6 +534,24 @@ public class RuntimeConfig {
         throw new IllegalArgumentException(errors.get(key));
     }
 
+    /** Comma-separated numeric VK community ids, same bare-number format as VK_GROUP_ID
+     *  (no leading "-") — empty is valid (radar has nothing to scan yet). */
+    private String toCommunityIdList(Object value, Map<String, String> errors, String key) {
+        if (value instanceof String s) {
+            String trimmed = s.trim();
+            if (trimmed.isEmpty()) return trimmed;
+            for (String part : trimmed.split(",")) {
+                if (!part.trim().matches("\\d+")) {
+                    errors.put(key, "Ожидаются числовые ID сообществ через запятую, без минуса");
+                    throw new IllegalArgumentException(errors.get(key));
+                }
+            }
+            return trimmed;
+        }
+        errors.put(key, "Неверный тип: ожидается строка");
+        throw new IllegalArgumentException(errors.get(key));
+    }
+
     // ═══════ Геттеры/сеттеры ═══════
 
     public int getMaxPerRun() { return maxPerRun; }
@@ -560,6 +604,12 @@ public class RuntimeConfig {
 
     public boolean isVkEnabled() { return vkEnabled; }
     public void setVkEnabled(boolean v) { this.vkEnabled = v; }
+
+    public boolean isVkRadarEnabled() { return vkRadarEnabled; }
+    public void setVkRadarEnabled(boolean v) { this.vkRadarEnabled = v; }
+
+    public String getVkRadarSourceGroups() { return vkRadarSourceGroups; }
+    public void setVkRadarSourceGroups(String v) { this.vkRadarSourceGroups = v; }
 
     public int getAiBatchSize() { return aiBatchSize; }
     public void setAiBatchSize(int v) { this.aiBatchSize = v; }
