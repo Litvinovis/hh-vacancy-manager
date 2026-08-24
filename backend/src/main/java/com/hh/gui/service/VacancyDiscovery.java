@@ -292,6 +292,8 @@ public class VacancyDiscovery {
                     v.setSource("hh");
                     v.setStatus("new");
                     v.setScrapeStatus("pending");
+                    v.setAiVerdict("pending");
+                    v.setAiScore(0);
                     v.setDedupKey(DedupKeys.compute(v.getTitle(), null));
                 } else {
                     // Baseline this channel's collected/verdict counters at 0 before this

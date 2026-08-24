@@ -127,6 +127,8 @@ class VacancyDiscoveryTest {
         assertEquals("123456789", v.getHhId(), "hh_id должен быть извлечён из ссылки в посте, а не из id сообщения");
         assertEquals("hh", v.getSource());
         assertEquals("pending", v.getScrapeStatus(), "Path A должен идти через обычный скрейпинг, не готовую вакансию");
+        assertEquals("pending", v.getAiVerdict(), "без этого findPending() (WHERE ai_verdict='pending') никогда не найдёт " +
+            "запись после скрейпинга — ai_verdict остаётся NULL и вакансия зависает навсегда");
     }
 
     @Test
