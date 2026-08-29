@@ -11,7 +11,13 @@ spring:
     virtual:
       enabled: true   # Tomcat на виртуальных потоках: долгие вызовы scraper/AI не держат платформенные треды
   datasource:
-    url: jdbc:sqlite:${user.dir}/data/vacancies.db?busy_timeout=30000&journal_mode=WAL&locking_mode=NORMAL
+    # synchronous=NORMAL — рекомендованный SQLite режим именно для WAL: fsync только на
+    # чекпоинте, а не на каждом коммите. При отключении питания можно потерять последние
+    # транзакции, но база НЕ повреждается; данные здесь в любом случае перевычисляемые
+    # (вакансии перескрейпятся), а пишем мы часто — пайплайн идёт каждые 10 минут.
+    # cache_size=-20000 — 20 МБ страничного кэша вместо дефолтных 2 МБ: база выросла до
+    # 224 МБ, и дефолт заставлял перечитывать с диска почти каждый скан.
+    url: jdbc:sqlite:${user.dir}/data/vacancies.db?busy_timeout=30000&journal_mode=WAL&locking_mode=NORMAL&synchronous=NORMAL&cache_size=-20000
     driver-class-name: org.sqlite.JDBC
     hikari:
       maximum-pool-size: 1
