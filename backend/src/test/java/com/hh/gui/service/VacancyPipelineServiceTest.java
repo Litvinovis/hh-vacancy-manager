@@ -482,6 +482,8 @@ class VacancyPipelineServiceTest {
         public void updateScraped(Vacancy v) { updateScrapedCalls++; }
         @Override
         public void incrementScrapeAttempts(Long id) {}
+        @Override
+        public int markScrapeExhausted(String person, String searchName, int maxAttempts) { return 0; }
     }
 
     private static Vacancy scrapeStub(String hhId, String source) {
