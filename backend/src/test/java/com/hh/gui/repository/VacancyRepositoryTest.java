@@ -553,6 +553,32 @@ class VacancyRepositoryTest {
     }
 
     @Test
+    void markScrapeExhausted_marksOnlyRowsPastCap_leavesOthersPending() {
+        Vacancy broken = createTestVacancy("scr-3", "Broken", "new");
+        broken.setScrapeStatus("failed");
+        Long brokenId = vacancyRepo.save(broken).getId();
+        for (int i = 0; i < 5; i++) vacancyRepo.incrementScrapeAttempts(brokenId);
+
+        Vacancy stillTrying = createTestVacancy("scr-4", "StillTrying", "new");
+        stillTrying.setScrapeStatus("failed");
+        Long stillTryingId = vacancyRepo.save(stillTrying).getId();
+        for (int i = 0; i < 4; i++) vacancyRepo.incrementScrapeAttempts(stillTryingId);
+
+        Vacancy fresh = createTestVacancy("scr-5", "Fresh", "new");
+        fresh.setScrapeStatus("pending");
+        vacancyRepo.save(fresh);
+
+        int exhausted = vacancyRepo.markScrapeExhausted("test-person", "test-search", 5);
+        assertEquals(1, exhausted);
+
+        Vacancy brokenAfter = vacancyRepo.findById(brokenId).orElseThrow();
+        assertEquals("error", brokenAfter.getAiVerdict());
+
+        Vacancy stillTryingAfter = vacancyRepo.findById(stillTryingId).orElseThrow();
+        assertEquals("pending", stillTryingAfter.getAiVerdict());
+    }
+
+    @Test
     void markAiExhausted_marksOnlyRowsPastCap_andRescanResetsThem() {
         Vacancy stuck = createTestVacancy("ai-1", "Stuck", "new");
         stuck.setScrapeStatus("ok");

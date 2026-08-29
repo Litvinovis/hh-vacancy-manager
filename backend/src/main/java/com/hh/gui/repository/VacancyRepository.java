@@ -1017,6 +1017,23 @@ public class VacancyRepository {
             now, person, searchName, maxAttempts);
     }
 
+    /**
+     * Terminal state for rows that used up their scrape retry budget (see
+     * incrementScrapeAttempts/MAX_SCRAPE_ATTEMPTS): findScrapePending already stops
+     * re-queuing them (scrape_attempts < maxAttempts filter), but they stayed
+     * ai_verdict='pending' forever with no way to ever become 'ok' — silently
+     * inflating the "pending" count in admin stats (countByStatus) with rows that
+     * will never resolve. Mirrors markAiExhausted's terminal-state pattern.
+     * Returns the number of rows given up on.
+     */
+    public int markScrapeExhausted(String person, String searchName, int maxAttempts) {
+        String now = Instant.now().toString();
+        return jdbc.update(
+            "UPDATE vacancies SET ai_verdict='error', ai_reason='Скрейпинг недоступен после ' || scrape_attempts || ' попыток', updated_at=? " +
+            "WHERE person=? AND search_name=? AND ai_verdict='pending' AND scrape_status='failed' AND scrape_attempts >= ?",
+            now, person, searchName, maxAttempts);
+    }
+
     // Stats — every method below is scoped to userId unless null (admin sees everything)
     public Map<String, Integer> countByStatus(Long userId) {
         String scope = userId != null ? " AND " + USER_SCOPE_CLAUSE : "";

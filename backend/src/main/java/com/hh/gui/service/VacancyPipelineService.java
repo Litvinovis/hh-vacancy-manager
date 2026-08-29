@@ -402,6 +402,7 @@ public class VacancyPipelineService {
         int count = 0;
         int consecutiveFailures = 0;
         int http403InRun = 0;
+        boolean anyAttemptIncrement = false;
         List<Vacancy> pending = vacancyRepo.findScrapePending(job.personName, job.searchName,
             runtimeConfig.getMaxPerRun(), MAX_SCRAPE_ATTEMPTS);
         for (Vacancy v : pending) {
@@ -446,6 +447,7 @@ public class VacancyPipelineService {
                     // a downed sidecar shouldn't burn any vacancy's attempts.
                     if (!"not_found".equals(r.reason())) {
                         vacancyRepo.incrementScrapeAttempts(v.getId());
+                        anyAttemptIncrement = true;
                     }
                 }
                 // Backstop (see PER_VACANCY_FAILURE_REASONS): individually a 403 is that
@@ -471,6 +473,13 @@ public class VacancyPipelineService {
                 log.warn("Скрейпинг ({} · {}) остановлен после {} подряд ошибок — сайдкар недоступен или hh.ru блокирует запросы, оставшиеся {} вакансий останутся в очереди",
                     job.personName, job.searchName, consecutiveFailures, pending.size() - count);
                 break;
+            }
+        }
+        if (anyAttemptIncrement) {
+            int exhausted = vacancyRepo.markScrapeExhausted(job.personName, job.searchName, MAX_SCRAPE_ATTEMPTS);
+            if (exhausted > 0) {
+                log.warn("Скрейпинг ({} · {}): {} вакансий помечено 'error' — исчерпан лимит попыток скрейпинга",
+                    job.personName, job.searchName, exhausted);
             }
         }
         return count;
