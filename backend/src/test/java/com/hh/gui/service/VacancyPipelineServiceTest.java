@@ -432,12 +432,9 @@ class VacancyPipelineServiceTest {
 
     private static class FakeFreshnessRepo extends VacancyRepository {
         List<Vacancy> due = new ArrayList<>();
-        int backlog = 0;
         final List<Long> checked = new ArrayList<>();
         final List<Long> closed = new ArrayList<>();
         FakeFreshnessRepo() { super(null); }
-        @Override
-        public int countUnscrapedNew() { return backlog; }
         @Override
         public List<Vacancy> findDueFreshnessCheck(int days, int limit) { return due; }
         @Override
@@ -566,27 +563,14 @@ class VacancyPipelineServiceTest {
     }
 
     @Test
-    void checkVacancyFreshness_largeNewContentBacklog_yields() {
+    void checkVacancyFreshness_noScrapeQueueGate_alwaysRuns() {
+        // Регрессия (замерено на проде 29.08.2026): гейт по размеру очереди скрейпинга
+        // дважды превращался в вечное голодание — 1001 вакансия ждала первого скрейпинга,
+        // и НИ ОДНА из 29943 вакансий ни разу не проверялась на живость. Единственный
+        // допустимый гейт — cooldown (см. тест ниже); реальный throttle актуализации —
+        // FRESHNESS_BATCH_PER_TICK, а не размер очереди.
         RuntimeConfig config = new RuntimeConfig();
         FakeFreshnessRepo repo = new FakeFreshnessRepo();
-        repo.backlog = VacancyPipelineService.FRESHNESS_MAX_SCRAPE_BACKLOG + 1;
-        repo.due = List.of(pendingVacancy("11", null));
-        FreshnessScraper scraper = new FreshnessScraper(config);
-        VacancyPipelineService svc = service().scraper(scraper).analyzer(new FakeAnalyzer(config)).repo(repo).config(config).build();
-
-        VacancyPipelineService.FreshnessResult r = svc.checkVacancyFreshness(5);
-
-        assertEquals(0, r.alive + r.closed + r.inconclusive);
-        assertEquals(0, scraper.calls, "большая очередь новых вакансий — актуализация уступает");
-    }
-
-    @Test
-    void checkVacancyFreshness_smallResidualBacklog_stillRuns() {
-        // Регрессия: «только при строго пустой очереди» на живых данных означало
-        // «никогда» — очередь не бывала нулевой сутками, и актуализация голодала.
-        RuntimeConfig config = new RuntimeConfig();
-        FakeFreshnessRepo repo = new FakeFreshnessRepo();
-        repo.backlog = VacancyPipelineService.FRESHNESS_MAX_SCRAPE_BACKLOG; // мелкий остаток — не блокирует
         repo.due = List.of(pendingVacancy("11", null));
         FreshnessScraper scraper = new FreshnessScraper(config);
         scraper.byId.put("11", failResult("archived"));
@@ -594,7 +578,25 @@ class VacancyPipelineServiceTest {
 
         VacancyPipelineService.FreshnessResult r = svc.checkVacancyFreshness(5);
 
-        assertEquals(1, r.closed, "при мелком остатке очереди актуализация должна работать");
+        assertEquals(1, r.closed, "актуализация не должна зависеть от очереди скрейпинга");
+    }
+
+    @Test
+    void checkVacancyFreshness_scrapeCooldown_yields() {
+        // Единственный оставшийся гейт: если hh.ru блокирует сессию, фоновая
+        // рутина не должна долбить заблокированный сайдкар.
+        RuntimeConfig config = new RuntimeConfig();
+        FakeFreshnessRepo repo = new FakeFreshnessRepo();
+        repo.due = List.of(pendingVacancy("11", null));
+        FreshnessScraper scraper = new FreshnessScraper(config);
+        ScrapeCooldown cooldown = new ScrapeCooldown();
+        cooldown.enter();
+        VacancyPipelineService svc = service().scraper(scraper).analyzer(new FakeAnalyzer(config)).repo(repo).config(config).cooldown(cooldown).build();
+
+        VacancyPipelineService.FreshnessResult r = svc.checkVacancyFreshness(5);
+
+        assertEquals(0, r.alive + r.closed + r.inconclusive);
+        assertEquals(0, scraper.calls, "при заморозке скрейпинга актуализация уступает");
     }
 
     private void sendReport(VacancyPipelineService svc, List<Vacancy> approved, SearchJob job) throws Exception {

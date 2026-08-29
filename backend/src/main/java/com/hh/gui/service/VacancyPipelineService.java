@@ -491,12 +491,6 @@ public class VacancyPipelineService {
     // goes through the sidecar's human-paced queue. No bursts an anti-bot could latch onto.
     static final int FRESHNESS_RECHECK_DAYS = 7;
     public static final int FRESHNESS_BATCH_PER_TICK = 5;
-    // "Yield to new content" used to mean "run only when the scrape queue is EXACTLY
-    // empty" — but with continuous discovery, nightly legacy imports and failed-row
-    // retries the queue almost never hits zero, and the freshness pass starved for
-    // days. A small remainder is fine to share the tick with: the sidecar clears it
-    // in minutes, and new rows still get scraped first within scrapePending itself.
-    static final int FRESHNESS_MAX_SCRAPE_BACKLOG = 10;
 
     /**
      * Re-verifies that approved ('yes') postings are still live on hh.ru — they get
@@ -505,14 +499,20 @@ public class VacancyPipelineService {
      * per FRESHNESS_RECHECK_DAYS, oldest-confirmation first (expired valid_through
      * jumps the queue — see findDueFreshnessCheck).
      *
-     * Deliberately the lowest-priority scraper client: skips entirely while any NEW
-     * vacancy still waits for its first scrape, or while the scrape cooldown is
-     * active, so it only ever consumes idle capacity.
+     * Yields to a blocked/cooling-down scraper, but NOT to the size of the scrape
+     * queue. It used to skip whenever more than a handful of rows still awaited their
+     * first scrape — twice now that gate turned into permanent starvation, because it
+     * assumed a backlog the sidecar drains "in minutes". It doesn't: a URL search that
+     * discovers more rows per run than maxPerRun scrapes leaves a queue that only ever
+     * grows (measured live: 1001 rows waiting, oldest 7 days old, and 0 of 29943
+     * postings ever freshness-checked — every dead posting still showing as live).
+     * FRESHNESS_BATCH_PER_TICK is the real throttle and is what keeps this cheap:
+     * 5 page loads per 10-minute tick is a few percent of sidecar capacity, and
+     * scrapePending still runs first within the same tick.
      */
     public FreshnessResult checkVacancyFreshness(int limit) {
         FreshnessResult result = new FreshnessResult();
         if (scrapeCooldown.isCoolingDown()) return result;
-        if (vacancyRepo.countUnscrapedNew() > FRESHNESS_MAX_SCRAPE_BACKLOG) return result;
 
         List<Vacancy> due = vacancyRepo.findDueFreshnessCheck(FRESHNESS_RECHECK_DAYS, limit);
         for (Vacancy v : due) {
