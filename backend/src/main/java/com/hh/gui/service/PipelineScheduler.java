@@ -22,6 +22,7 @@ import org.springframework.scheduling.support.PeriodicTrigger;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -406,6 +407,14 @@ public class PipelineScheduler implements SchedulingConfigurer {
      * Checks every search (personal or global) with a saved source_url + run_interval_hours
      * and runs the ones whose interval has elapsed since last_run_at. Independent of the
      * RSS pipeline's single global pipelineIntervalMs — each such search picks its own cadence.
+     *
+     * Additionally confined to the configured scrape window (see withinWindow): this is by
+     * far the heaviest hh.ru traffic the app generates — a walk over the search-result pages
+     * plus a scrape of every posting it discovers — and hh.ru's DDoS-Guard reacts to it
+     * differently depending on the hour. Measured 30.08-02.09: 12 of 14 scheduled runs died
+     * on MAX_HTTP_403_PER_RUN, and the single run that drained a full 150-vacancy batch
+     * without one 403 was the night one (02.09, 03:10). Only the SCHEDULED path is gated —
+     * a human pressing "run" in the admin panel still gets an immediate run at any hour.
      */
     private void runDueUrlSearches() {
         if (schemaNotReady()) return;
@@ -415,6 +424,13 @@ public class PipelineScheduler implements SchedulingConfigurer {
         }
         if (aiAnalyzer.isRateLimited()) {
             log.info("Автозапуск поисков по ссылке пропущен — активен период охлаждения");
+            return;
+        }
+        int windowStart = runtimeConfig.getScrapeWindowStartHour();
+        int windowEnd = runtimeConfig.getScrapeWindowEndHour();
+        if (!withinWindow(LocalTime.now().getHour(), windowStart, windowEnd)) {
+            log.debug("Автозапуск поисков по ссылке пропущен — вне окна скрейпинга {}:00-{}:00",
+                windowStart, windowEnd);
             return;
         }
         for (SearchConfig search : searchRepo.findScheduledUrlSearches()) {
@@ -494,6 +510,19 @@ public class PipelineScheduler implements SchedulingConfigurer {
                 }
             }
         }
+    }
+
+    /**
+     * Is {@code hour} inside the [startHour, endHour) window? Equal bounds — including the
+     * default 0 and 24 — mean "no restriction", and a window whose end precedes its start
+     * wraps over midnight (22-6). Kept a pure static function on purpose: the alternative
+     * is injecting a Clock just so a test can pretend it's 3 a.m.
+     */
+    static boolean withinWindow(int hour, int startHour, int endHour) {
+        int start = startHour % 24;
+        int end = endHour % 24;
+        if (start == end) return true;
+        return start < end ? (hour >= start && hour < end) : (hour >= start || hour < end);
     }
 
     private boolean isDue(SearchConfig search) {

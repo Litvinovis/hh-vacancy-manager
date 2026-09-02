@@ -139,6 +139,21 @@ public class RuntimeConfig {
     private volatile String dailyCron = "0 0 12 * * *"; // ежедневно 12:00
     private volatile int maxRetries = 3;
     private volatile int requestDelayMs = 1500; // HH RSS задержка
+    // Пауза между обращениями к сайдкару-скрейперу внутри одного прогона (см.
+    // VacancyPipelineService.scrapePending). Раньше страницы грузились вплотную друг к
+    // другу, и почти каждый прогон обрывался по MAX_HTTP_403_PER_RUN: DDoS-Guard на hh.ru
+    // отдавал 403 на восьмой запрос, после чего ScrapeCooldown замораживал скрейпинг на
+    // полчаса. Замер за 30.08-02.09: 12 прогонов из 14 обрывались именно так, из ~800
+    // найденных за сутки вакансий обрабатывалось 150-290. Тот же смысл, что у
+    // requestDelayMs выше, только для браузерного скрейпинга, а не для RSS.
+    private volatile int scrapeDelayMs = 3000;
+    // Часы (по локальному времени сервера), в которые разрешён автозапуск поисков по
+    // ссылке — самой тяжёлой для hh.ru работы (обход страниц выдачи + скрейпинг сотен
+    // вакансий). start == end (в т.ч. дефолтные 0 и 24) означает «ограничения нет».
+    // Мотив тот же, что у scrapeDelayMs: единственный прогон, дошедший до лимита в 150
+    // вакансий без единого 403, был ночным (02.09, 03:10), все дневные обрывались.
+    private volatile int scrapeWindowStartHour = 0;
+    private volatile int scrapeWindowEndHour = 24;
     private volatile int aiRequestDelayMs = 12000; // Задержка между AI-запросами (free-tier rate limit)
     private volatile int httpConnectTimeoutMs = 30000;
     private volatile int httpReadTimeoutMs = 120000;
@@ -274,6 +289,22 @@ public class RuntimeConfig {
                 "1500 = 1.5 секунды.",
                 "number", 500, 10000, requestDelayMs),
 
+            SettingDescriptor.of("scrapeDelayMs", "Задержка скрейпинга",
+                "Пауза в миллисекундах между загрузками страниц вакансий через сайдкар-скрейпер. " +
+                "Без паузы hh.ru начинает отдавать 403 и прогон обрывается на восьмой блокировке, " +
+                "после чего скрейпинг замораживается на 30 минут. 3000 = 3 секунды.",
+                "number", 0, 60000, scrapeDelayMs),
+
+            SettingDescriptor.of("scrapeWindowStartHour", "Начало окна скрейпинга",
+                "Час (0-23, локальное время сервера), с которого разрешён автозапуск поисков по ссылке. " +
+                "Ночью hh.ru блокирует заметно реже. Равные начало и конец = ограничения нет.",
+                "number", 0, 23, scrapeWindowStartHour),
+
+            SettingDescriptor.of("scrapeWindowEndHour", "Конец окна скрейпинга",
+                "Час (0-24), до которого разрешён автозапуск поисков по ссылке; сам этот час уже не входит. " +
+                "Если конец меньше начала, окно переходит через полночь (например 22 - 6).",
+                "number", 0, 24, scrapeWindowEndHour),
+
             SettingDescriptor.of("aiRequestDelayMs", "Задержка AI-запросов",
                 "Задержка в миллисекундах между запросами к AI (LLM). " +
                 "Бесплатные модели (free-tier) требуют паузу, иначе 429 rate limit. " +
@@ -400,6 +431,9 @@ public class RuntimeConfig {
                     case "dailyCron" -> setDailyCron(toCron(value, errors, key));
                     case "maxRetries" -> setMaxRetries(toInt(value, errors, key, 1, 10));
                     case "requestDelayMs" -> setRequestDelayMs(toInt(value, errors, key, 500, 10000));
+                    case "scrapeDelayMs" -> setScrapeDelayMs(toInt(value, errors, key, 0, 60000));
+                    case "scrapeWindowStartHour" -> setScrapeWindowStartHour(toInt(value, errors, key, 0, 23));
+                    case "scrapeWindowEndHour" -> setScrapeWindowEndHour(toInt(value, errors, key, 0, 24));
                     case "aiRequestDelayMs" -> setAiRequestDelayMs(toInt(value, errors, key, 5000, 60000));
                     case "httpConnectTimeoutMs" -> setHttpConnectTimeoutMs(toInt(value, errors, key, 5000, 120000));
                     case "httpReadTimeoutMs" -> setHttpReadTimeoutMs(toInt(value, errors, key, 10000, 300000));
@@ -450,6 +484,9 @@ public class RuntimeConfig {
         m.put("dailyCron", dailyCron);
         m.put("maxRetries", maxRetries);
         m.put("requestDelayMs", requestDelayMs);
+        m.put("scrapeDelayMs", scrapeDelayMs);
+        m.put("scrapeWindowStartHour", scrapeWindowStartHour);
+        m.put("scrapeWindowEndHour", scrapeWindowEndHour);
         m.put("aiRequestDelayMs", aiRequestDelayMs);
         m.put("httpConnectTimeoutMs", httpConnectTimeoutMs);
         m.put("httpReadTimeoutMs", httpReadTimeoutMs);
@@ -568,6 +605,15 @@ public class RuntimeConfig {
 
     public int getRequestDelayMs() { return requestDelayMs; }
     public void setRequestDelayMs(int v) { this.requestDelayMs = v; }
+
+    public int getScrapeDelayMs() { return scrapeDelayMs; }
+    public void setScrapeDelayMs(int v) { this.scrapeDelayMs = v; }
+
+    public int getScrapeWindowStartHour() { return scrapeWindowStartHour; }
+    public void setScrapeWindowStartHour(int v) { this.scrapeWindowStartHour = v; }
+
+    public int getScrapeWindowEndHour() { return scrapeWindowEndHour; }
+    public void setScrapeWindowEndHour(int v) { this.scrapeWindowEndHour = v; }
 
     public int getAiRequestDelayMs() { return aiRequestDelayMs; }
     public void setAiRequestDelayMs(int v) { this.aiRequestDelayMs = v; }

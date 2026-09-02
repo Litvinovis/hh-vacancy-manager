@@ -402,6 +402,7 @@ public class VacancyPipelineService {
         int count = 0;
         int consecutiveFailures = 0;
         int http403InRun = 0;
+        int sidecarCalls = 0;
         boolean anyAttemptIncrement = false;
         List<Vacancy> pending = vacancyRepo.findScrapePending(job.personName, job.searchName,
             runtimeConfig.getMaxPerRun(), MAX_SCRAPE_ATTEMPTS);
@@ -427,6 +428,22 @@ public class VacancyPipelineService {
                 continue;
             }
 
+            // Пейсинг (scrapeDelayMs): страницы грузились вплотную друг к другу, и почти
+            // каждый прогон обрывался на восьмом 403 (см. MAX_HTTP_403_PER_RUN) с получасовой
+            // заморозкой следом. Пауза стоит только перед реальным обращением к сайдкару —
+            // ветка переиспользования выше до hh.ru не доходит, тормозить её незачем.
+            int delayMs = runtimeConfig.getScrapeDelayMs();
+            if (sidecarCalls > 0 && delayMs > 0) {
+                try {
+                    Thread.sleep(delayMs);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    log.warn("Скрейпинг ({} · {}) прерван во время паузы — осталось {} вакансий",
+                        job.personName, job.searchName, pending.size() - count);
+                    break;
+                }
+            }
+            sidecarCalls++;
             ScrapeResult r = scraperClient.scrape(v.getHhId());
             if (r.ok()) {
                 applyScrapeResult(v, r);
