@@ -20,7 +20,7 @@
 
     <properties>
         <java.version>25</java.version>
-        <sqlite-jdbc.version>3.53.2.1</sqlite-jdbc.version>
+        <sqlite-jdbc.version>3.53.4.0</sqlite-jdbc.version>
         <snakeyaml.version>2.6</snakeyaml.version>
     </properties>
 
@@ -65,7 +65,7 @@
         <dependency>
             <groupId>org.jsoup</groupId>
             <artifactId>jsoup</artifactId>
-            <version>1.23.1</version>
+            <version>1.23.2</version>
         </dependency>
 
         <!-- Actuator + Prometheus metrics -->
