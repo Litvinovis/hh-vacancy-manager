@@ -22,7 +22,8 @@ RSS не блокируется ботозащитой hh.ru, но не соде
 ## Стек
 
 - **Backend:** Java 25, Spring Boot 4.1, SQLite (JDBC, без ORM)
-- **Scraper sidecar:** Node.js, Playwright (headless Chromium)
+- **Scraper sidecar:** Node.js, Playwright (headless Chromium) — полный текст вакансий с hh.ru
+- **Telegram sidecar:** Node.js, Playwright — сбор вакансий из Telegram-каналов через веб-версию
 - **Frontend:** HTML/CSS/JS (vanilla, без сборки и фреймворков)
 - **AI:** любой OpenAI-совместимый chat-completions API, настраивается в админке, с fallback-цепочкой провайдеров
 
@@ -52,7 +53,7 @@ cd backend && mvn test
 
 ## Деплой
 
-Self-hosted GitHub Actions runner собирает `backend/` и `scraper/`, раскладывает по `/opt/hh-gui` и перезапускает systemd-юниты `hh-gui`/`hh-scraper` (см. `.github/workflows/deploy.yml`, юниты — в `scripts/`).
+Self-hosted GitHub Actions runner собирает `backend/`, `scraper/` и `tg-scraper/`, раскладывает по `/opt/hh-gui` и перезапускает systemd-юниты `hh-gui`, `hh-scraper` и `tg-scraper` (см. `.github/workflows/deploy.yml`, юниты — в `scripts/`). Сайдкары перезапускаются раз в неделю по таймеру: долгоживущий headless-Chromium течёт файловыми дескрипторами и дисковым кэшем.
 
 ## Лицензия
 
