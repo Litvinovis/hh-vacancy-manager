@@ -25,6 +25,10 @@ class RuntimeConfigTest {
         assertEquals("0 0 12 * * *", config.getDailyCron());
         assertEquals(3, config.getMaxRetries());
         assertEquals(1500, config.getRequestDelayMs());
+        assertEquals(3000, config.getScrapeDelayMs());
+        // 0 и 24 — «окна нет», поведение по умолчанию не меняется
+        assertEquals(0, config.getScrapeWindowStartHour());
+        assertEquals(24, config.getScrapeWindowEndHour());
         assertEquals(12000, config.getAiRequestDelayMs());
         assertEquals(30000, config.getHttpConnectTimeoutMs());
         assertEquals(120000, config.getHttpReadTimeoutMs());
@@ -52,6 +56,9 @@ class RuntimeConfigTest {
         assertTrue(m.containsKey("dailyCron"));
         assertTrue(m.containsKey("maxRetries"));
         assertTrue(m.containsKey("requestDelayMs"));
+        assertTrue(m.containsKey("scrapeDelayMs"));
+        assertTrue(m.containsKey("scrapeWindowStartHour"));
+        assertTrue(m.containsKey("scrapeWindowEndHour"));
         assertTrue(m.containsKey("aiRequestDelayMs"));
         assertTrue(m.containsKey("httpConnectTimeoutMs"));
         assertTrue(m.containsKey("httpReadTimeoutMs"));
@@ -70,7 +77,7 @@ class RuntimeConfigTest {
         assertTrue(m.containsKey("vkEnabled"));
         assertTrue(m.containsKey("vkRadarEnabled"));
         assertTrue(m.containsKey("vkRadarSourceGroups"));
-        assertEquals(24, m.size());
+        assertEquals(27, m.size());
     }
 
     // ═══════ Descriptors ═══════
@@ -78,7 +85,7 @@ class RuntimeConfigTest {
     @Test
     void descriptorsCoversAllKeys() {
         List<RuntimeConfig.SettingDescriptor> descs = config.getDescriptors();
-        assertEquals(23, descs.size());
+        assertEquals(26, descs.size());
         Set<String> keys = new HashSet<>();
         for (var d : descs) {
             assertNotNull(d.key);
@@ -124,6 +131,9 @@ class RuntimeConfigTest {
             "maxPerRun", 50,
             "maxRetries", 5,
             "requestDelayMs", 2000,
+            "scrapeDelayMs", 5000,
+            "scrapeWindowStartHour", 22,
+            "scrapeWindowEndHour", 6,
             "minScore", 70,
             "maxApproved", 20,
             "cooldownHours", 2
@@ -133,6 +143,9 @@ class RuntimeConfigTest {
         assertEquals(50, config.getMaxPerRun());
         assertEquals(5, config.getMaxRetries());
         assertEquals(2000, config.getRequestDelayMs());
+        assertEquals(5000, config.getScrapeDelayMs());
+        assertEquals(22, config.getScrapeWindowStartHour());
+        assertEquals(6, config.getScrapeWindowEndHour());
         assertEquals(70, config.getMinScore());
         assertEquals(20, config.getMaxApproved());
         assertEquals(2, config.getCooldownHours());

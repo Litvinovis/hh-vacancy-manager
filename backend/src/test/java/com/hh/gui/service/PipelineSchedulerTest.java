@@ -20,6 +20,7 @@ import org.springframework.scheduling.support.SimpleTriggerContext;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -676,5 +677,79 @@ class PipelineSchedulerTest {
             "первое срабатывание должно быть отложено на initialDelay, а не происходить немедленно ('сейчас' попадает точно в окно миграции схемы при старте)");
         assertTrue(firstExecution.isBefore(now.plus(Duration.ofMinutes(10))),
             "и не отложено на полный 6-часовой интервал");
+    }
+
+    // ── окно скрейпинга ──
+
+    @Test
+    void withinWindow_equalBounds_meansNoRestriction() {
+        // дефолт 0/24 (и любое start == end) — ограничения нет, старое поведение
+        for (int h = 0; h < 24; h++) {
+            assertTrue(PipelineScheduler.withinWindow(h, 0, 24), "час " + h + " при окне 0-24");
+            assertTrue(PipelineScheduler.withinWindow(h, 3, 3), "час " + h + " при окне 3-3");
+        }
+    }
+
+    @Test
+    void withinWindow_plainRange_endHourItselfIsOutside() {
+        assertFalse(PipelineScheduler.withinWindow(23, 0, 6));
+        assertTrue(PipelineScheduler.withinWindow(0, 0, 6));
+        assertTrue(PipelineScheduler.withinWindow(5, 0, 6));
+        assertFalse(PipelineScheduler.withinWindow(6, 0, 6), "конец окна в него уже не входит");
+        assertFalse(PipelineScheduler.withinWindow(12, 0, 6));
+    }
+
+    @Test
+    void withinWindow_endBeforeStart_wrapsOverMidnight() {
+        assertTrue(PipelineScheduler.withinWindow(22, 22, 6));
+        assertTrue(PipelineScheduler.withinWindow(23, 22, 6));
+        assertTrue(PipelineScheduler.withinWindow(0, 22, 6));
+        assertTrue(PipelineScheduler.withinWindow(5, 22, 6));
+        assertFalse(PipelineScheduler.withinWindow(6, 22, 6));
+        assertFalse(PipelineScheduler.withinWindow(21, 22, 6));
+    }
+
+    @Test
+    void outsideScrapeWindow_dueUrlSearchIsSkippedAndNotStamped() {
+        // Окно на следующий час, так что текущий в него заведомо не попадает —
+        // проверка без подмены часов, см. withinWindow.
+        int nextHour = (LocalTime.now().getHour() + 1) % 24;
+        config.setScrapeWindowStartHour(nextHour);
+        config.setScrapeWindowEndHour((nextHour + 1) % 24);
+        profiles.jobs = List.of(job("Поиск", 7L, "оператор"));
+        searchRepo.urlSearches = List.of(scheduled(7L, null, 6));
+
+        runAllTasks();
+
+        assertTrue(pipeline.urlRuns.isEmpty(), "вне окна поиск по ссылке запускаться не должен");
+        assertTrue(searchRepo.stamped.isEmpty(),
+            "пропуск по окну — не «поиск сломался»: отметка времени не ставится, иначе он пропустит и своё окно");
+    }
+
+    @Test
+    void outsideScrapeWindow_telegramSearchesStillRun() {
+        // Окно про нагрузку на hh.ru; Telegram-поиски ходят в web.telegram.org и не при чём.
+        int nextHour = (LocalTime.now().getHour() + 1) % 24;
+        config.setScrapeWindowStartHour(nextHour);
+        config.setScrapeWindowEndHour((nextHour + 1) % 24);
+        profiles.jobs = List.of(job("Поиск", 7L, "оператор"));
+        searchRepo.telegramSearches = List.of(scheduled(7L, null, 6));
+
+        runAllTasks();
+
+        assertEquals(List.of("Поиск"), pipeline.telegramRuns);
+    }
+
+    @Test
+    void insideScrapeWindow_dueUrlSearchRuns() {
+        int currentHour = LocalTime.now().getHour();
+        config.setScrapeWindowStartHour(currentHour);
+        config.setScrapeWindowEndHour((currentHour + 1) % 24);
+        profiles.jobs = List.of(job("Поиск", 7L, "оператор"));
+        searchRepo.urlSearches = List.of(scheduled(7L, null, 6));
+
+        runAllTasks();
+
+        assertEquals(List.of("Поиск"), pipeline.urlRuns);
     }
 }

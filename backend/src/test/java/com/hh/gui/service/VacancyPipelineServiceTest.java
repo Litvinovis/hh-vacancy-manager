@@ -505,6 +505,7 @@ class VacancyPipelineServiceTest {
         // это 7 раз за одно утро замораживало ВЕСЬ скрейпинг на 30-120 минут,
         // хотя ни одна свежая вакансия не блокировалась.
         RuntimeConfig config = new RuntimeConfig();
+        config.setScrapeDelayMs(0); // тест про бёрст-защиту, а не про пейсинг — не ждём 10 пауз
         FakePendingRepo repo = new FakePendingRepo();
         for (int i = 0; i < 10; i++) {
             repo.pending.add(scrapeStub("100" + i, "hh-legacy"));
@@ -525,6 +526,7 @@ class VacancyPipelineServiceTest {
         // Свежие (не legacy) 403 — по-прежнему полноценный сигнал возможного
         // рейт-лимита, защита должна сработать как раньше.
         RuntimeConfig config = new RuntimeConfig();
+        config.setScrapeDelayMs(0); // тест про бёрст-защиту, а не про пейсинг — не ждём 10 пауз
         FakePendingRepo repo = new FakePendingRepo();
         for (int i = 0; i < 10; i++) {
             repo.pending.add(scrapeStub("200" + i, "hh"));
@@ -1246,5 +1248,61 @@ class VacancyPipelineServiceTest {
         String text = htmlToText(html);
         assertTrue(text.contains("• первое"));
         assertTrue(text.contains("• второе"));
+    }
+
+    // ── scrapePending: пейсинг обращений к сайдкару ──
+
+    private static ScraperClient.ScrapeResult okResult() {
+        return new ScraperClient.ScrapeResult(true, null, "Вакансия", "Ромашка", "<p>текст</p>",
+            null, null, null, null, null, null, null, null, null, List.of(), false, null, null);
+    }
+
+    private VacancyPipelineService pacingService(RuntimeConfig config, FakePendingRepo repo, FreshnessScraper scraper) {
+        return service().scraper(scraper).analyzer(new FakeAnalyzer(config)).repo(repo)
+            .config(config).cooldown(new ScrapeCooldown()).build();
+    }
+
+    @Test
+    void scrapePending_pausesBetweenSidecarCalls() throws Exception {
+        // Без паузы страницы грузились вплотную и DDoS-Guard срубал прогон на восьмом
+        // 403 (замер 30.08-02.09: 12 обрывов из 14 прогонов) — см. scrapeDelayMs.
+        RuntimeConfig config = new RuntimeConfig();
+        config.setScrapeDelayMs(60);
+        FakePendingRepo repo = new FakePendingRepo();
+        FreshnessScraper scraper = new FreshnessScraper(config);
+        for (int i = 0; i < 3; i++) {
+            Vacancy v = scrapeStub("30" + i, "hh");
+            repo.pending.add(v);
+            scraper.byId.put(v.getHhId(), okResult());
+        }
+
+        long startedAt = System.nanoTime();
+        int count = scrapePending(pacingService(config, repo, scraper), urlJob());
+        long elapsedMs = (System.nanoTime() - startedAt) / 1_000_000;
+
+        assertEquals(3, count);
+        assertEquals(3, scraper.calls);
+        assertTrue(elapsedMs >= 120,
+            "три обращения к сайдкару = минимум две паузы по 60 мс, а вышло " + elapsedMs + " мс");
+    }
+
+    @Test
+    void scrapePending_firstSidecarCallIsNotDelayed() throws Exception {
+        // Пауза стоит МЕЖДУ запросами: платить её на входе в прогон не за что.
+        RuntimeConfig config = new RuntimeConfig();
+        config.setScrapeDelayMs(2000);
+        FakePendingRepo repo = new FakePendingRepo();
+        FreshnessScraper scraper = new FreshnessScraper(config);
+        Vacancy only = scrapeStub("301", "hh");
+        repo.pending.add(only);
+        scraper.byId.put(only.getHhId(), okResult());
+
+        long startedAt = System.nanoTime();
+        int count = scrapePending(pacingService(config, repo, scraper), urlJob());
+        long elapsedMs = (System.nanoTime() - startedAt) / 1_000_000;
+
+        assertEquals(1, count);
+        assertTrue(elapsedMs < 1000,
+            "единственная вакансия не должна ждать паузу — прогон занял " + elapsedMs + " мс");
     }
 }
