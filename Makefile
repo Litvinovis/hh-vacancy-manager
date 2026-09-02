@@ -35,11 +35,6 @@ docker-run:
 		-v $(PWD)/config:/app/config \
 		hh-gui:latest
 
-# ─── Сбор вакансий ───
-
-collect:
-	cd collector && python3 rss_parser.py
-
 # ─── Полный пайплайн (сбор + AI + уведомления) ───
 
 pipeline:

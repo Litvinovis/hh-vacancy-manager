@@ -60,7 +60,7 @@ public final class TelegramPostParser {
     }
 
     // Best-effort employer extraction for Telegram posts with no first-party job-board
-    // link — mirrors the legacy collector/tg_parser.py heuristic. Channel posts rarely
+    // link. Channel posts rarely
     // label the field explicitly; when they don't, the channel itself becomes the
     // "employer" for dedup purposes (see below).
     // The colon is required (not just optional whitespace): verified live that without
