@@ -543,6 +543,53 @@ class VacancyPipelineServiceTest {
 
 
     @Test
+    void scrapePending_scattered403s_doNotTripBurstCooldown() throws Exception {
+        // Регрессия (замер 06-08.09): 403 отдаёт примерно каждая пятая вакансия просто
+        // потому, что закрыта для просмотра. Прежний счётчик «8 за прогон» набирался на
+        // одном этом фоне: прогон 08.09 04:00 упёрся в него через 31 минуту и 132 успешно
+        // сскрейпленные вакансии, бросил остаток очереди и заморозил скрейпинг на полчаса.
+        RuntimeConfig config = new RuntimeConfig();
+        config.setScrapeDelayMs(0);
+        FakePendingRepo repo = new FakePendingRepo();
+        FreshnessScraper scraper = new FreshnessScraper(config);
+        for (int i = 0; i < 20; i++) {
+            Vacancy v = scrapeStub("40" + i, "hh");
+            repo.pending.add(v);
+            // Каждая четвёртая блокируется — всего 5 штук, но ни одной пары подряд.
+            scraper.byId.put(v.getHhId(), i % 4 == 3 ? failResult("http_403") : okResult());
+        }
+        ScrapeCooldown cooldown = new ScrapeCooldown();
+
+        int count = scrapePending(pacingService(config, repo, scraper), urlJob());
+
+        assertEquals(20, count, "разрозненные 403 не должны обрывать прогон");
+        assertFalse(cooldown.isCoolingDown(), "фоновая доля закрытых вакансий — не блокировка");
+    }
+
+    @Test
+    void scrapePending_403StreakBrokenBySuccess_startsCountingOver() throws Exception {
+        // Успешная загрузка доказывает, что страницы нам ещё отдают — серия обнуляется.
+        // Иначе 5 + 5 блокировок с успехом посередине выглядели бы как сплошная стена.
+        RuntimeConfig config = new RuntimeConfig();
+        config.setScrapeDelayMs(0);
+        FakePendingRepo repo = new FakePendingRepo();
+        FreshnessScraper scraper = new FreshnessScraper(config);
+        String[] outcomes = {"403", "403", "403", "403", "403", "ok",
+                             "403", "403", "403", "403", "403"};
+        for (int i = 0; i < outcomes.length; i++) {
+            Vacancy v = scrapeStub("41" + i, "hh");
+            repo.pending.add(v);
+            scraper.byId.put(v.getHhId(), "ok".equals(outcomes[i]) ? okResult() : failResult("http_403"));
+        }
+        ScrapeCooldown cooldown = new ScrapeCooldown();
+
+        int count = scrapePending(pacingService(config, repo, scraper), urlJob());
+
+        assertEquals(outcomes.length, count, "две серии по пять не дотягивают до порога в шесть");
+        assertFalse(cooldown.isCoolingDown());
+    }
+
+    @Test
     void checkVacancyFreshness_aliveArchivedAndInconclusive_handledDistinctly() {
         RuntimeConfig config = new RuntimeConfig();
         FakeFreshnessRepo repo = new FakeFreshnessRepo();
