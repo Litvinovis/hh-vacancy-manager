@@ -353,16 +353,26 @@ public class VacancyPipelineService {
     // "http_403" (hh.ru's per-vacancy access restriction — verified live: some hh_ids 403
     // consistently while neighbours in the same session scraped fine). A DDoS-Guard session
     // block is reported separately as "blocked" (site-wide). Everything else is site-wide —
-    // the next attempt is just as likely to fail. Backstop: too many 403s in one run still
-    // bails out (guards against a rate-limit that doesn't carry the DDoS-Guard signature) —
-    // but only 'hh' (freshly discovered) rows count toward that trip wire (see LEGACY_SOURCE
-    // below): a live incident (2026-07-20/21) showed the v1 archive re-import routinely
-    // surfaces clusters of genuinely dead, months-old postings that tripped this backstop
-    // 7 times in one morning for no real reason. A true rate limit still shows up on fresh
-    // postings, which this catches at full sensitivity.
+    // the next attempt is just as likely to fail. Backstop: a burst of 403s still bails out
+    // (guards against a rate-limit that doesn't carry the DDoS-Guard signature) — but only
+    // 'hh' (freshly discovered) rows count toward that trip wire (see LEGACY_SOURCE below):
+    // a live incident (2026-07-20/21) showed the v1 archive re-import routinely surfaces
+    // clusters of genuinely dead, months-old postings that tripped this backstop 7 times in
+    // one morning for no real reason. A true rate limit still shows up on fresh postings,
+    // which this catches at full sensitivity.
     private static final Set<String> PER_VACANCY_FAILURE_REASONS = Set.of("not_found", "no_job_posting_data", "http_403", "archived");
     private static final String LEGACY_SOURCE = "hh-legacy";
-    private static final int MAX_HTTP_403_PER_RUN = 8;
+    // CONSECUTIVE 403s, not a per-run total. It used to be a flat 8 anywhere in the run,
+    // which was a sane anomaly threshold back when a run was 30 rows — but roughly one
+    // posting in five 403s as a matter of course (measured 06-08.09: 216 distinct vacancies
+    // out of ~1140 scraped), so once maxPerRun went to 150 the counter filled up from the
+    // base rate alone and the guard fired on healthy runs. Live example, run of 08.09 04:00:
+    // three 403s at 04:03, three more at 04:04, one at 04:14, one at 04:34 — the eighth
+    // arrived after 31 minutes and 132 successfully scraped vacancies, dropped the remaining
+    // 18 rows and froze all scraping for the next half hour, killing the 05:00 run too.
+    // A real block doesn't look like that: it refuses everything, back to back. Longest
+    // natural streak in those three days was 3-4; a genuine rate-limit ran to the old cap.
+    private static final int MAX_CONSECUTIVE_HTTP_403 = 6;
     private static final int MAX_CONSECUTIVE_SCRAPE_FAILURES = 3;
     // Per-vacancy failed attempts (page loads with no JobPosting data) before a row
     // stops being re-queued — without a cap, permanently broken rows sat at the front
@@ -401,7 +411,7 @@ public class VacancyPipelineService {
         }
         int count = 0;
         int consecutiveFailures = 0;
-        int http403InRun = 0;
+        int consecutive403 = 0;
         int sidecarCalls = 0;
         boolean anyAttemptIncrement = false;
         List<Vacancy> pending = vacancyRepo.findScrapePending(job.personName, job.searchName,
@@ -449,6 +459,7 @@ public class VacancyPipelineService {
                 applyScrapeResult(v, r);
                 v.setScrapeStatus("ok");
                 consecutiveFailures = 0;
+                consecutive403 = 0;
                 scrapeCooldown.onSuccess();
             } else {
                 // archived is terminal like not_found — the posting exists but is closed;
@@ -468,18 +479,23 @@ public class VacancyPipelineService {
                     }
                 }
                 // Backstop (see PER_VACANCY_FAILURE_REASONS): individually a 403 is that
-                // one posting restricted, but a pile of them in one run smells like a
-                // rate-limit the sidecar couldn't attribute to DDoS-Guard. Legacy-sourced
-                // rows are exempt from counting toward the trip (see LEGACY_SOURCE) —
-                // months-old archived postings are expected to 403 in clusters.
-                boolean countsTowardBurst = "http_403".equals(r.reason()) && !LEGACY_SOURCE.equals(v.getSource());
-                if (countsTowardBurst && ++http403InRun >= MAX_HTTP_403_PER_RUN) {
-                    vacancyRepo.updateScraped(v);
-                    count++;
-                    scrapeCooldown.enter();
-                    log.warn("Скрейпинг ({} · {}) остановлен: {} http_403 за один прогон — похоже на rate-limit, оставшиеся {} вакансий останутся в очереди",
-                        job.personName, job.searchName, http403InRun, pending.size() - count);
-                    break;
+                // one posting restricted, but an unbroken run of them smells like a
+                // rate-limit the sidecar couldn't attribute to DDoS-Guard. Any other
+                // outcome proves the page still loads for us and clears the streak;
+                // legacy-sourced rows leave it untouched rather than clearing it (see
+                // LEGACY_SOURCE) — months-old archived postings 403 in clusters, and a
+                // batch mixing them with fresh rows must not keep resetting the guard.
+                if ("http_403".equals(r.reason())) {
+                    if (!LEGACY_SOURCE.equals(v.getSource()) && ++consecutive403 >= MAX_CONSECUTIVE_HTTP_403) {
+                        vacancyRepo.updateScraped(v);
+                        count++;
+                        scrapeCooldown.enter();
+                        log.warn("Скрейпинг ({} · {}) остановлен: {} http_403 подряд — похоже на блокировку, оставшиеся {} вакансий останутся в очереди",
+                            job.personName, job.searchName, consecutive403, pending.size() - count);
+                        break;
+                    }
+                } else {
+                    consecutive403 = 0;
                 }
             }
             vacancyRepo.updateScraped(v);
