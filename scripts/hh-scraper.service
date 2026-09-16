@@ -4,10 +4,10 @@ After=network.target
 
 [Service]
 Type=simple
-User=clawd
-Group=clawd
+User=rover
+Group=rover
 WorkingDirectory=/opt/hh-gui/scraper
-ExecStart=/home/clawd/.nvm/versions/node/v24.18.0/bin/node server.js
+ExecStart=/usr/bin/node server.js
 Restart=on-failure
 RestartSec=10
 StandardOutput=journal

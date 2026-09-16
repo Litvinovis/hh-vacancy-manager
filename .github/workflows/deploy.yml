@@ -81,7 +81,7 @@ jobs:
         if: steps.changes.outputs.scraper == 'true' || github.event_name == 'workflow_dispatch'
         run: |
           DEPLOY_DIR=/opt/hh-gui/scraper
-          NPM_BIN=/home/clawd/.nvm/versions/node/v24.18.0/bin/npm
+          NPM_BIN=/usr/bin/npm
 
           sudo mkdir -p ${DEPLOY_DIR}
           sudo cp scraper/package.json scraper/package-lock.json scraper/server.js ${DEPLOY_DIR}/
@@ -90,8 +90,8 @@ jobs:
           # 1.6 GB of hundreds of thousands of files held open by the running browser.
           # Walking that on every deploy is what made this step flaky (it failed ~3× in
           # one day and needed `gh run rerun --failed`). node_modules is created by the
-          # npm ci below, which already runs as clawd.
-          sudo chown clawd:clawd ${DEPLOY_DIR} ${DEPLOY_DIR}/package.json ${DEPLOY_DIR}/package-lock.json ${DEPLOY_DIR}/server.js
+          # npm ci below, which already runs as rover.
+          sudo chown rover:rover ${DEPLOY_DIR} ${DEPLOY_DIR}/package.json ${DEPLOY_DIR}/package-lock.json ${DEPLOY_DIR}/server.js
 
           # Chromium never bounds its own disk cache, and this profile is deliberately
           # long-lived (DDoS-Guard clearance + hh.ru session cookies must survive across
@@ -131,14 +131,14 @@ jobs:
         if: steps.changes.outputs.tg_scraper == 'true' || github.event_name == 'workflow_dispatch'
         run: |
           DEPLOY_DIR=/opt/hh-gui/tg-scraper
-          NPM_BIN=/home/clawd/.nvm/versions/node/v24.18.0/bin/npm
+          NPM_BIN=/usr/bin/npm
 
           sudo mkdir -p ${DEPLOY_DIR}
           # Same reasoning as the hh-scraper step above: only the files just copied,
           # NOT -R over ${DEPLOY_DIR} — profile-data/ holds the logged-in Telegram
           # session (IndexedDB/localStorage), which must survive every deploy untouched.
           sudo cp tg-scraper/package.json tg-scraper/package-lock.json tg-scraper/server.js ${DEPLOY_DIR}/
-          sudo chown clawd:clawd ${DEPLOY_DIR} ${DEPLOY_DIR}/package.json ${DEPLOY_DIR}/package-lock.json ${DEPLOY_DIR}/server.js
+          sudo chown rover:rover ${DEPLOY_DIR} ${DEPLOY_DIR}/package.json ${DEPLOY_DIR}/package-lock.json ${DEPLOY_DIR}/server.js
 
           cd ${DEPLOY_DIR}
           ${NPM_BIN} ci --omit=dev --ignore-scripts
