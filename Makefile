@@ -21,7 +21,7 @@ clean:
 
 migrate:
 	python3 scripts/migrate_legacy.py \
-		--legacy-db /home/clawd/hh-gui/vacancies.db \
+		--legacy-db /home/rover/hh-gui/vacancies.db \
 		--new-db data/vacancies.db
 
 # ─── Docker ───

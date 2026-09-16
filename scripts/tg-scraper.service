@@ -4,11 +4,11 @@ After=network.target
 
 [Service]
 Type=simple
-User=clawd
-Group=clawd
+User=rover
+Group=rover
 WorkingDirectory=/opt/hh-gui/tg-scraper
 Environment=TG_SCRAPER_PORT=8096
-ExecStart=/home/clawd/.nvm/versions/node/v24.18.0/bin/node server.js
+ExecStart=/home/rover/.nvm/versions/node/v24.18.0/bin/node server.js
 Restart=on-failure
 RestartSec=10
 StandardOutput=journal
