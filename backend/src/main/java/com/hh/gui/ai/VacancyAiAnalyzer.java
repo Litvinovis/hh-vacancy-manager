@@ -708,7 +708,14 @@ public class VacancyAiAnalyzer {
 
         String body = HttpUtil.readBody(conn, code);
         if (code >= 400) {
-            log.error("Ошибка LLM API {} ({}): {}", code, provider, body);
+            // Пробные вызовы с явной моделью (FreeModelUpdater, CommentRadar) регулярно ловят
+            // 403 от free-моделей с ограничениями провайдера — это ожидаемый исход проверки,
+            // а не сбой системы, поэтому WARN. Боевые вызовы (modelOverride == null) — ERROR.
+            if (modelOverride != null) {
+                log.warn("Ошибка LLM API {} ({}, проба модели {}): {}", code, provider, modelOverride, body);
+            } else {
+                log.error("Ошибка LLM API {} ({}): {}", code, provider, body);
+            }
             throw new LlmException(LlmException.kindForStatus(code), code,
                 "LLM API returned " + code + " (" + provider + ")");
         }
