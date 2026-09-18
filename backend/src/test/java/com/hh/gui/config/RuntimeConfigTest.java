@@ -77,7 +77,9 @@ class RuntimeConfigTest {
         assertTrue(m.containsKey("vkEnabled"));
         assertTrue(m.containsKey("vkRadarEnabled"));
         assertTrue(m.containsKey("vkRadarSourceGroups"));
-        assertEquals(27, m.size());
+        assertTrue(m.containsKey("scrapeMaxPerRun"));
+        assertTrue(m.containsKey("channelMinScore"));
+        assertEquals(29, m.size());
     }
 
     // ═══════ Descriptors ═══════
@@ -85,7 +87,7 @@ class RuntimeConfigTest {
     @Test
     void descriptorsCoversAllKeys() {
         List<RuntimeConfig.SettingDescriptor> descs = config.getDescriptors();
-        assertEquals(26, descs.size());
+        assertEquals(28, descs.size());
         Set<String> keys = new HashSet<>();
         for (var d : descs) {
             assertNotNull(d.key);

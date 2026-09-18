@@ -2,6 +2,7 @@ package com.hh.gui.controller;
 
 import com.hh.gui.config.RuntimeConfig;
 import com.hh.gui.model.SearchJob;
+import com.hh.gui.repository.VacancyRepository;
 import com.hh.gui.model.User;
 import com.hh.gui.repository.SearchRepository;
 import com.hh.gui.repository.UserRepository;
@@ -71,8 +72,22 @@ class PipelineControllerTest {
 
     private PipelineController controller(List<SearchJob> jobs) {
         jobRunner = new RecordingJobRunner();
-        return new PipelineController(null, null, new FakeProfileFactory(jobs), new RuntimeConfig(),
-            null, jobRunner, null);
+        return new PipelineController(null, new CountingVacancyRepo(), new FakeProfileFactory(jobs),
+            new RuntimeConfig(), null, jobRunner, null);
+    }
+
+    /**
+     * Репозиторий-заглушка: analyzePending теперь сообщает, сколько строк готово к анализу и
+     * сколько ещё ждёт скрейпа, и для этого обращается к БД до запуска задачи.
+     */
+    private static class CountingVacancyRepo extends VacancyRepository {
+        CountingVacancyRepo() { super(null); }
+        @Override
+        public PendingStats pendingStats(String person, String searchName) {
+            return new PendingStats(0, null);
+        }
+        @Override
+        public int countAwaitingScrape(String person, String searchName) { return 0; }
     }
 
     // ── GET /api/pipeline/jobs — visibility (jobsFor) ──

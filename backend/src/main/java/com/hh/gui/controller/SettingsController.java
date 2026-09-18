@@ -50,7 +50,10 @@ public class SettingsController {
         return ResponseEntity.ok(result);
     }
 
+    // PUT принимается наравне с POST: обновление настроек по смыслу идемпотентно, и
+    // 405 на привычный PUT — лишняя ловушка при работе через API (18.09.2026).
     @PostMapping
+    @PutMapping
     public ResponseEntity<Map<String, Object>> updateSettings(@RequestBody Map<String, Object> body,
                                                                 @RequestAttribute("currentUser") User currentUser) {
         if (!currentUser.isAdmin()) return ResponseEntity.status(403).body(Map.of("error", "Требуются права администратора"));
@@ -93,6 +96,15 @@ public class SettingsController {
         return "****";
     }
 
+    @SuppressWarnings("unchecked")
+    private static List<Map<String, Object>> extractProviders(Object payload) {
+        if (payload instanceof List<?> list) return (List<Map<String, Object>>) list;
+        if (payload instanceof Map<?, ?> map && map.get("providers") instanceof List<?> nested) {
+            return (List<Map<String, Object>>) nested;
+        }
+        return null;
+    }
+
     @GetMapping("/providers")
     public ResponseEntity<?> getProviders(@RequestAttribute("currentUser") User currentUser) {
         if (!currentUser.isAdmin()) return forbidden();
@@ -115,9 +127,18 @@ public class SettingsController {
     }
 
     @PutMapping("/providers")
-    public ResponseEntity<?> updateProviders(@RequestBody List<Map<String, Object>> providersList,
+    public ResponseEntity<?> updateProviders(@RequestBody Object payload,
                                               @RequestAttribute("currentUser") User currentUser) {
         if (!currentUser.isAdmin()) return forbidden();
+
+        // GET /providers отдаёт {"providers":[...]}, поэтому отправить то же обратно —
+        // первое, что приходит в голову; раньше это молча падало в 400, принимался лишь
+        // голый массив. Принимаем обе формы (18.09.2026).
+        List<Map<String, Object>> providersList = extractProviders(payload);
+        if (providersList == null) {
+            return ResponseEntity.badRequest().body(Map.of("error",
+                "Ожидается массив провайдеров или объект {\"providers\": [...]}"));
+        }
 
         // GET /providers now sends only masked keys, so the edit form round-trips a
         // masked value for any provider the admin didn't retype a new key for. Match

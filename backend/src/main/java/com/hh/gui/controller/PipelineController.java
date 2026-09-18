@@ -315,14 +315,29 @@ public class PipelineController {
              @RequestParam(name = "searchName", required = false) String searchName,
              @RequestAttribute("currentUser") User currentUser) {
          List<SearchJob> jobs = triggerableJobsFor(person, searchName, currentUser);
-         log.info("Запрошен анализ необработанных для {} поисков", jobs.size());
-         boolean started = jobRunner.start(PipelineJobRunner.Type.ANALYZE_PENDING, jobs, job -> {
+        log.info("Запрошен анализ необработанных для {} поисков", jobs.size());
+        // Считаем ДО запуска: анализ берёт только уже отскрейпленные строки, и без этих чисел
+        // ответ "started" неотличим от "работы нет" (см. VacancyRepository.countAwaitingScrape).
+        int readyForAnalysis = 0;
+        int awaitingScrape = 0;
+        for (SearchJob job : jobs) {
+            readyForAnalysis += vacancyRepo.pendingStats(job.personName, job.searchName).count();
+            awaitingScrape += vacancyRepo.countAwaitingScrape(job.personName, job.searchName);
+        }
+        boolean started = jobRunner.start(PipelineJobRunner.Type.ANALYZE_PENDING, jobs, job -> {
              int analyzed = pipelineService.analyzeAllPending(job);
              Map<String, Integer> c = new LinkedHashMap<>();
              c.put("analyzed", analyzed);
              return c;
          });
-         return startResponse(started, jobs.size());
+         ResponseEntity<Map<String, Object>> response = startResponse(started, jobs.size());
+         if (response.getBody() != null) {
+             // Без этих чисел "started" неотличим от "работы нет": анализ берёт только уже
+             // отскрейпленные строки (findPending), и хвост может целиком ждать скрейпа.
+             response.getBody().put("readyForAnalysis", readyForAnalysis);
+             response.getBody().put("awaitingScrape", awaitingScrape);
+         }
+         return response;
      }
 
     /**
