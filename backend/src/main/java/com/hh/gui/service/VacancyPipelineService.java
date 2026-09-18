@@ -606,8 +606,8 @@ public class VacancyPipelineService {
         to.setKeySkills(from.getKeySkills());
         to.setTrustedEmployer(from.isTrustedEmployer());
         to.setValidThrough(from.getValidThrough());
-        if (to.getPublishedAt() == null || to.getPublishedAt().isBlank()) {
-            to.setPublishedAt(from.getPublishedAt());
+        if (to.getHhPublishedAt() == null || to.getHhPublishedAt().isBlank()) {
+            to.setHhPublishedAt(from.getHhPublishedAt());
         }
         to.setDedupKey(DedupKeys.compute(from.getTitle(), from.getEmployerName(), from.getDescription()));
         to.setScrapeStatus("ok");
@@ -636,9 +636,9 @@ public class VacancyPipelineService {
         v.setTrustedEmployer(r.trustedEmployer());
         v.setValidThrough(r.validThrough());
         // JSON-LD datePosted (ISO) is authoritative — URL-discovered rows have no
-        // publish date at all otherwise, and findPending orders by published_at.
+        // publish date at all otherwise, and findPending orders by hh_published_at.
         if (r.datePosted() != null && !r.datePosted().isBlank()) {
-            v.setPublishedAt(r.datePosted());
+            v.setHhPublishedAt(r.datePosted());
         }
         // RSS-discovered rows carry a title only at save time, so their dedup key can
         // only be built here, once the scrape reveals the employer — without this the

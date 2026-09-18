@@ -43,7 +43,7 @@ public class TelegramClient {
      *                cache, best-effort and can legitimately be absent).
      *  @param reactions emoji -> count, empty map if none; same best-effort caveat as views. */
     public record TelegramMessage(
-        String id, String text, String publishedAt, String link, String channel, String source,
+        String id, String text, String hhPublishedAt, String link, String channel, String source,
         Integer views, java.util.Map<String, Integer> reactions) {}
 
     public record ChannelResult(boolean ok, String reason, List<TelegramMessage> items) {
@@ -105,7 +105,7 @@ public class TelegramClient {
             List<TelegramMessage> items = new ArrayList<>();
             for (Map<String, Object> item : rawItems) {
                 items.add(new TelegramMessage(
-                    str(item.get("id")), str(item.get("text")), str(item.get("publishedAt")),
+                    str(item.get("id")), str(item.get("text")), str(item.get("hhPublishedAt")),
                     str(item.get("link")), str(item.get("channel")), str(item.get("source")),
                     views(item.get("views")), reactions(item.get("reactions"))));
             }

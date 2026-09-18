@@ -42,7 +42,10 @@ public class Vacancy {
     private String sourceQuery;
     private boolean remote;
     private boolean notified;
-    private String publishedAt;
+    private String hhPublishedAt;
+    /** Id сообщения нашего поста в публичном канале и время отправки — см. ChannelPublisher. */
+    private String channelMessageId;
+    private String channelPublishedAt;
     private int foundByScan; // 1 = full scan, 0 = incremental
 
     // Multi-profile + browser-scraper fields
@@ -158,8 +161,12 @@ public class Vacancy {
     public boolean isNotified() { return notified; }
     public void setNotified(boolean notified) { this.notified = notified; }
 
-    public String getPublishedAt() { return publishedAt; }
-    public void setPublishedAt(String publishedAt) { this.publishedAt = publishedAt; }
+    public String getHhPublishedAt() { return hhPublishedAt; }
+    public String getChannelMessageId() { return channelMessageId; }
+    public void setChannelMessageId(String channelMessageId) { this.channelMessageId = channelMessageId; }
+    public String getChannelPublishedAt() { return channelPublishedAt; }
+    public void setChannelPublishedAt(String channelPublishedAt) { this.channelPublishedAt = channelPublishedAt; }
+    public void setHhPublishedAt(String hhPublishedAt) { this.hhPublishedAt = hhPublishedAt; }
 
     public int getFoundByScan() { return foundByScan; }
     public void setFoundByScan(int foundByScan) { this.foundByScan = foundByScan; }

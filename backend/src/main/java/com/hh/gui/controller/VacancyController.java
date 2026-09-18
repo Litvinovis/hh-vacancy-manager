@@ -87,7 +87,7 @@ public class VacancyController {
             vm.put("source", v.getSource() != null ? v.getSource() : "hh");
             vm.put("isRemote", v.isRemote());
             vm.put("notified", v.isNotified());
-            vm.put("publishedAt", v.getPublishedAt() != null ? v.getPublishedAt() : "");
+            vm.put("hhPublishedAt", v.getHhPublishedAt() != null ? v.getHhPublishedAt() : "");
             vm.put("tags", vwt.getTags());
             return vm;
         }).toList());
@@ -133,7 +133,7 @@ public class VacancyController {
         response.put("createdAt", v.getCreatedAt() != null ? v.getCreatedAt() : "");
         response.put("updatedAt", v.getUpdatedAt() != null ? v.getUpdatedAt() : "");
         response.put("isRemote", v.isRemote());
-        response.put("publishedAt", v.getPublishedAt() != null ? v.getPublishedAt() : "");
+        response.put("hhPublishedAt", v.getHhPublishedAt() != null ? v.getHhPublishedAt() : "");
         response.put("tags", d.getTags());
         response.put("history", d.getHistory().stream().map(h -> {
             Map<String, Object> hm = new java.util.LinkedHashMap<>();

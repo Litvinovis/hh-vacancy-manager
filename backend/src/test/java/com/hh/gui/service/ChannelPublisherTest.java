@@ -104,11 +104,17 @@ class ChannelPublisherTest {
     private static class FakeDueQueueRepo extends VacancyRepository {
         List<Vacancy> due = new ArrayList<>();
         final List<Long> notifiedIds = new ArrayList<>();
+        final Map<Long, String> channelMessageIds = new java.util.HashMap<>();
         FakeDueQueueRepo() { super(null); }
         @Override
         public List<Vacancy> findDueQueuedPublications(String nowIso, int limit) { return due; }
         @Override
         public void markNotified(List<Long> ids) { notifiedIds.addAll(ids); }
+        @Override
+        public void markPublishedToChannel(Long id, String messageId) {
+            notifiedIds.add(id);
+            channelMessageIds.put(id, messageId);
+        }
     }
 
     private static class FakeSearchRepo extends SearchRepository {
@@ -130,10 +136,11 @@ class ChannelPublisherTest {
     private static class RecordingChannelBotNotifier extends TelegramNotifier {
         final List<String> sentMessages = new ArrayList<>();
         boolean sendResult = true;
+        String messageId = "1001";
         @Override
-        public boolean sendViaChannelBot(String message, String targetChatId) {
+        public String sendViaChannelBotReturningId(String message, String targetChatId) {
             if (sendResult) sentMessages.add(message);
-            return sendResult;
+            return sendResult ? messageId : null;
         }
     }
 
@@ -354,6 +361,35 @@ class ChannelPublisherTest {
 
         assertEquals(2, notifier.sentMessages.size(), "без темпа публикации каждая вакансия уходит своим постом");
         assertEquals(List.of(1L, 2L), repo.notifiedIds);
+    }
+
+    @Test
+    void send_storesChannelMessageIdPerVacancy() {
+        FakeDueQueueRepo repo = new FakeDueQueueRepo();
+        RecordingChannelBotNotifier notifier = new RecordingChannelBotNotifier();
+        ChannelPublisher publisher = publisher().repo(repo).notifier(notifier).build();
+        SearchJob job = job();
+        job.publishPaceMinutes = null;
+
+        publisher.send(List.of(vacancy(1, "tg_testchan_1", "Первая")), job);
+
+        assertEquals("1001", repo.channelMessageIds.get(1L),
+            "id поста нужен, чтобы позже его найти, удалить или дополнить");
+    }
+
+    @Test
+    void send_telegramAcceptedButNoId_stillMarksPublished() {
+        FakeDueQueueRepo repo = new FakeDueQueueRepo();
+        RecordingChannelBotNotifier notifier = new RecordingChannelBotNotifier();
+        notifier.messageId = "";   // Telegram ответил успехом, но id разобрать не удалось
+        ChannelPublisher publisher = publisher().repo(repo).notifier(notifier).build();
+        SearchJob job = job();
+        job.publishPaceMinutes = null;
+
+        publisher.send(List.of(vacancy(1, "tg_testchan_1", "Первая")), job);
+
+        assertEquals(List.of(1L), repo.notifiedIds, "пост ушёл — вакансия не должна публиковаться повторно");
+        assertNull(repo.channelMessageIds.get(1L), "без id колонка остаётся пустой, а не хранит пустую строку");
     }
 
     @Test
