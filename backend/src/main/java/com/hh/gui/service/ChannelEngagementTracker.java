@@ -61,12 +61,29 @@ public class ChannelEngagementTracker {
      * referencing numeric chat_ids.
      */
     public void checkSubscribers() {
-        for (String chatId : distinctPublishChatIds()) {
+        Set<String> chatIds = distinctPublishChatIds();
+        if (chatIds.isEmpty()) {
+            // Ни у одного включённого поиска нет канала публикации — SMM-панели будут пусты,
+            // и это не сбой сбора, а отсутствие настройки. Без этой строки различить нельзя.
+            log.info("Опрос подписчиков пропущен — ни один включённый поиск не публикует в канал");
+            return;
+        }
+        int polled = 0;
+        for (String chatId : chatIds) {
             Integer count = telegramNotifier.getChatMemberCount(chatId);
             if (count != null) {
                 String username = telegramNotifier.getChatUsername(chatId);
                 telegramMetrics.recordSubscribers(username != null ? username : chatId, count);
+                log.info("Канал {}: подписчиков {}", username != null ? "@" + username : chatId, count);
+                polled++;
             }
+        }
+        // Итог нужен потому, что опрос идёт раз в 6 часов и раньше молчал при любом исходе:
+        // по логу нельзя было отличить «опросили, всё хорошо» от «не дошло до опроса вовсе»
+        // (18.09.2026 из-за этого пустой дашборд выглядел как поломка сбора метрик).
+        if (polled < chatIds.size()) {
+            log.warn("Опрос подписчиков: получено {} из {} каналов — остальные не ответили",
+                polled, chatIds.size());
         }
     }
 
@@ -95,6 +112,7 @@ public class ChannelEngagementTracker {
                 continue;
             }
             recordFrom(username, result.items());
+            log.info("Канал @{}: вовлечённость снята с {} последних постов", username, result.items().size());
         }
     }
 
