@@ -57,7 +57,12 @@ public class TelegramNotifier {
      * is always explicit, unlike send()'s personal-report default.
      */
     public boolean sendViaChannelBot(String message, String targetChatId) {
-        return doSend(channelBotToken, "Токен канального Telegram-бота не настроен (app.telegram.channel-bot-token)",
+        return sendViaChannelBotReturningId(message, targetChatId) != null;
+    }
+
+    /** Как {@link #sendViaChannelBot}, но отдаёт id поста: "" — успех без id, null — не отправлено. */
+    public String sendViaChannelBotReturningId(String message, String targetChatId) {
+        return doSendReturningId(channelBotToken, "Токен канального Telegram-бота не настроен (app.telegram.channel-bot-token)",
             message, targetChatId);
     }
 
@@ -244,14 +249,20 @@ public class TelegramNotifier {
         }
     }
 
-    private boolean doSend(String token, String missingTokenMessage, String message, String resolvedChatId) {
+    /**
+     * Отправка. Возвращает id отправленного сообщения, "" — если Telegram ответил успехом,
+     * но id разобрать не удалось, и null — если отправка не состоялась. Id нужен вызывающим,
+     * которые публикуют в канал: по нему пост потом можно найти, удалить или дополнить
+     * (см. VacancyRepository.markPublishedToChannel).
+     */
+    private String doSendReturningId(String token, String missingTokenMessage, String message, String resolvedChatId) {
         if (token == null || token.isEmpty()) {
             log.warn(missingTokenMessage);
-            return false;
+            return null;
         }
         if (resolvedChatId == null || resolvedChatId.isEmpty()) {
             log.warn("ID чата Telegram не настроен");
-            return false;
+            return null;
         }
 
         try {
@@ -272,16 +283,33 @@ public class TelegramNotifier {
             }
 
             int code = conn.getResponseCode();
+            String respBody = HttpUtil.readBody(conn, code);
             if (code == 200) {
-                log.info("Сообщение Telegram успешно отправлено");
-                return true;
+                String messageId = "";
+                try {
+                    var json = new tools.jackson.databind.ObjectMapper().readTree(respBody);
+                    if (json.path("ok").asBoolean(false)) {
+                        messageId = json.path("result").path("message_id").asString("");
+                    }
+                } catch (Exception parseFailure) {
+                    // Отправка состоялась — это главное; неразобранный id только лишает нас
+                    // возможности адресовать пост потом, поэтому не превращаем в ошибку.
+                    log.warn("Telegram принял сообщение, но ответ не разобран: {}", parseFailure.getMessage());
+                }
+                log.info("Сообщение Telegram успешно отправлено (chat={}, message_id={})",
+                    resolvedChatId, messageId.isEmpty() ? "?" : messageId);
+                return messageId;
             } else {
-                log.error("Ошибка Telegram API {}: {}", code, HttpUtil.readBody(conn, code));
-                return false;
+                log.error("Ошибка Telegram API {}: {}", code, respBody);
+                return null;
             }
         } catch (Exception e) {
             log.error("Не удалось отправить сообщение Telegram: {}", e.getMessage());
-            return false;
+            return null;
         }
+    }
+
+    private boolean doSend(String token, String missingTokenMessage, String message, String resolvedChatId) {
+        return doSendReturningId(token, missingTokenMessage, message, resolvedChatId) != null;
     }
 }

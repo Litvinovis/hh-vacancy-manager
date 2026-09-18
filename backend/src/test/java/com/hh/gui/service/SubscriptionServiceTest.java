@@ -68,10 +68,10 @@ class SubscriptionServiceTest {
         final List<String> messages = new ArrayList<>();
 
         @Override
-        public boolean sendViaChannelBot(String message, String targetChatId) {
+        public String sendViaChannelBotReturningId(String message, String targetChatId) {
             sentTo.add(targetChatId);
             messages.add(message);
-            return true;
+            return "1001";
         }
     }
 

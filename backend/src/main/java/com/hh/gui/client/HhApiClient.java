@@ -204,7 +204,7 @@ public class HhApiClient {
             v.setHhId(hhId);
             v.setTitle(title);
             v.setUrl(link);
-            v.setPublishedAt(pubDate);
+            v.setHhPublishedAt(pubDate);
             v.setStatus("new");
             v.setAiVerdict("pending");
             v.setAiScore(0);

@@ -718,6 +718,10 @@ class VacancyPipelineServiceTest {
             markedNotified.addAll(ids);
         }
         @Override
+        public void markPublishedToChannel(Long id, String messageId) {
+            markedNotified.add(id);
+        }
+        @Override
         public void markModerationQueued(List<Long> ids) {
             markedModerationQueued.addAll(ids);
         }
@@ -736,9 +740,9 @@ class VacancyPipelineServiceTest {
     private static class RecordingChannelNotifier extends TelegramNotifier {
         final List<String> sent = new ArrayList<>();
         @Override
-        public boolean sendViaChannelBot(String message, String targetChatId) {
+        public String sendViaChannelBotReturningId(String message, String targetChatId) {
             sent.add(message);
-            return true;
+            return "1001";
         }
     }
 

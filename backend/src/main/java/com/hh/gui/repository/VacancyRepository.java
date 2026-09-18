@@ -71,7 +71,9 @@ public class VacancyRepository {
             v.setSourceQuery(rs.getString("source_query"));
             v.setRemote(rs.getInt("is_remote") == 1);
             v.setNotified(rs.getInt("notified") == 1);
-            v.setPublishedAt(rs.getString("published_at"));
+            v.setHhPublishedAt(rs.getString("hh_published_at"));
+            v.setChannelMessageId(rs.getString("channel_message_id"));
+            v.setChannelPublishedAt(rs.getString("channel_published_at"));
             v.setFoundByScan(rs.getInt("found_by_scan"));
             long userId = rs.getLong("user_id");
             v.setUserId(rs.wasNull() ? null : userId);
@@ -267,7 +269,7 @@ public class VacancyRepository {
                 experience, employment, key_skills, trusted_employer, valid_through, scrape_status,
                 ai_score, ai_verdict, ai_reason, description, status,
                 rejection_reason, notes, applied_at, created_at, updated_at,
-                source, source_query, is_remote, notified, published_at, found_by_scan, dedup_key)
+                source, source_query, is_remote, notified, hh_published_at, found_by_scan, dedup_key)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """;
 
@@ -311,7 +313,7 @@ public class VacancyRepository {
             ps.setString(i++, v.getSourceQuery());
             ps.setInt(i++, v.isRemote() ? 1 : 0);
             ps.setInt(i++, v.isNotified() ? 1 : 0);
-            ps.setString(i++, v.getPublishedAt());
+            ps.setString(i++, v.getHhPublishedAt());
             ps.setInt(i++, v.getFoundByScan());
             ps.setString(i, v.getDedupKey());
             return ps;
@@ -332,7 +334,7 @@ public class VacancyRepository {
                 experience=?, employment=?, key_skills=?, trusted_employer=?, valid_through=?, scrape_status=?,
                 ai_score=?, ai_verdict=?, ai_reason=?, description=?, status=?, rejection_reason=?, notes=?,
                 applied_at=?, updated_at=?, source=?, source_query=?, is_remote=?,
-                notified=?, published_at=?, found_by_scan=?
+                notified=?, hh_published_at=?, found_by_scan=?
             WHERE id=?
             """;
 
@@ -374,7 +376,7 @@ public class VacancyRepository {
             ps.setString(i++, v.getSourceQuery());
             ps.setInt(i++, v.isRemote() ? 1 : 0);
             ps.setInt(i++, v.isNotified() ? 1 : 0);
-            ps.setString(i++, v.getPublishedAt());
+            ps.setString(i++, v.getHhPublishedAt());
             ps.setInt(i++, v.getFoundByScan());
             ps.setLong(i, v.getId());
             return ps;
@@ -417,7 +419,7 @@ public class VacancyRepository {
                 salary_from=?, salary_to=?, currency=?, salary_gross=?,
                 address=?, district=?, experience=?, employment=?, key_skills=?,
                 trusted_employer=?, valid_through=?, scrape_status=?, is_remote=?,
-                published_at=?, dedup_key=?, updated_at=?
+                hh_published_at=?, dedup_key=?, updated_at=?
             WHERE id=?
             """,
             v.getTitle(), v.getCompany(), v.getEmployerName(), v.getDescription(),
@@ -426,7 +428,7 @@ public class VacancyRepository {
             v.getCurrency(), v.isSalaryGross() ? 1 : 0,
             v.getAddress(), v.getDistrict(), v.getExperience(), v.getEmployment(), v.getKeySkills(),
             v.isTrustedEmployer() ? 1 : 0, v.getValidThrough(), v.getScrapeStatus(),
-            v.isRemote() ? 1 : 0, v.getPublishedAt(), v.getDedupKey(), now, v.getId());
+            v.isRemote() ? 1 : 0, v.getHhPublishedAt(), v.getDedupKey(), now, v.getId());
     }
 
     /**
@@ -504,6 +506,21 @@ public class VacancyRepository {
     }
 
     /**
+     * Same as {@link #markNotified}, plus where and when the post actually landed in the
+     * public channel. Kept separate because a personal report has no message to point at:
+     * it goes out as one digest to one chat, not one message per vacancy.
+     *
+     * messageId may be null when the send succeeded but Telegram's answer carried no id —
+     * the row is still marked notified (it WAS published), we just cannot address the post
+     * later.
+     */
+    public void markPublishedToChannel(Long id, String messageId) {
+        String now = Instant.now().toString();
+        jdbc.update("UPDATE vacancies SET notified=1, channel_message_id=?, channel_published_at=?, updated_at=? WHERE id=?",
+            messageId, now, now, id);
+    }
+
+    /**
      * Get unnotified approved vacancies for a specific (person, search) Telegram report.
      * Excludes a candidate whose dedup_key sibling was already notified in an earlier
      * run — same real posting, different hh_id (see DedupKeys) — so a clone that shows
@@ -530,7 +547,7 @@ public class VacancyRepository {
             "AND NOT EXISTS (SELECT 1 FROM vacancies v2 WHERE v2.dedup_key = v1.dedup_key " +
             "AND v2.dedup_key != '' AND v2.person = v1.person AND v2.search_name = v1.search_name " +
             "AND v2.notified = 1) " +
-            "ORDER BY ai_score DESC, published_at DESC LIMIT ?",
+            "ORDER BY ai_score DESC, hh_published_at DESC LIMIT ?",
             rowMapper, person, searchName, minScore, limit);
     }
 
@@ -860,7 +877,7 @@ public class VacancyRepository {
     public List<Vacancy> findPending(String person, String searchName, int limit) {
         return jdbc.query(
             "SELECT * FROM vacancies WHERE ai_verdict = 'pending' AND scrape_status = 'ok' " +
-            "AND person=? AND search_name=? ORDER BY published_at DESC LIMIT ?",
+            "AND person=? AND search_name=? ORDER BY hh_published_at DESC LIMIT ?",
             rowMapper, person, searchName, limit);
     }
 

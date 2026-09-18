@@ -95,6 +95,7 @@ public class SearchService {
             existing.setSubscriberFeed(updates.isSubscriberFeed());
             existing.setPublishPaceMinutes(updates.getPublishPaceMinutes());
             existing.setRunPriority(updates.getRunPriority());
+            existing.setTelegramChannels(updates.getTelegramChannels());
         }
         if (updates.isEnabled() != existing.isEnabled()) {
             existing.setEnabled(updates.isEnabled());
