@@ -48,6 +48,30 @@ public class AiMetrics {
             .register(registry);
     }
 
+    /**
+     * Счётчики воронки и сбоев — нулями, при старте. Зачем: см. MetricsPreRegistrar.
+     * Здесь только метки с известным набором значений: вердикты, причины отбраковки,
+     * виды ошибок LLM. Статусы HTTP и причины сбоев скрейпера приходят из данных и
+     * не перечисляются — выдуманная серия хуже честно отсутствующей.
+     */
+    public void preRegisterCounters() {
+        registry.counter("ai_vacancies_analyzed_total", "application", "hh-gui");
+        registry.counter("ai_vacancies_deduped_total", "application", "hh-gui");
+        registry.counter("vacancies_prescreen_rejected_total", "application", "hh-gui");
+        for (String verdict : new String[]{"yes", "no", "fraud"}) {
+            registry.counter("vacancies_verdict_total", "application", "hh-gui", "verdict", verdict);
+        }
+        for (String reason : new String[]{"similarity", "channel_floor", "quality"}) {
+            registry.counter("vacancies_dropped_total", "application", "hh-gui", "reason", reason);
+        }
+        for (LlmException.Kind kind : LlmException.Kind.values()) {
+            for (String stage : new String[]{"analyze", "prescreen"}) {
+                registry.counter("ai_analysis_failures_total", "application", "hh-gui",
+                    "kind", kind.name(), "stage", stage);
+            }
+        }
+    }
+
     /** Record a request attempt to a provider. */
     public void recordRequest(String provider) {
         registry.counter("ai_requests_total", "application", "hh-gui", "provider", provider).increment();

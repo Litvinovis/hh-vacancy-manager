@@ -225,6 +225,23 @@ public class PipelineScheduler implements SchedulingConfigurer {
     /** See TelegramMetrics.refreshPublishedRolling/refreshCollectedRolling — DB-backed
      *  gauges that survive app restarts, unlike the Counter-based metrics recorded
      *  inline during discovery/publish (telegram_collected_total, channel_posts_published_total). */
+
+    /**
+     * Нулевые серии telegram_*_total для каналов-источников из настроек поисков.
+     * Иначе панели «собрано/одобрено по каналам» пусты до первого поста из конкретного
+     * канала, а это неотличимо от поломки сбора (см. MetricsPreRegistrar). Идемпотентно:
+     * counter() на уже существующей серии её не сбрасывает, поэтому зовётся каждый тик —
+     * так подхватываются и каналы, добавленные к поиску после старта приложения.
+     */
+    private void preRegisterSourceChannelMetrics() {
+        for (SearchConfig search : searchRepo.findAllEnabled()) {
+            if (search.getTelegramChannels() == null) continue;
+            for (String channel : search.getTelegramChannels()) {
+                telegramMetrics.preRegisterChannel(channel);
+            }
+        }
+    }
+
     private void refreshRollingCountGauges() {
         if (schemaNotReady()) return;
         try {
@@ -232,6 +249,7 @@ public class PipelineScheduler implements SchedulingConfigurer {
                 vacancyRepo.countPublishedSince(Instant.now().minus(Duration.ofHours(1)).toString()));
             telegramMetrics.refreshCollectedRolling(
                 vacancyRepo.countCollectedSince(Instant.now().minus(Duration.ofDays(1)).toString()));
+            preRegisterSourceChannelMetrics();
         } catch (Exception e) {
             log.error("Обновление rolling-метрик из БД завершилось ошибкой: {}", e.getMessage(), e);
         }
