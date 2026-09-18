@@ -88,7 +88,9 @@ public class ChannelPublisher {
     private void mirrorToVk(List<Vacancy> vacancies) {
         if (!runtimeConfig.isVkEnabled()) return;
         for (Vacancy v : vacancies) {
-            if (!vkNotifier.post(VkPostFormatter.publicPost(v))) {
+            if (vkNotifier.post(VkPostFormatter.publicPost(v))) {
+                log.info("Продублировано в VK: вакансия id={} «{}»", v.getId(), v.getTitle());
+            } else {
                 log.warn("Не удалось продублировать в VK вакансию id={}", v.getId());
             }
         }
@@ -111,8 +113,11 @@ public class ChannelPublisher {
         }
         int notifiedCount = 0;
         for (Vacancy v : approved) {
-            if (telegramNotifier.sendViaChannelBot(VacancyPostFormatter.publicPost(v), job.chatId)) {
-                vacancyRepo.markNotified(List.of(v.getId()));
+            String messageId = telegramNotifier.sendViaChannelBotReturningId(VacancyPostFormatter.publicPost(v), job.chatId);
+            if (messageId != null) {
+                vacancyRepo.markPublishedToChannel(v.getId(), messageId.isEmpty() ? null : messageId);
+                log.info("Опубликовано в канал {}: вакансия id={} «{}» (message_id={})",
+                    job.chatId, v.getId(), v.getTitle(), messageId.isEmpty() ? "?" : messageId);
                 telegramMetrics.recordChannelPost(job.searchName);
                 mirrorToVk(List.of(v));
                 notifiedCount++;
@@ -247,8 +252,16 @@ public class ChannelPublisher {
             // the per-vacancy loop this replaced.
             List<Vacancy> batch = dueForSearch.size() > PUBLISH_BATCH_SIZE
                 ? dueForSearch.subList(0, PUBLISH_BATCH_SIZE) : dueForSearch;
-            if (telegramNotifier.sendViaChannelBot(formatBatch(batch), chatId)) {
-                vacancyRepo.markNotified(batch.stream().map(Vacancy::getId).toList());
+            String batchMessageId = telegramNotifier.sendViaChannelBotReturningId(formatBatch(batch), chatId);
+            if (batchMessageId != null) {
+                // Батч ушёл одним сообщением, поэтому id у всех вакансий батча общий — по нему
+                // потом находится ровно тот пост, в котором эта вакансия и опубликована.
+                for (Vacancy v : batch) {
+                    vacancyRepo.markPublishedToChannel(v.getId(), batchMessageId.isEmpty() ? null : batchMessageId);
+                }
+                log.info("Опубликовано в канал {}: {} вакансий одним постом (message_id={}, id={})",
+                    chatId, batch.size(), batchMessageId.isEmpty() ? "?" : batchMessageId,
+                    batch.stream().map(v -> String.valueOf(v.getId())).collect(Collectors.joining(",")));
                 String searchName = searchOpt.get().getName();
                 for (Vacancy v : batch) {
                     telegramMetrics.recordPublished(TelegramPostParser.channelFromHhId(v.getHhId()));
@@ -292,7 +305,8 @@ public class ChannelPublisher {
             String delayedChatId = searchOpt.get().getDelayedChatId();
             String searchName = searchOpt.get().getName();
             for (Vacancy v : entry.getValue()) {
-                if (telegramNotifier.sendViaChannelBot(VacancyPostFormatter.publicPost(v), delayedChatId)) {
+                String delayedMessageId = telegramNotifier.sendViaChannelBotReturningId(VacancyPostFormatter.publicPost(v), delayedChatId);
+                if (delayedMessageId != null) {
                     vacancyRepo.markDelayedNotified(List.of(v.getId()));
                     telegramMetrics.recordChannelPost(searchName);
                     mirrorToVk(List.of(v));

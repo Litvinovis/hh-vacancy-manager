@@ -82,6 +82,15 @@ public class SchemaMigrator implements ApplicationRunner {
         // everything else stays 'none' forever.
         addColumnIfMissing("vacancies", "moderation_status", "TEXT NOT NULL DEFAULT 'none'");
         addColumnIfMissing("vacancies", "click_token", "TEXT DEFAULT NULL");
+        // Id и время НАШЕЙ публикации в канал (18.09.2026). Без них пост нельзя ни удалить,
+        // ни дописать «вакансия закрыта», ни связать просмотры/реакции с конкретной вакансией:
+        // notified=1 говорил лишь «отправлено», без «куда» и «когда».
+        addColumnIfMissing("vacancies", "channel_message_id", "TEXT DEFAULT NULL");
+        addColumnIfMissing("vacancies", "channel_published_at", "TEXT DEFAULT NULL");
+        // published_at всегда означал дату размещения вакансии НА HH, а не нашу публикацию, и
+        // соседство с channel_published_at/queued_publish_at делало это окончательно неочевидным
+        // (18.09.2026 на этом уже был сделан неверный вывод о содержимом канала).
+        renameColumnIfPresent("vacancies", "published_at", "hh_published_at");
         addColumnIfMissing("subscriptions", "cancel_requested", "INTEGER NOT NULL DEFAULT 0");
         addColumnIfMissing("subscriptions", "renewal_reminder_sent_at", "TEXT DEFAULT NULL");
 
@@ -175,6 +184,17 @@ public class SchemaMigrator implements ApplicationRunner {
             log.info("Миграция схемы: добавлена колонка {}.{}", table, column);
         } catch (Exception e) {
             log.error("Миграция схемы: не удалось добавить {}.{}: {}", table, column, e.getMessage());
+        }
+    }
+
+    private void renameColumnIfPresent(String table, String from, String to) {
+        try {
+            if (columnExists(table, to)) return;          // уже переименована
+            if (!columnExists(table, from)) return;       // свежая база: колонка создана schema.sql сразу с новым именем
+            jdbc.execute("ALTER TABLE " + table + " RENAME COLUMN " + from + " TO " + to);
+            log.info("Миграция схемы: колонка {}.{} переименована в {}", table, from, to);
+        } catch (Exception e) {
+            log.error("Миграция схемы: не удалось переименовать {}.{} в {}: {}", table, from, to, e.getMessage());
         }
     }
 

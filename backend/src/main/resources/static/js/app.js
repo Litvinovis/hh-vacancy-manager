@@ -569,7 +569,7 @@ function renderDetail(v) {
         ${v.keySkills ? `<div class="ir"><div class="it-t">Навыки</div><div class="it-v">${escHtml(v.keySkills)}</div></div>` : ''}
         <div class="ir"><div class="it-t">Адрес</div><div class="it-v">${escHtml(v.address || '—')}</div></div>
         <div class="ir"><div class="it-t">Формат</div><div class="it-v">${v.isRemote ? '🌐 Удалёнка' : '🏢 Офис'}</div></div>
-        <div class="ir"><div class="it-t">Опубликовано</div><div class="it-v">${formatDate(v.publishedAt)}</div></div>
+        <div class="ir"><div class="it-t">Опубликовано</div><div class="it-v">${formatDate(v.hhPublishedAt)}</div></div>
         <div class="ir"><div class="it-t">Добавлено</div><div class="it-v">${formatDate(v.createdAt)}</div></div>
       </div>
     </div>
@@ -806,7 +806,7 @@ function setPipelineButtonsDisabled(disabled) {
 async function exportData() {
   toast('⇩ Экспорт: собираю данные...');
   const cols = ['id', 'hhId', 'title', 'company', 'person', 'searchName', 'salaryFrom', 'salaryTo',
-    'district', 'address', 'isRemote', 'aiScore', 'aiVerdict', 'aiReason', 'status', 'url', 'publishedAt', 'createdAt'];
+    'district', 'address', 'isRemote', 'aiScore', 'aiVerdict', 'aiReason', 'status', 'url', 'hhPublishedAt', 'createdAt'];
   const csvCell = (val) => {
     const s = val == null ? '' : String(val);
     return /[",;\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;

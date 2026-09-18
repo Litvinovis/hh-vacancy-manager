@@ -119,7 +119,11 @@ CREATE TABLE IF NOT EXISTS vacancies (
     source_query TEXT DEFAULT '',
     is_remote INTEGER DEFAULT 0,
     notified INTEGER DEFAULT 0,
-    published_at TEXT DEFAULT '',
+    hh_published_at TEXT DEFAULT '',
+    -- id и время нашей публикации в публичный канал (не путать с hh_published_at выше,
+    -- которое приходит от hh.ru) — нужны, чтобы пост можно было найти, удалить или дополнить
+    channel_message_id TEXT DEFAULT NULL,
+    channel_published_at TEXT DEFAULT NULL,
     found_by_scan INTEGER DEFAULT 0,
     -- dedup_key: normalized title+employer (city-independent) — lets the pipeline
     -- recognize "same real posting, different city" (e.g. the same remote support

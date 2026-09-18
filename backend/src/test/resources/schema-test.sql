@@ -83,7 +83,9 @@ CREATE TABLE IF NOT EXISTS vacancies (
     -- INTEGER 0/1 как в проде (schema.sql): H2 BOOLEAN не сравним с 0/1 в
     -- запросах вида "notified = 0" — тесты падали там, где прод работает.
     notified INTEGER DEFAULT 0,
-    published_at VARCHAR(64),
+    hh_published_at VARCHAR(64),
+    channel_message_id VARCHAR(64),
+    channel_published_at VARCHAR(64),
     found_by_scan INTEGER DEFAULT 0,
     dedup_key VARCHAR(512) DEFAULT '',
     last_checked_at VARCHAR(64) DEFAULT NULL,

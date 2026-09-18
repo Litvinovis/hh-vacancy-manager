@@ -86,9 +86,9 @@ class ChannelPipelineIntegrationTest {
         final List<String> channelPosts = new ArrayList<>();
         final List<String> personalMessages = new ArrayList<>();
         @Override
-        public boolean sendViaChannelBot(String message, String targetChatId) {
+        public String sendViaChannelBotReturningId(String message, String targetChatId) {
             channelPosts.add(message);
-            return true;
+            return "1001";
         }
         @Override
         public boolean send(String message, String targetChatId) {
