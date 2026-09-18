@@ -48,6 +48,28 @@ public class AiMetrics {
             .register(registry);
     }
 
+    /**
+     * Исход AI-оценки по вердикту (yes/no/fraud) — раньше по метрикам было видно только
+     * «сколько проанализировано», без разбивки, и доля отсева считалась запросами в БД.
+     */
+    public void recordVerdict(String verdict) {
+        registry.counter("vacancies_verdict_total", "application", "hh-gui", "verdict", verdict).increment();
+    }
+
+    /**
+     * Кандидаты, отсеянные дешёвым прескрином карточек — до скрейпа и полного анализа.
+     * Отдельно от verdict: это другой этап воронки и другая цена ошибки (здесь решение
+     * принимается по одному заголовку).
+     */
+    public void recordPrescreenRejected(long count) {
+        registry.counter("vacancies_prescreen_rejected_total", "application", "hh-gui").increment(count);
+    }
+
+    /** Вакансии, отброшенные перед отправкой: дедуп, порог канала, фильтр качества. */
+    public void recordDropped(String reason, long count) {
+        registry.counter("vacancies_dropped_total", "application", "hh-gui", "reason", reason).increment(count);
+    }
+
     /** Record a request attempt to a provider. */
     public void recordRequest(String provider) {
         registry.counter("ai_requests_total", "application", "hh-gui", "provider", provider).increment();

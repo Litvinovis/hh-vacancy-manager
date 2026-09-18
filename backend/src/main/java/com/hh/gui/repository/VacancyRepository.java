@@ -1092,6 +1092,37 @@ public class VacancyRepository {
         return result;
     }
 
+    /**
+     * Срез воронки: сколько строк сейчас на каждом этапе. Именно срез, а не счётчик событий —
+     * счётчики после рестарта начинаются с нуля и не отвечают на вопрос «где сейчас затор»
+     * (18.09.2026: хвост в 480 необработанных был виден только запросом в БД руками).
+     *
+     * Этапы не пересекаются и покрывают все строки:
+     *   awaiting_scrape — собрано, описание ещё не скачано
+     *   scrape_failed   — скрейп не удался, анализ невозможен
+     *   awaiting_ai     — описание есть, вердикта нет
+     *   rejected        — AI отклонил
+     *   fraud           — AI признал обманом
+     *   approved_queued — одобрено, ещё не опубликовано
+     *   published       — ушло в канал или личный отчёт
+     */
+    public Map<String, Integer> funnelSnapshot() {
+        Map<String, Integer> stages = new LinkedHashMap<>();
+        for (Map<String, Object> row : jdbc.queryForList(
+                "SELECT CASE " +
+                "  WHEN ai_verdict = 'pending' AND COALESCE(scrape_status,'pending') = 'failed' THEN 'scrape_failed' " +
+                "  WHEN ai_verdict = 'pending' AND COALESCE(scrape_status,'pending') <> 'ok' THEN 'awaiting_scrape' " +
+                "  WHEN ai_verdict = 'pending' THEN 'awaiting_ai' " +
+                "  WHEN ai_verdict = 'fraud' THEN 'fraud' " +
+                "  WHEN ai_verdict = 'no' THEN 'rejected' " +
+                "  WHEN notified = 1 THEN 'published' " +
+                "  ELSE 'approved_queued' END AS stage, COUNT(*) AS cnt " +
+                "FROM vacancies GROUP BY stage")) {
+            stages.put(String.valueOf(row.get("stage")), ((Number) row.get("cnt")).intValue());
+        }
+        return stages;
+    }
+
     /** Same reasoning as {@link #countPublishedSince} — collection volume by source, DB-backed. */
     public Map<String, Integer> countCollectedSince(String sinceIso) {
         Map<String, Integer> result = new LinkedHashMap<>();
