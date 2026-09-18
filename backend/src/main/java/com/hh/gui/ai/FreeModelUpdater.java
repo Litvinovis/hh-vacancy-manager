@@ -346,6 +346,13 @@ public class FreeModelUpdater {
             if (jsonArray == null) return 0;
             return scoreProbeAnswer(mapper.readValue(jsonArray, List.class));
         } catch (LlmException e) {
+            if (e.kind() == LlmException.Kind.EDGE_BLOCKED) {
+                // Щит не пустил сам запрос — модель не ответила ни хорошо, ни плохо.
+                // Списать её за это значило бы выкинуть исправную модель из пула
+                // (ровно это и происходило 18.09.2026, пока блокировка считалась AUTH).
+                log.info("Проверка модели {}: пропущена — запрос заблокирован щитом перед API", modelId);
+                return RATE_LIMITED;
+            }
             if (e.kind() == LlmException.Kind.RATE_LIMIT) {
                 log.info("Проверка модели {}: 429 — судить по загруженности пула нельзя, оценку сохраняем", modelId);
                 return RATE_LIMITED;
@@ -358,7 +365,7 @@ public class FreeModelUpdater {
         }
     }
 
-    /** Sentinel: the probe could not be judged because the pool was busy, not because the model is bad. */
+    /** Sentinel: пробу не удалось оценить (пул занят или запрос не дошёл), а не модель плоха. */
     static final int RATE_LIMITED = -1;
 
     /**
