@@ -74,6 +74,16 @@ public class AiMetrics {
     }
 
     /** Record a 429 rate limit hit. */
+    /**
+     * 403 от щита перед API (Cloudflare и подобные) — считается отдельно от ошибок API:
+     * по ai_errors_total такую блокировку не отличить от неверного ключа, а реакция на них
+     * противоположная (подождать против «чинить доступ»). См. LlmException.Kind.EDGE_BLOCKED.
+     */
+    public void recordEdgeBlock(String provider) {
+        registry.counter("ai_edge_blocked_total", "provider", provider,
+            "application", "hh-gui", "service", "ai-analyzer").increment();
+    }
+
     public void recordRateLimit(String provider) {
         registry.counter("ai_rate_limits_total", "application", "hh-gui", "provider", provider).increment();
     }

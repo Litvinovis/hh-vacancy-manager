@@ -18,6 +18,15 @@ public class LlmException extends RuntimeException {
         RATE_LIMIT,
         /** HTTP 401/403 — credentials or entitlement are wrong; retrying the same provider cannot help. */
         AUTH,
+        /**
+         * HTTP 403, но отданный не самим API, а щитом перед ним (Cloudflare и подобные):
+         * блокировка нашего адреса, а не проблема ключа или модели. Отличается по телу
+         * ответа и заголовку server; см. {@link #looksLikeEdgeBlock}. Важно не путать с
+         * AUTH: 18.09.2026 такие 403 заставляли FreeModelUpdater выбрасывать рабочие
+         * бесплатные модели, а анализатор — считать ключ негодным, хотя мешал только щит.
+         * Лечится не сменой провайдера, а паузой и повтором.
+         */
+        EDGE_BLOCKED,
         /** Transport-level: connect/read timeout, DNS, connection reset. No usable HTTP status. */
         TRANSPORT,
         /** A 2xx response whose body we cannot use: no choices, empty content, no JSON array, truncated. */
@@ -55,5 +64,27 @@ public class LlmException extends RuntimeException {
         if (status == 429) return Kind.RATE_LIMIT;
         if (status == 401 || status == 403) return Kind.AUTH;
         return Kind.HTTP_ERROR;
+    }
+
+    /**
+     * Как {@link #kindForStatus}, но с телом ответа и заголовком server — единственным, чем
+     * 403 от щита отличается от 403 от API. У OpenRouter ошибка всегда приходит объектом
+     * {"error":{"message":...}}; страница блокировки — что-то своё, например
+     * {"success":false,"error":"Access denied by security policy."} при server: cloudflare.
+     */
+    public static Kind kindForResponse(int status, String body, String serverHeader) {
+        if (status == 403 && looksLikeEdgeBlock(body, serverHeader)) return Kind.EDGE_BLOCKED;
+        return kindForStatus(status);
+    }
+
+    static boolean looksLikeEdgeBlock(String body, String serverHeader) {
+        String server = serverHeader == null ? "" : serverHeader.toLowerCase();
+        String text = body == null ? "" : body.toLowerCase();
+        boolean shieldAnswered = server.contains("cloudflare") || server.contains("akamai") || server.contains("ddos");
+        boolean apiShapedError = text.contains("\"error\"") && text.contains("\"message\"");
+        // Щит отвечает своей страницей: либо его ни с чем не спутать по server, либо тело
+        // не похоже на ошибку API. Сообщение про security policy ловим и без заголовка —
+        // оно приходит от промежуточных провайдеров, которые server не выставляют.
+        return (shieldAnswered && !apiShapedError) || text.contains("access denied by security policy");
     }
 }

@@ -297,11 +297,44 @@ public class VacancyAiAnalyzer {
         long now = System.currentTimeMillis();
         long elapsed = now - lastRequestTime;
         Integer providerDelay = providerManager.getCurrentRequestDelayMs();
-        long minInterval = providerDelay != null ? providerDelay : runtimeConfig.getAiRequestDelayMs();
+        long configured = providerDelay != null ? providerDelay : runtimeConfig.getAiRequestDelayMs();
+        long minInterval = Math.round(configured * paceMultiplier);
         if (elapsed < minInterval) {
             Thread.sleep(minInterval - elapsed);
         }
         lastRequestTime = System.currentTimeMillis();
+    }
+
+    /**
+     * Множитель к настроенной паузе между запросами. Нужен из-за щита перед API, который
+     * блокирует по адресу волнами: фиксированная пауза либо всё время слишком велика, либо
+     * не спасает в плохой час. Растёт вдвое на каждую блокировку (до MAX_PACE_MULTIPLIER),
+     * и после серии успехов возвращается к настроенному значению — так пайплайн сам
+     * находит темп, при котором его пропускают, вместо ручной подгонки (18.09.2026).
+     */
+    private volatile double paceMultiplier = 1.0;
+    private final java.util.concurrent.atomic.AtomicInteger successesSinceBlock = new java.util.concurrent.atomic.AtomicInteger();
+    private static final double MAX_PACE_MULTIPLIER = 8.0;
+    private static final int SUCCESSES_TO_SPEED_UP = 5;
+
+    private synchronized void backOffAfterEdgeBlock() {
+        successesSinceBlock.set(0);
+        if (paceMultiplier >= MAX_PACE_MULTIPLIER) return;
+        paceMultiplier = Math.min(MAX_PACE_MULTIPLIER, paceMultiplier * 2);
+        log.warn("Пауза между запросами к AI увеличена в {}x — щит блокирует запросы", paceMultiplier);
+    }
+
+    private synchronized void noteSuccessfulCall() {
+        if (paceMultiplier <= 1.0) return;
+        if (successesSinceBlock.incrementAndGet() < SUCCESSES_TO_SPEED_UP) return;
+        successesSinceBlock.set(0);
+        paceMultiplier = Math.max(1.0, paceMultiplier / 2);
+        log.info("Запросы к AI проходят — пауза уменьшена до {}x от настроенной", paceMultiplier);
+    }
+
+    /** Текущий множитель паузы — для метрики и тестов. */
+    double paceMultiplier() {
+        return paceMultiplier;
     }
 
     /**
@@ -337,6 +370,12 @@ public class VacancyAiAnalyzer {
                 LlmException.Kind kind = e instanceof LlmException le ? le.kind() : LlmException.Kind.TRANSPORT;
                 metrics.recordAnalysisFailure(providerManager.getCurrentProviderName(), kind.name(), "analyze");
                 boolean isAuthError = kind == LlmException.Kind.AUTH;
+                if (kind == LlmException.Kind.EDGE_BLOCKED) {
+                    // Щит блокирует наш адрес целиком: другой провайдер в списке живёт за тем
+                    // же щитом, а ключ и модель исправны. Единственное, что помогает, — реже
+                    // стучаться, поэтому растим паузу и повторяем в рамках общего бюджета.
+                    backOffAfterEdgeBlock();
+                }
 
                 if (isAuthError || attempt >= maxRetries) {
                     // Cooldown means "stop asking anyone for hours". That is the right
@@ -708,6 +747,14 @@ public class VacancyAiAnalyzer {
 
         String body = HttpUtil.readBody(conn, code);
         if (code >= 400) {
+            LlmException.Kind kind = LlmException.kindForResponse(code, body, conn.getHeaderField("server"));
+            if (kind == LlmException.Kind.EDGE_BLOCKED) {
+                metrics.recordEdgeBlock(provider);
+                // Модель тут ни при чём — щит не пустил сам запрос, поэтому в сообщении
+                // не упоминаем её: иначе FreeModelUpdater спишет исправную модель.
+                log.warn("Запрос к {} заблокирован щитом перед API (HTTP {}): {}", provider, code, body);
+                throw new LlmException(kind, code, "Заблокировано щитом перед API (" + provider + ")");
+            }
             // Пробные вызовы с явной моделью (FreeModelUpdater, CommentRadar) регулярно ловят
             // 403 от free-моделей с ограничениями провайдера — это ожидаемый исход проверки,
             // а не сбой системы, поэтому WARN. Боевые вызовы (modelOverride == null) — ERROR.
@@ -716,10 +763,10 @@ public class VacancyAiAnalyzer {
             } else {
                 log.error("Ошибка LLM API {} ({}): {}", code, provider, body);
             }
-            throw new LlmException(LlmException.kindForStatus(code), code,
-                "LLM API returned " + code + " (" + provider + ")");
+            throw new LlmException(kind, code, "LLM API returned " + code + " (" + provider + ")");
         }
         recordTokenUsage(provider, body);
+        noteSuccessfulCall();
         return body;
     }
 
