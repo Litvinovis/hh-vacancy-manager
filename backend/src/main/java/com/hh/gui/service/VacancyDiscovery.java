@@ -196,6 +196,7 @@ public class VacancyDiscovery {
             Map<String, VacancyAiAnalyzer.AiResult> prescreen = aiAnalyzer.prescreenHits(newHits, job).stream()
                 .collect(Collectors.toMap(VacancyAiAnalyzer.AiResult::hhId, r -> r, (a, b) -> a));
             long prescreenRejected = prescreen.values().stream().filter(r -> "no".equals(r.verdict())).count();
+            metrics.recordPrescreenRejected(prescreenRejected);
             log.debug("Поиск по ссылке ({} · {}), страница {}: новых {}, из них отсеяно прескрином {}",
                 job.personName, job.searchName, page, newHits.size(), prescreenRejected);
 

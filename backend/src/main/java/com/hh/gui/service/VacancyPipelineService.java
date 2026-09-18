@@ -786,6 +786,7 @@ public class VacancyPipelineService {
             if (isBelowSalaryFloor(v, job)) {
                 vacancyRepo.updateAiResult(v.getHhId(), job.personName, job.searchName, 0, "no",
                     "Зарплата до " + v.getSalaryTo() + "₽ ниже минимума " + job.salaryMin + "₽");
+                metrics.recordVerdict("no");
                 autoRejected++;
                 continue;
             }
@@ -845,6 +846,7 @@ public class VacancyPipelineService {
                 vacancyRepo.updateAiResult(r.hhId(), job.personName, job.searchName, r.score(), r.verdict(), r.reason(),
                     r.noveltyColor(), r.noveltyNote(), r.salaryFrom(), r.salaryTo(), r.currency(), r.company(), r.title());
                 telegramMetrics.recordVerdict(TelegramPostParser.channelFromHhId(r.hhId()), r.verdict());
+                metrics.recordVerdict(r.verdict());
                 returnedIds.add(r.hhId());
                 aiAnalyzed++;
                 // Fan the verdict out to this representative's clone group members.
@@ -855,6 +857,7 @@ public class VacancyPipelineService {
                         r.score(), r.verdict(), r.reason(), r.noveltyColor(), r.noveltyNote(),
                         r.salaryFrom(), r.salaryTo(), r.currency(), r.company(), r.title());
                     telegramMetrics.recordVerdict(TelegramPostParser.channelFromHhId(member.getHhId()), r.verdict());
+                    metrics.recordVerdict(r.verdict());
                     deduped++;
                     metrics.recordVacanciesDeduped(1);
                 }
@@ -1030,6 +1033,7 @@ public class VacancyPipelineService {
                         .map(Vacancy::getId)
                         .toList();
                     vacancyRepo.markNotified(droppedIds);
+                    metrics.recordDropped("channel_floor", droppedIds.size());
                     log.info("Порог канала {} ({} · {}): отсеяно {} из {} одобренных",
                         channelFloor, job.personName, job.searchName, droppedIds.size(), beforeFloor.size());
                 }
@@ -1045,6 +1049,7 @@ public class VacancyPipelineService {
                     .map(Vacancy::getId)
                     .toList();
                 vacancyRepo.markNotified(droppedIds);
+                metrics.recordDropped("quality", droppedIds.size());
                 log.info("Фильтр качества (нет ни компании, ни зарплаты) ({} · {}): {} вакансий отброшено из {}",
                     job.personName, job.searchName, droppedIds.size(), beforeQualityFilter.size());
             }

@@ -35,6 +35,7 @@ public class TelegramMetrics {
     private final Map<String, AtomicInteger> subscriberGauges = new ConcurrentHashMap<>();
     private final Map<String, AtomicInteger> publishedRollingGauges = new ConcurrentHashMap<>();
     private final Map<String, AtomicInteger> collectedRollingGauges = new ConcurrentHashMap<>();
+    private final Map<String, AtomicInteger> funnelGauges = new ConcurrentHashMap<>();
 
     public TelegramMetrics(MeterRegistry registry) {
         this.registry = registry;
@@ -170,6 +171,31 @@ public class TelegramMetrics {
             Gauge.builder("vacancies_published_rolling_1h", value, AtomicInteger::get)
                 .description("Vacancies published to a public destination in the trailing 1h, recomputed from the DB every refresh")
                 .tag("application", "hh-gui").tag("search", s).register(registry);
+            return value;
+        }).set(count);
+    }
+
+    /**
+     * Срез воронки: одна метрика с меткой stage вместо метрики на этап — так панель строится
+     * одним запросом и новые этапы не требуют правки дашборда. Этапы, которых нет в снимке,
+     * обнуляются: иначе после того, как затор рассосался, панель продолжала бы показывать
+     * последнее ненулевое значение (та же логика, что у rolling-гейджей выше).
+     */
+    public void refreshFunnel(Map<String, Integer> countsByStage) {
+        for (var entry : countsByStage.entrySet()) {
+            setFunnelStage(entry.getKey(), entry.getValue());
+        }
+        for (String known : funnelGauges.keySet()) {
+            if (!countsByStage.containsKey(known)) setFunnelStage(known, 0);
+        }
+    }
+
+    private void setFunnelStage(String stage, int count) {
+        funnelGauges.computeIfAbsent(stage, st -> {
+            AtomicInteger value = new AtomicInteger();
+            Gauge.builder("vacancies_funnel_stage", value, AtomicInteger::get)
+                .description("Vacancies currently at each pipeline stage, recomputed from the DB every refresh")
+                .tag("application", "hh-gui").tag("stage", st).register(registry);
             return value;
         }).set(count);
     }
