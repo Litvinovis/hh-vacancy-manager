@@ -135,6 +135,13 @@ public class RuntimeConfig {
     // ═══════ Поля с defaults ═══════
 
     private volatile int maxPerRun = 30;
+    /**
+     * Отдельный лимит на скрейп описаний за прогон (18.09.2026). Раньше maxPerRun был общим
+     * на скрейп и анализ, а описан — как лимит анализа: из-за этого казалось, что пайплайн
+     * встал, хотя он штатно брал по 30 карточек за прогон. Стоимость у шагов разная: скрейп
+     * упирается в сайдкар и защиту hh, анализ — в квоту модели, поэтому и крутить их надо врозь.
+     */
+    private volatile int scrapeMaxPerRun = 30;
     private volatile int pipelineIntervalMs = 600000; // 10 мин
     private volatile String dailyCron = "0 0 12 * * *"; // ежедневно 12:00
     private volatile int maxRetries = 3;
@@ -159,6 +166,12 @@ public class RuntimeConfig {
     private volatile int httpReadTimeoutMs = 120000;
     private volatile int scraperReadTimeoutMs = 240000;
     private volatile int minScore = 50;
+    /**
+     * Порог для публичного канала. 0 = использовать minScore (поведение до 18.09.2026).
+     * Отдельный порог нужен потому, что читателю канала показывают только лучшее, а в личный
+     * дайджест владельцу полезно видеть и пограничные вакансии.
+     */
+    private volatile int channelMinScore = 0;
     // 0 = disabled (default) — same "0 means off" convention as cooldownHours below.
     // A vacancy scoring at or above this on an EDITORIAL search skips human moderation
     // entirely and publishes straight away. Off by default: ships alongside
@@ -261,7 +274,12 @@ public class RuntimeConfig {
 
     public List<SettingDescriptor> getDescriptors() {
         return List.of(
-            SettingDescriptor.of("maxPerRun", "Лимит вакансий за запуск",
+            SettingDescriptor.of("scrapeMaxPerRun", "Лимит скрейпа",
+                "Сколько описаний вакансий скачивается за один запуск пайплайна. Ограничивает нагрузку " +
+                "на сайдкар-скрейпер и частоту обращений к hh.ru; непрочитанные остаются на следующий запуск.",
+                "number", 1, 500, scrapeMaxPerRun),
+
+            SettingDescriptor.of("maxPerRun", "Лимит AI-анализа",
                 "Максимальное количество вакансий, отправляемых на AI-анализ за один запуск пайплайна. " +
                 "Слишком большое значение расходует квоту API и создаёт нагрузку на БД.",
                 "number", 1, 500, maxPerRun),
@@ -329,6 +347,12 @@ public class RuntimeConfig {
                 "поэтому в пиках ответ может идти дольше 2 минут. " +
                 "240000 = 4 минуты.",
                 "number", 30000, 600000, scraperReadTimeoutMs),
+
+            SettingDescriptor.of("channelMinScore", "Мин. скор для канала",
+                "Порог AI-скора для публикации в публичный канал и рассылку подписчикам. " +
+                "0 — использовать общий «Мин. скор уведомлений». Обычно выше него: в канал идёт " +
+                "только лучшее, а в личный отчёт полезны и пограничные вакансии.",
+                "number", 0, 100, channelMinScore),
 
             SettingDescriptor.of("minScore", "Мин. скор уведомлений",
                 "Минимальный AI-скор (0-100) для отправки уведомления в Telegram. " +
@@ -427,6 +451,7 @@ public class RuntimeConfig {
             try {
                 switch (key) {
                     case "maxPerRun" -> setMaxPerRun(toInt(value, errors, key, 1, 500));
+                    case "scrapeMaxPerRun" -> setScrapeMaxPerRun(toInt(value, errors, key, 1, 500));
                     case "pipelineIntervalMs" -> setPipelineIntervalMs(toInt(value, errors, key, 60000, 86400000));
                     case "dailyCron" -> setDailyCron(toCron(value, errors, key));
                     case "maxRetries" -> setMaxRetries(toInt(value, errors, key, 1, 10));
@@ -439,6 +464,7 @@ public class RuntimeConfig {
                     case "httpReadTimeoutMs" -> setHttpReadTimeoutMs(toInt(value, errors, key, 10000, 300000));
                     case "scraperReadTimeoutMs" -> setScraperReadTimeoutMs(toInt(value, errors, key, 30000, 600000));
                     case "minScore" -> setMinScore(toInt(value, errors, key, 0, 100));
+                    case "channelMinScore" -> setChannelMinScore(toInt(value, errors, key, 0, 100));
                     case "autoApproveScoreThreshold" -> setAutoApproveScoreThreshold(toInt(value, errors, key, 0, 100));
                     case "maxApproved" -> setMaxApproved(toInt(value, errors, key, 1, 50));
                     case "cooldownHours" -> setCooldownHours(toInt(value, errors, key, 0, 72));
@@ -480,6 +506,7 @@ public class RuntimeConfig {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("aiProviders", aiProviders); // сохраняем как список, не строку
         m.put("maxPerRun", maxPerRun);
+        m.put("scrapeMaxPerRun", scrapeMaxPerRun);
         m.put("pipelineIntervalMs", pipelineIntervalMs);
         m.put("dailyCron", dailyCron);
         m.put("maxRetries", maxRetries);
@@ -492,6 +519,7 @@ public class RuntimeConfig {
         m.put("httpReadTimeoutMs", httpReadTimeoutMs);
         m.put("scraperReadTimeoutMs", scraperReadTimeoutMs);
         m.put("minScore", minScore);
+        m.put("channelMinScore", channelMinScore);
         m.put("autoApproveScoreThreshold", autoApproveScoreThreshold);
         m.put("maxApproved", maxApproved);
         m.put("cooldownHours", cooldownHours);
@@ -593,6 +621,8 @@ public class RuntimeConfig {
 
     public int getMaxPerRun() { return maxPerRun; }
     public void setMaxPerRun(int v) { this.maxPerRun = v; }
+    public int getScrapeMaxPerRun() { return scrapeMaxPerRun; }
+    public void setScrapeMaxPerRun(int v) { this.scrapeMaxPerRun = v; }
 
     public int getPipelineIntervalMs() { return pipelineIntervalMs; }
     public void setPipelineIntervalMs(int v) { this.pipelineIntervalMs = v; }
@@ -628,6 +658,10 @@ public class RuntimeConfig {
     public void setScraperReadTimeoutMs(int v) { this.scraperReadTimeoutMs = v; }
 
     public int getMinScore() { return minScore; }
+    /** Порог для канала; 0 означает «как у уведомлений» — разворачиваем здесь, чтобы вызывающие не гадали. */
+    public int getChannelMinScore() { return channelMinScore > 0 ? channelMinScore : minScore; }
+    public int getChannelMinScoreRaw() { return channelMinScore; }
+    public void setChannelMinScore(int v) { this.channelMinScore = v; }
     public void setMinScore(int v) { this.minScore = v; }
 
     public int getAutoApproveScoreThreshold() { return autoApproveScoreThreshold; }

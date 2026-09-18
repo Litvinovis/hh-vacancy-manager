@@ -36,6 +36,41 @@ public class SearchService {
      *                Global searches are exempt from MAX_SEARCHES_PER_USER — they're
      *                shared, admin-managed resources, not part of anyone's personal quota.
      */
+
+    /**
+     * Стоп-слова из самой ссылки hh (параметр excluded_text) — если у поиска свои не заданы.
+     * hh отсекает по своим полям, приложение — по названию и работодателю, поэтому списки
+     * полезно держать одинаковыми; 18.09.2026 это делалось копипастой руками, и разъехаться
+     * им ничего не мешало. Заданные вручную слова не трогаем: ссылку меняют чаще, чем правила.
+     */
+    static List<String> excludeWordsFromUrl(String sourceUrl) {
+        if (sourceUrl == null || sourceUrl.isBlank()) return List.of();
+        try {
+            for (String pair : new java.net.URI(sourceUrl).getRawQuery() == null
+                    ? new String[0] : new java.net.URI(sourceUrl).getRawQuery().split("&")) {
+                String[] kv = pair.split("=", 2);
+                if (kv.length != 2 || !"excluded_text".equals(kv[0])) continue;
+                String decoded = java.net.URLDecoder.decode(kv[1], java.nio.charset.StandardCharsets.UTF_8);
+                return java.util.Arrays.stream(decoded.split(","))
+                    .map(String::trim)
+                    .filter(w -> !w.isEmpty())
+                    .toList();
+            }
+        } catch (Exception e) {
+            log.warn("Не удалось разобрать excluded_text из ссылки поиска: {}", e.getMessage());
+        }
+        return List.of();
+    }
+
+    /** Заполняет стоп-слова из ссылки, когда свои не заданы. Возвращает то, что нужно сохранить. */
+    private void adoptExcludeWordsFromUrl(SearchConfig search) {
+        if (search.getExcludeWords() != null && !search.getExcludeWords().isEmpty()) return;
+        List<String> fromUrl = excludeWordsFromUrl(search.getSourceUrl());
+        if (fromUrl.isEmpty()) return;
+        search.setExcludeWords(fromUrl);
+        log.info("Поиск «{}»: стоп-слова взяты из ссылки hh ({} шт.)", search.getName(), fromUrl.size());
+    }
+
     public SearchConfig create(Long userId, SearchConfig search, boolean isAdmin) {
         boolean global = isAdmin && search.isGlobal();
         if (!global && searchRepo.countByUserId(userId) >= MAX_SEARCHES_PER_USER) {
@@ -44,6 +79,7 @@ public class SearchService {
         search.setUserId(userId);
         search.setGlobal(global);
         search.setEnabled(true);
+        adoptExcludeWordsFromUrl(search);
         if (!isAdmin) {
             search.setSourceUrl(null);
             search.setRunIntervalHours(null);
@@ -96,6 +132,7 @@ public class SearchService {
             existing.setPublishPaceMinutes(updates.getPublishPaceMinutes());
             existing.setRunPriority(updates.getRunPriority());
             existing.setTelegramChannels(updates.getTelegramChannels());
+            adoptExcludeWordsFromUrl(existing);
         }
         if (updates.isEnabled() != existing.isEnabled()) {
             existing.setEnabled(updates.isEnabled());

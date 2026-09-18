@@ -35,6 +35,12 @@ public class SearchConfig {
     private String delayedChatId;
     private Integer delayedPublishMinutes;
     private boolean subscriberFeed;
+    /**
+     * Базовый интервал между постами в канал, минуты. Не жёсткий: публикатор растягивает или
+     * сжимает паузу по глубине очереди (см. ChannelPublisher) — при мелкой очереди посты
+     * выходят реже базового значения, при большом хвосте чаще, чтобы он не растянулся на сутки.
+     * 18.09.2026: выставленные 15 минут дали на практике ~5 постов в час, и это не сбой.
+     */
     private Integer publishPaceMinutes;
     private int runPriority;
     private List<String> telegramChannels;
