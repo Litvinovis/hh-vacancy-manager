@@ -415,7 +415,7 @@ public class VacancyPipelineService {
         int sidecarCalls = 0;
         boolean anyAttemptIncrement = false;
         List<Vacancy> pending = vacancyRepo.findScrapePending(job.personName, job.searchName,
-            runtimeConfig.getMaxPerRun(), MAX_SCRAPE_ATTEMPTS);
+            scrapeLimitForThisRun(), MAX_SCRAPE_ATTEMPTS);
         for (Vacancy v : pending) {
             // The cooldown may have been engaged by a PARALLEL run (scheduler vs manual
             // trigger) after this loop already started — the entry check above won't
@@ -685,6 +685,35 @@ public class VacancyPipelineService {
             .replaceAll("\n{3,}", "\n\n")
             .trim();
     }
+
+
+    /**
+     * Сколько описаний скачать за этот прогон. Обычно — настроенный scrapeMaxPerRun, но при
+     * глубоком хвосте необработанных он растворяется: 480 накопленных при 24 за прогон — это
+     * дни (18.09.2026, после первого сбора по ссылке). Поэтому, когда хвост заметно больше
+     * лимита И модель отвечает (не идёт cooldown), лимит временно удваивается. Догон
+     * отключается сам, как только хвост рассасывается, и никогда не включается, если анализ
+     * всё равно стоит — скачивать быстрее, чем разбирать, бессмысленно.
+     */
+    private int scrapeLimitForThisRun() {
+        int configured = runtimeConfig.getScrapeMaxPerRun();
+        int waiting = vacancyRepo.countPending(null);
+        if (waiting < configured * CATCHUP_BACKLOG_FACTOR) {
+            return configured;
+        }
+        if (aiAnalyzer.isRateLimited()) {
+            // Скачивать быстрее, чем разбирать, бессмысленно — хвост лишь переедет на другой шаг
+            return configured;
+        }
+        int boosted = Math.min(configured * 2, CATCHUP_SCRAPE_CEILING);
+        log.info("Режим догона: необработанных {}, лимит скрейпа поднят {} → {}", waiting, configured, boosted);
+        return boosted;
+    }
+
+    /** Во сколько раз хвост должен превышать лимит, чтобы включить догон. */
+    private static final int CATCHUP_BACKLOG_FACTOR = 5;
+    /** Потолок догона: выше него скрейпер и защита hh становятся узким местом. */
+    private static final int CATCHUP_SCRAPE_CEILING = 100;
 
     /** AI-analyze scraped-but-unanalyzed vacancies for this job, up to maxPerRun. */
     private int analyzePending(SearchJob job, int maxPerRun) {
@@ -984,6 +1013,27 @@ public class VacancyPipelineService {
         // as the similarity-dedup drops above: markNotified so findUnnotifiedApproved doesn't
         // keep re-offering them forever.
         if (usePublicFormat) {
+            // Планка канала может быть выше общей: читателю показывают только лучшее, тогда как
+            // в личный отчёт владельцу полезны и пограничные вакансии (18.09.2026). Отсеянные
+            // помечаем notified по тем же причинам, что и фильтр качества ниже, — иначе
+            // findUnnotifiedApproved будет предлагать их вечно.
+            int channelFloor = runtimeConfig.getChannelMinScore();
+            if (channelFloor > runtimeConfig.getMinScore()) {
+                List<Vacancy> beforeFloor = approved;
+                List<Vacancy> afterFloor = beforeFloor.stream()
+                    .filter(v -> v.getAiScore() != null && v.getAiScore() >= channelFloor)
+                    .toList();
+                approved = afterFloor;
+                if (afterFloor.size() < beforeFloor.size()) {
+                    List<Long> droppedIds = beforeFloor.stream()
+                        .filter(v -> !afterFloor.contains(v))
+                        .map(Vacancy::getId)
+                        .toList();
+                    vacancyRepo.markNotified(droppedIds);
+                    log.info("Порог канала {} ({} · {}): отсеяно {} из {} одобренных",
+                        channelFloor, job.personName, job.searchName, droppedIds.size(), beforeFloor.size());
+                }
+            }
             List<Vacancy> beforeQualityFilter = approved;
             List<Vacancy> afterQualityFilter = beforeQualityFilter.stream()
                 .filter(v -> VacancyPostFormatter.hasRealCompany(v) || SalaryFormatter.hasSalary(v))

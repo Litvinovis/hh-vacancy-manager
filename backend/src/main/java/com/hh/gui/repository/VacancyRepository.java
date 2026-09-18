@@ -861,6 +861,19 @@ public class VacancyRepository {
     /** How many rows are waiting for AI analysis, and since when the oldest has been waiting (updated_at = scrape time). */
     public record PendingStats(int count, String oldestWaitingSince) {}
 
+    /**
+     * Сколько строк ждёт скрейпа описания — то есть ещё НЕ доступно анализу
+     * (findPending берёт только scrape_status='ok'). Нужно, чтобы запуск анализа мог честно
+     * ответить «анализировать нечего, узкое место в скрейпе» вместо молчаливого нуля:
+     * 18.09.2026 на этом потерялось время, пока причину искали в самом анализе.
+     */
+    public int countAwaitingScrape(String person, String searchName) {
+        Integer count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM vacancies WHERE ai_verdict = 'pending' AND COALESCE(scrape_status,'pending') <> 'ok' " +
+            "AND person=? AND search_name=?", Integer.class, person, searchName);
+        return count != null ? count : 0;
+    }
+
     /** See PendingStats — drives the scheduler-path decision to let small batches accumulate. */
     public PendingStats pendingStats(String person, String searchName) {
         return jdbc.queryForObject(

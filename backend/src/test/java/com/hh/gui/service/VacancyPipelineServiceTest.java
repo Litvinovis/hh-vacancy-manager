@@ -287,6 +287,11 @@ class VacancyPipelineServiceTest {
 
     /** Известность по фиксированному набору hh_id; сохранённое копится в saved. */
     private static class FakeRepo extends VacancyRepository {
+
+        @Override
+        public int countPending(Long userId) {
+            return 0;   // режим догона (scrapeLimitForThisRun) спрашивает глубину хвоста
+        }
         final Set<String> known;
         final List<Vacancy> saved = new ArrayList<>();
         FakeRepo(Set<String> known) {
@@ -348,6 +353,11 @@ class VacancyPipelineServiceTest {
 
     /** Репозиторий для анализа: без уже готовых вердиктов, копит вызовы updateAiResult. */
     private static class FakeAnalyzeRepo extends VacancyRepository {
+
+        @Override
+        public int countPending(Long userId) {
+            return 0;   // режим догона (scrapeLimitForThisRun) спрашивает глубину хвоста
+        }
         final List<String> aiResultsFor = new ArrayList<>();
         FakeAnalyzeRepo() { super(null); }
         @Override
@@ -431,6 +441,11 @@ class VacancyPipelineServiceTest {
     // ── checkVacancyFreshness: актуализация одобренных вакансий ──
 
     private static class FakeFreshnessRepo extends VacancyRepository {
+
+        @Override
+        public int countPending(Long userId) {
+            return 0;   // режим догона (scrapeLimitForThisRun) спрашивает глубину хвоста
+        }
         List<Vacancy> due = new ArrayList<>();
         final List<Long> checked = new ArrayList<>();
         final List<Long> closed = new ArrayList<>();
@@ -466,6 +481,11 @@ class VacancyPipelineServiceTest {
     // ── scrapePending: http_403-burst backstop должен игнорировать legacy-строки ──
 
     private static class FakePendingRepo extends VacancyRepository {
+
+        @Override
+        public int countPending(Long userId) {
+            return 0;   // режим догона (scrapeLimitForThisRun) спрашивает глубину хвоста
+        }
         List<Vacancy> pending = new ArrayList<>();
         int updateScrapedCalls = 0;
         FakePendingRepo() { super(null); }
@@ -720,6 +740,12 @@ class VacancyPipelineServiceTest {
         @Override
         public void markPublishedToChannel(Long id, String messageId) {
             markedNotified.add(id);
+        }
+        @Override
+        public int countPending(Long userId) {
+            // Режим догона (scrapeLimitForThisRun) спрашивает глубину хвоста перед каждым
+            // скрейпом; в тестах хвоста нет, поэтому лимит остаётся настроенным.
+            return 0;
         }
         @Override
         public void markModerationQueued(List<Long> ids) {
