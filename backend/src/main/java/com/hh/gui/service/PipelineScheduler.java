@@ -20,6 +20,7 @@ import org.springframework.scheduling.config.ScheduledTaskRegistrar;
 import org.springframework.scheduling.support.CronTrigger;
 import org.springframework.scheduling.support.PeriodicTrigger;
 
+import java.util.ArrayList;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalTime;
@@ -234,12 +235,16 @@ public class PipelineScheduler implements SchedulingConfigurer {
      * так подхватываются и каналы, добавленные к поиску после старта приложения.
      */
     private void preRegisterSourceChannelMetrics() {
+        List<String> searchNames = new ArrayList<>();
         for (SearchConfig search : searchRepo.findAllEnabled()) {
+            searchNames.add(search.getName());
             if (search.getTelegramChannels() == null) continue;
             for (String channel : search.getTelegramChannels()) {
                 telegramMetrics.preRegisterChannel(channel);
             }
         }
+        // Источники сбора известны заранее: вакансия приходит либо с hh, либо из Telegram-канала.
+        telegramMetrics.preRegisterRolling(searchNames, List.of("hh", "telegram"));
     }
 
     private void refreshRollingCountGauges() {
