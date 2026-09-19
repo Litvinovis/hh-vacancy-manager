@@ -249,6 +249,7 @@ public class PipelineScheduler implements SchedulingConfigurer {
                 vacancyRepo.countPublishedSince(Instant.now().minus(Duration.ofHours(1)).toString()));
             telegramMetrics.refreshCollectedRolling(
                 vacancyRepo.countCollectedSince(Instant.now().minus(Duration.ofDays(1)).toString()));
+            telegramMetrics.refreshFunnel(vacancyRepo.funnelSnapshot());
             preRegisterSourceChannelMetrics();
         } catch (Exception e) {
             log.error("Обновление rolling-метрик из БД завершилось ошибкой: {}", e.getMessage(), e);

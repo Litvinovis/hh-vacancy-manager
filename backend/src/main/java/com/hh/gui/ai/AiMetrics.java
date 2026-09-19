@@ -49,27 +49,25 @@ public class AiMetrics {
     }
 
     /**
-     * Счётчики воронки и сбоев — нулями, при старте. Зачем: см. MetricsPreRegistrar.
-     * Здесь только метки с известным набором значений: вердикты, причины отбраковки,
-     * виды ошибок LLM. Статусы HTTP и причины сбоев скрейпера приходят из данных и
-     * не перечисляются — выдуманная серия хуже честно отсутствующей.
+     * Исход AI-оценки по вердикту (yes/no/fraud) — раньше по метрикам было видно только
+     * «сколько проанализировано», без разбивки, и доля отсева считалась запросами в БД.
      */
-    public void preRegisterCounters() {
-        registry.counter("ai_vacancies_analyzed_total", "application", "hh-gui");
-        registry.counter("ai_vacancies_deduped_total", "application", "hh-gui");
-        registry.counter("vacancies_prescreen_rejected_total", "application", "hh-gui");
-        for (String verdict : new String[]{"yes", "no", "fraud"}) {
-            registry.counter("vacancies_verdict_total", "application", "hh-gui", "verdict", verdict);
-        }
-        for (String reason : new String[]{"similarity", "channel_floor", "quality"}) {
-            registry.counter("vacancies_dropped_total", "application", "hh-gui", "reason", reason);
-        }
-        for (LlmException.Kind kind : LlmException.Kind.values()) {
-            for (String stage : new String[]{"analyze", "prescreen"}) {
-                registry.counter("ai_analysis_failures_total", "application", "hh-gui",
-                    "kind", kind.name(), "stage", stage);
-            }
-        }
+    public void recordVerdict(String verdict) {
+        registry.counter("vacancies_verdict_total", "application", "hh-gui", "verdict", verdict).increment();
+    }
+
+    /**
+     * Кандидаты, отсеянные дешёвым прескрином карточек — до скрейпа и полного анализа.
+     * Отдельно от verdict: это другой этап воронки и другая цена ошибки (здесь решение
+     * принимается по одному заголовку).
+     */
+    public void recordPrescreenRejected(long count) {
+        registry.counter("vacancies_prescreen_rejected_total", "application", "hh-gui").increment(count);
+    }
+
+    /** Вакансии, отброшенные перед отправкой: дедуп, порог канала, фильтр качества. */
+    public void recordDropped(String reason, long count) {
+        registry.counter("vacancies_dropped_total", "application", "hh-gui", "reason", reason).increment(count);
     }
 
     /** Record a request attempt to a provider. */
@@ -162,5 +160,29 @@ public class AiMetrics {
             .description(description)
             .tag("application", "hh-gui")
             .register(registry);
+    }
+
+    /**
+     * Счётчики воронки и сбоев — нулями, при старте. Зачем: см. MetricsPreRegistrar.
+     * Здесь только метки с известным набором значений: вердикты, причины отбраковки,
+     * виды ошибок LLM. Статусы HTTP и причины сбоев скрейпера приходят из данных и
+     * не перечисляются — выдуманная серия хуже честно отсутствующей.
+     */
+    public void preRegisterCounters() {
+        registry.counter("ai_vacancies_analyzed_total", "application", "hh-gui");
+        registry.counter("ai_vacancies_deduped_total", "application", "hh-gui");
+        registry.counter("vacancies_prescreen_rejected_total", "application", "hh-gui");
+        for (String verdict : new String[]{"yes", "no", "fraud"}) {
+            registry.counter("vacancies_verdict_total", "application", "hh-gui", "verdict", verdict);
+        }
+        for (String reason : new String[]{"similarity", "channel_floor", "quality"}) {
+            registry.counter("vacancies_dropped_total", "application", "hh-gui", "reason", reason);
+        }
+        for (LlmException.Kind kind : LlmException.Kind.values()) {
+            for (String stage : new String[]{"analyze", "prescreen"}) {
+                registry.counter("ai_analysis_failures_total", "application", "hh-gui",
+                    "kind", kind.name(), "stage", stage);
+            }
+        }
     }
 }
