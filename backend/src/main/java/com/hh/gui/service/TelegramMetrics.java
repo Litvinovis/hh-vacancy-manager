@@ -4,6 +4,7 @@ import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.stereotype.Component;
 
+import java.util.Collection;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -156,6 +157,21 @@ public class TelegramMetrics {
      *                       this map (nothing published this window) are zeroed out below
      *                       rather than left showing a stale earlier value.
      */
+    /**
+     * Нулевые rolling-гейджи для поисков и источников, у которых пока ничего не было.
+     * refreshPublishedRolling обнуляет только УЖЕ известные серии, а незнакомый поиск
+     * появляется лишь с первой публикацией — до этого панель «публикаций в час» пуста и
+     * неотличима от поломки сбора (19.09.2026: после рестарта в тихий час так и вышло).
+     */
+    public void preRegisterRolling(Collection<String> searchNames, Collection<String> sources) {
+        for (String search : searchNames) {
+            if (search != null && !search.isBlank()) setPublishedRolling(search, 0);
+        }
+        for (String source : sources) {
+            if (source != null && !source.isBlank()) setCollectedRolling(source, 0);
+        }
+    }
+
     public void refreshPublishedRolling(Map<String, Integer> countsBySearch) {
         for (var entry : countsBySearch.entrySet()) {
             setPublishedRolling(entry.getKey(), entry.getValue());
