@@ -83,6 +83,38 @@ public class VkNotifier {
         return call("wall.createComment", params) != null;
     }
 
+    /**
+     * Пост с опросом: polls.create от имени сообщества, затем wall.post с вложением poll.
+     * Возвращает id поста или null.
+     */
+    public Long postPoll(String message, String question, List<String> options) {
+        if (!configured()) return null;
+        Map<String, String> p = new java.util.LinkedHashMap<>();
+        p.put("owner_id", "-" + groupId);
+        p.put("question", question);
+        p.put("is_anonymous", "1");
+        try {
+            p.put("add_answers", mapper.writeValueAsString(options));
+        } catch (Exception e) {
+            log.error("Не удалось сериализовать варианты опроса: {}", e.getMessage());
+            return null;
+        }
+        Map<?, ?> created = call("polls.create", p);
+        if (created == null) return null;
+        Map<?, ?> poll = (Map<?, ?>) created.get("response");
+        Object pollId = poll.get("id");
+        Object ownerId = poll.get("owner_id");
+        Map<String, String> params = new java.util.LinkedHashMap<>();
+        params.put("owner_id", "-" + groupId);
+        params.put("from_group", "1");
+        params.put("message", message);
+        params.put("attachments", "poll" + ownerId + "_" + pollId);
+        Map<?, ?> resp = call("wall.post", params);
+        if (resp == null) return null;
+        Object postId = ((Map<?, ?>) resp.get("response")).get("post_id");
+        return postId instanceof Number n ? n.longValue() : null;
+    }
+
     /** Короткое имя сообщества (vk.com/<имя>) — для сообщественного хэштега #тег@имя. Кэшируется. */
     public String screenName() {
         if (cachedScreenName != null) return cachedScreenName;
