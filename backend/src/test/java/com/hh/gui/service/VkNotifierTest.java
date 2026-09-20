@@ -4,11 +4,16 @@ import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicReference;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Clock;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -24,6 +29,8 @@ class VkNotifierTest {
     private int port;
     private VkNotifier notifier;
     private final AtomicReference<String> lastRequestBody = new AtomicReference<>();
+    private final AtomicReference<String> lastUploadServerBody = new AtomicReference<>();
+    @TempDir Path dir;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -44,6 +51,14 @@ class VkNotifierTest {
             } else {
                 body = "{\"response\":{\"post_id\":123}}".getBytes(StandardCharsets.UTF_8);
             }
+            ex.sendResponseHeaders(200, body.length);
+            ex.getResponseBody().write(body);
+            ex.close();
+        });
+        server.createContext("/method/photos.getWallUploadServer", ex -> {
+            lastUploadServerBody.set(new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            // Пустой ответ без upload_url — дальше по цепочке идти не надо, нам важен только запрос.
+            byte[] body = "{\"response\":{}}".getBytes(StandardCharsets.UTF_8);
             ex.sendResponseHeaders(200, body.length);
             ex.getResponseBody().write(body);
             ex.close();
@@ -122,5 +137,44 @@ class VkNotifierTest {
 
         assertFalse(notifier.post("hello"));
         assertNull(lastRequestBody.get(), "без group id запрос вообще не должен уйти");
+    }
+
+    // ── пользовательский токен для картинок ──
+
+    private VkIdTokenService vkIdWithToken(String accessToken) throws Exception {
+        Path f = dir.resolve("vk-id-token.json");
+        Files.writeString(f, new tools.jackson.databind.ObjectMapper().writeValueAsString(Map.of(
+            "access_token", accessToken, "refresh_token", "RT", "device_id", "DEV", "state", "st",
+            "expires_at", Clock.systemUTC().instant().getEpochSecond() + 3600, "user_id", 1, "scope", "wall photos")));
+        return new VkIdTokenService("1", f, "http://127.0.0.1:" + port + "/oauth2/auth", Clock.systemUTC(), null, null);
+    }
+
+    @Test
+    void uploadWallPhoto_prefersLiveVkIdTokenOverStaticOne() throws Exception {
+        ReflectionTestUtils.setField(notifier, "photoUploadToken", "STATIC_USER_TOKEN");
+        notifier.setVkIdTokens(vkIdWithToken("VKID_LIVE_TOKEN"));
+
+        notifier.uploadWallPhoto(new byte[]{1, 2, 3}, "card.png");
+
+        assertNotNull(lastUploadServerBody.get(), "photos.getWallUploadServer должен быть вызван");
+        assertTrue(lastUploadServerBody.get().contains("access_token=VKID_LIVE_TOKEN"), lastUploadServerBody.get());
+        assertTrue(lastUploadServerBody.get().contains("group_id=123456789"), lastUploadServerBody.get());
+    }
+
+    @Test
+    void uploadWallPhoto_fallsBackToStaticTokenWhenVkIdHasNothing() throws Exception {
+        ReflectionTestUtils.setField(notifier, "photoUploadToken", "STATIC_USER_TOKEN");
+        notifier.setVkIdTokens(new VkIdTokenService("1", dir.resolve("absent.json"),
+            "http://127.0.0.1:" + port + "/oauth2/auth", Clock.systemUTC(), null, null));
+
+        notifier.uploadWallPhoto(new byte[]{1}, "card.png");
+
+        assertTrue(lastUploadServerBody.get().contains("access_token=STATIC_USER_TOKEN"), lastUploadServerBody.get());
+    }
+
+    @Test
+    void uploadWallPhoto_noUserTokenAtAll_returnsNullWithoutCallingVk() {
+        assertNull(notifier.uploadWallPhoto(new byte[]{1}, "card.png"));
+        assertNull(lastUploadServerBody.get(), "без пользовательского токена в VK ходить незачем");
     }
 }

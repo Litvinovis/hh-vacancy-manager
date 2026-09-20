@@ -33,6 +33,9 @@ public class VkReaderClient {
 
     @Value("${app.vk.user-read-token:}")
     private String userReadToken;
+    /** Живой пользовательский токен VK ID имеет приоритет над статическим; null в тестах. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.hh.gui.service.VkIdTokenService vkIdTokens;
 
     @Value("${app.vk.api-version:5.199}")
     private String apiVersion;
@@ -44,6 +47,14 @@ public class VkReaderClient {
      *  @param link    https://vk.com/<postId>, ready to open directly. */
     public record VkPost(String postId, String text, long date, String link) {}
 
+    private String readToken() {
+        if (vkIdTokens != null) {
+            var live = vkIdTokens.accessToken();
+            if (live.isPresent()) return live.get();
+        }
+        return userReadToken == null || userReadToken.isEmpty() ? null : userReadToken;
+    }
+
     /**
      * Fetches up to {@code count} most recent wall posts from a public community.
      * Empty list (never an exception) on missing config, a transport failure, or a VK
@@ -51,14 +62,15 @@ public class VkReaderClient {
      * of them is unreachable or the token expired.
      */
     public List<VkPost> fetchWallPosts(String communityId, int count) {
-        if (userReadToken == null || userReadToken.isEmpty()) {
-            log.warn("VK personal read token не настроен (app.vk.user-read-token) — радар не может читать паблики");
+        String token = readToken();
+        if (token == null) {
+            log.warn("VK personal read token не настроен (VK ID или app.vk.user-read-token) — радар не может читать паблики");
             return List.of();
         }
         try {
             String url = apiBaseUrl + "/method/wall.get?owner_id=" + URLEncoder.encode("-" + communityId, StandardCharsets.UTF_8)
                 + "&count=" + count
-                + "&access_token=" + URLEncoder.encode(userReadToken, StandardCharsets.UTF_8)
+                + "&access_token=" + URLEncoder.encode(token, StandardCharsets.UTF_8)
                 + "&v=" + URLEncoder.encode(apiVersion, StandardCharsets.UTF_8);
             HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
             conn.setRequestMethod("GET");
