@@ -346,6 +346,11 @@ public class FreeModelUpdater {
             if (jsonArray == null) return 0;
             return scoreProbeAnswer(mapper.readValue(jsonArray, List.class));
         } catch (LlmException e) {
+            if (e.kind() == LlmException.Kind.GEO_BLOCKED) {
+                // Регион выхода, а не модель — та же логика, что со щитом ниже.
+                log.info("Проверка модели {}: пропущена — провайдер отклонил запрос по региону выхода", modelId);
+                return RATE_LIMITED;
+            }
             if (e.kind() == LlmException.Kind.EDGE_BLOCKED) {
                 // Щит не пустил сам запрос — модель не ответила ни хорошо, ни плохо.
                 // Списать её за это значило бы выкинуть исправную модель из пула
