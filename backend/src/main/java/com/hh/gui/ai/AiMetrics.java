@@ -126,6 +126,18 @@ public class AiMetrics {
     }
 
     /** Record prompt/completion token usage reported by the provider's response (if any — not every provider reports it). */
+    /**
+     * Какая модель на самом деле ответила — берётся из поля "model" в теле ответа, а не из
+     * конфига: у OpenRouter в настройке список из трёх моделей, и какая из них отработала,
+     * до 20.09.2026 нигде не было видно. Нужно, чтобы по дашборду отличать «стало хуже,
+     * потому что чаще отвечает слабая запасная модель» от «стало хуже вообще».
+     */
+    public void recordModelUsed(String provider, String model) {
+        if (model == null || model.isBlank()) return;
+        registry.counter("ai_model_requests_total", "application", "hh-gui",
+            "provider", provider, "model", model).increment();
+    }
+
     public void recordTokens(String provider, String type, long count) {
         if (count <= 0) return;
         registry.counter("ai_tokens_total", "application", "hh-gui",

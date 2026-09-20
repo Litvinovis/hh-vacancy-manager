@@ -822,11 +822,12 @@ public class VacancyAiAnalyzer {
         return body;
     }
 
-    /** Best-effort token accounting from the response's OpenAI-compatible "usage" object — a malformed or missing field must never break analysis. */
+    /** Best-effort token/model accounting from the OpenAI-compatible response — a malformed or missing field must never break analysis. */
     @SuppressWarnings("unchecked")
     private void recordTokenUsage(String provider, String body) {
         try {
             Map<?, ?> resp = mapper.readValue(body, Map.class);
+            if (resp.get("model") instanceof String m) metrics.recordModelUsed(provider, m);
             Object usage = resp.get("usage");
             if (usage instanceof Map<?, ?> u) {
                 if (u.get("prompt_tokens") instanceof Number n) metrics.recordTokens(provider, "prompt", n.longValue());

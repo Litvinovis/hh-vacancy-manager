@@ -32,10 +32,12 @@ class GeminiCallTest {
         "[{\"error\":{\"code\":400,\"message\":\"User location is not supported for the API use.\","
         + "\"status\":\"FAILED_PRECONDITION\"}}]";
     private static final String OK_BODY =
-        "{\"choices\":[{\"message\":{\"content\":\"готово\"}}],\"usage\":{\"total_tokens\":7}}";
+        "{\"model\":\"gemini-3.1-flash-lite\",\"choices\":[{\"message\":{\"content\":\"готово\"}}],"
+        + "\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":4}}";
 
     private HttpServer server;
     private VacancyAiAnalyzer analyzer;
+    private SimpleMeterRegistry registry;
     private final AtomicInteger calls = new AtomicInteger();
     private final AtomicReference<String> lastBody = new AtomicReference<>();
     /** Сколько первых запросов отклонить по региону, прежде чем ответить нормально. */
@@ -59,7 +61,8 @@ class GeminiCallTest {
         RuntimeConfig config = new RuntimeConfig();
         config.setAiRequestDelayMs(0);
         config.setAiProviders(List.of(new AiProviderConfig("gemini", url, "k", "gemini-3.1-flash-lite")));
-        AiMetrics metrics = new AiMetrics(new SimpleMeterRegistry(), config);
+        registry = new SimpleMeterRegistry();
+        AiMetrics metrics = new AiMetrics(registry, config);
         analyzer = new VacancyAiAnalyzer(config, new AiProviderManager(config, metrics), metrics,
             new com.hh.gui.client.CurrencyRateService());
     }
@@ -90,5 +93,14 @@ class GeminiCallTest {
         geoFailures = Integer.MAX_VALUE;
         assertNull(analyzer.generateText("привет", 100));
         assertTrue(calls.get() <= 12, "повторы должны быть ограничены, а не бесконечны: " + calls.get());
+    }
+
+    @Test
+    void modelThatActuallyAnswered_isRecordedFromTheResponse() {
+        analyzer.generateText("привет", 100);
+
+        assertEquals(1.0, registry.counter("ai_model_requests_total", "application", "hh-gui",
+            "provider", "gemini", "model", "gemini-3.1-flash-lite").count(),
+            "в конфиге может стоять список моделей — считать надо ту, что ответила");
     }
 }
