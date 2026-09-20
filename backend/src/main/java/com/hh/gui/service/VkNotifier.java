@@ -38,9 +38,12 @@ public class VkNotifier {
     @Value("${app.vk.api-version:5.199}")
     private String apiVersion;
 
-    /** См. application.yml — отдельный пользовательский токен под загрузку картинок. */
+    /** См. application.yml — статический пользовательский токен под загрузку картинок (запасной вариант). */
     @Value("${app.vk.photo-upload-token:}")
     private String photoUploadToken;
+    /** Основной источник пользовательского токена — VK ID с автообновлением; null в тестах. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private VkIdTokenService vkIdTokens;
     /** Причина, по которой карточки не грузятся, пишется в лог один раз, а не на каждом посте. */
     private volatile boolean uploadUnavailableLogged;
 
@@ -126,10 +129,11 @@ public class VkNotifier {
      */
     public String uploadWallPhoto(byte[] png, String fileName) {
         if (!configured()) return null;
-        if (photoUploadToken == null || photoUploadToken.isBlank()) {
+        String uploadToken = userToken();
+        if (uploadToken == null) {
             if (!uploadUnavailableLogged) {
-                log.warn("Карточки к постам VK отключены: не задан VK_PHOTO_UPLOAD_TOKEN (пользовательский токен с правами " +
-                    "photos, wall — групповой загружать картинки не умеет). Посты уходят текстом.");
+                log.warn("Карточки к постам VK отключены: нет пользовательского токена (VK ID через scripts/vk-id-auth.py " +
+                    "или VK_PHOTO_UPLOAD_TOKEN с правами photos, wall — групповой загружать картинки не умеет). Посты уходят текстом.");
                 uploadUnavailableLogged = true;
             }
             return null;
@@ -137,7 +141,7 @@ public class VkNotifier {
         try {
             Map<String, String> p = new java.util.LinkedHashMap<>();
             p.put("group_id", groupId);
-            Map<?, ?> server = callWithToken("photos.getWallUploadServer", p, photoUploadToken);
+            Map<?, ?> server = callWithToken("photos.getWallUploadServer", p, uploadToken);
             if (server == null) return null;
             String uploadUrl = String.valueOf(((Map<?, ?>) server.get("response")).get("upload_url"));
 
@@ -167,7 +171,7 @@ public class VkNotifier {
             save.put("photo", String.valueOf(uploaded.get("photo")));
             save.put("server", String.valueOf(uploaded.get("server")));
             save.put("hash", String.valueOf(uploaded.get("hash")));
-            Map<?, ?> saved = callWithToken("photos.saveWallPhoto", save, photoUploadToken);
+            Map<?, ?> saved = callWithToken("photos.saveWallPhoto", save, uploadToken);
             if (saved == null) return null;
             Map<?, ?> photo = (Map<?, ?>) ((List<?>) saved.get("response")).get(0);
             return "photo" + photo.get("owner_id") + "_" + photo.get("id");
@@ -223,6 +227,17 @@ public class VkNotifier {
         }
         return true;
     }
+
+    /** Пользовательский токен: живой из VK ID, иначе статический из .env, иначе null. */
+    private String userToken() {
+        if (vkIdTokens != null) {
+            var live = vkIdTokens.accessToken();
+            if (live.isPresent()) return live.get();
+        }
+        return photoUploadToken == null || photoUploadToken.isBlank() ? null : photoUploadToken;
+    }
+
+    void setVkIdTokens(VkIdTokenService vkIdTokens) { this.vkIdTokens = vkIdTokens; }
 
     /** POST к методу VK API; null при любой ошибке (сетевой, HTTP или в теле ответа). */
     private Map<?, ?> call(String method, Map<String, String> params) {

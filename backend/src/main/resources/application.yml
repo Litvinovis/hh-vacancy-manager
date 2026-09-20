@@ -79,6 +79,15 @@ app:
     # unavailable with group auth», проверено 20.09.2026. Нужны права photos и wall у
     # администратора сообщества. Пусто — посты уходят без карточек, а не не уходят вовсе.
     photo-upload-token: ${VK_PHOTO_UPLOAD_TOKEN:}
+    # VK ID (OAuth 2.1) — основной способ получить пользовательский токен: бессрочных
+    # токенов у новых приложений VK больше не выдаёт (offline → «invalid scope»),
+    # access-token живёт час. Пара access+refresh лежит в token-file и обновляется
+    # самим приложением (VkIdTokenService); первичная авторизация — scripts/vk-id-auth.py.
+    # Живой токен VK ID имеет приоритет над user-read-token/photo-upload-token выше.
+    id:
+      client-id: ${VK_ID_CLIENT_ID:}
+      token-file: ${VK_ID_TOKEN_FILE:${app.data-dir}/vk-id-token.json}
+      auth-url: ${VK_ID_AUTH_URL:https://id.vk.ru/oauth2/auth}
   subscriptions:
     enabled: ${SUBSCRIPTIONS_ENABLED:false}
     # Shared secret the payment provider's webhook must present (see
