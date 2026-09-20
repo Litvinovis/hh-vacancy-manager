@@ -1,0 +1,15 @@
+[Unit]
+Description=Обновление пользовательского токена VK через сохранённую браузерную сессию
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=rover
+Group=rover
+WorkingDirectory=/opt/hh-gui/tg-scraper
+Environment=PLAYWRIGHT_MODULE=/opt/hh-gui/tg-scraper/node_modules/playwright
+ExecStart=/home/rover/.nvm/versions/node/v24.18.0/bin/node /opt/hh-gui/tg-scraper/vk-token-refresh.js
+TimeoutStartSec=180
+StandardOutput=journal
+StandardError=journal

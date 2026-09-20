@@ -8,12 +8,12 @@ VK больше не выдаёт бессрочные пользователь�
 
 Использование (на сервере, под пользователем сервиса):
   1. scripts/vk-id-auth.py url            # печатает ссылку, сохраняет code_verifier
-  2. открыть ссылку в браузере, разрешить доступ; браузер уйдёт на http://localhost/?code=…
+  2. открыть ссылку в браузере, разрешить доступ; браузер уйдёт на https://localhost/?code=…
      (страница не откроется — это нормально), скопировать URL из адресной строки
   3. scripts/vk-id-auth.py exchange 'http://localhost/?code=…&device_id=…&state=…'
 
 В настройках приложения на dev.vk.com должны быть: базовый домен «localhost»,
-доверенный redirect URL «http://localhost». Код живёт 10 минут.
+доверенный redirect URL «https://localhost» (http VK не принимает). Код живёт 10 минут.
 
 Переменные: VK_ID_CLIENT_ID (или --client-id), VK_ID_TOKEN_FILE (или --token-file,
 по умолчанию data/vk-id-token.json рядом с базой), VK_ID_SCOPE (по умолчанию «wall photos»).
@@ -22,7 +22,9 @@ import argparse, base64, hashlib, json, os, secrets, sys, time, urllib.parse, ur
 
 AUTH_URL = "https://id.vk.ru/authorize"
 TOKEN_URL = "https://id.vk.ru/oauth2/auth"
-REDIRECT = "http://localhost"
+# VK принимает в «доверенный redirect URL» только https — для localhost это тоже работает
+# (страница всё равно не откроется, важен только URL в адресной строке).
+REDIRECT = os.environ.get("VK_ID_REDIRECT_URI", "https://localhost")
 
 
 def env_file_value(key):

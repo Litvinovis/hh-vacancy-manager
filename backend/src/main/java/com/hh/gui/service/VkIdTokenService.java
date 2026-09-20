@@ -40,6 +40,13 @@ import java.util.Optional;
  * {@link #refreshIfDue()} раз в 20 минут держит пару свежей, чтобы отказ VK
  * всплыл в логе и в Telegram владельца сразу, а не в момент публикации.
  *
+ * Второй режим — «обновляют снаружи»: VK ID для Mini App недоступен, а official
+ * клиенты с offline заблокированы (20.09.2026), поэтому токен на 24 часа получает
+ * scripts/vk-token-refresh.js через сохранённую браузерную сессию и пишет в тот же
+ * файл с пустым refresh_token. Тогда сервис в VK не ходит, а просто перечитывает
+ * файл, когда тот меняется, и предупреждает владельца, если свежего токена так и
+ * не появилось.
+ *
  * Если VK ID не настроен (нет client-id или файла), сервис молчит и возвращает
  * пусто — потребители (VkNotifier, VkReaderClient) тогда используют статические
  * токены из .env, как раньше.
@@ -63,6 +70,7 @@ public class VkIdTokenService {
     private final ObjectMapper mapper = new ObjectMapper();
 
     private volatile TokenSet tokens;
+    private volatile long loadedMtime = -1;
     private volatile boolean fileMissingLogged;
     private volatile boolean ownerAlerted;
 
@@ -70,6 +78,8 @@ public class VkIdTokenService {
     public record TokenSet(String accessToken, String refreshToken, String deviceId, String state,
                            long expiresAt, long userId, String scope) {
         long remaining(Clock clock) { return expiresAt - clock.instant().getEpochSecond(); }
+        /** Пустой refresh_token — файл обновляет внешний скрипт, VK ID не вызываем. */
+        boolean externallyRefreshed() { return refreshToken == null || refreshToken.isBlank(); }
     }
 
     @Autowired
@@ -125,13 +135,28 @@ public class VkIdTokenService {
         if (t.remaining(clock) < REFRESH_AHEAD_SECONDS) refresh();
     }
 
-    /** Текущая пара: из памяти, иначе с диска (файл мог обновить скрипт первичной авторизации). */
+    /**
+     * Текущая пара: из памяти, пока файл не менялся; иначе с диска — его переписывает
+     * скрипт первичной авторизации или внешний обновляльщик (vk-token-refresh.js).
+     */
     private TokenSet current() {
+        long mtime = fileMtime();
         TokenSet t = tokens;
-        if (t != null) return t;
+        if (t != null && mtime == loadedMtime) return t;
         synchronized (this) {
-            if (tokens == null) tokens = load();
+            if (tokens == null || mtime != loadedMtime) {
+                TokenSet loaded = load();
+                if (loaded != null) { tokens = loaded; loadedMtime = mtime; }
+            }
             return tokens;
+        }
+    }
+
+    private long fileMtime() {
+        try {
+            return Files.getLastModifiedTime(tokenFile).toMillis();
+        } catch (IOException e) {
+            return -1;
         }
     }
 
@@ -143,6 +168,15 @@ public class VkIdTokenService {
     public synchronized boolean refresh() {
         TokenSet t = current();
         if (t == null) return false;
+        if (t.externallyRefreshed()) {
+            // Обновлять нечем — можно только перечитать файл (current() уже это сделал) и,
+            // если внешний скрипт так и не принёс свежий токен, сказать об этом владельцу.
+            if (t.remaining(clock) < MIN_REMAINING_SECONDS) {
+                log.warn("VK: пользовательский токен истекает через {} с, а vk-token-refresh.js новый не принёс", Math.max(0, t.remaining(clock)));
+                alertOwner("внешнее обновление токена (vk-token-refresh.timer) не сработало");
+            }
+            return false;
+        }
         String result;
         try {
             Map<String, String> form = new LinkedHashMap<>();
@@ -168,6 +202,7 @@ public class VkIdTokenService {
                     resp.get("scope") == null ? t.scope() : String.valueOf(resp.get("scope")));
                 save(fresh);
                 tokens = fresh;
+                loadedMtime = fileMtime();
                 ownerAlerted = false;
                 log.info("VK ID: токен обновлён, действует {} мин (права: {})", expiresIn / 60, fresh.scope());
                 result = "ok";
@@ -192,9 +227,9 @@ public class VkIdTokenService {
     private void alertOwner(String reason) {
         if (ownerAlerted || telegramNotifier == null) return;
         ownerAlerted = true;
-        telegramNotifier.send("⚠️ VK ID: refresh-токен больше не принимается (" + reason + ").\n"
+        telegramNotifier.send("⚠️ VK: пользовательский токен не обновляется (" + reason + ").\n"
             + "Карточки к постам и чтение стены VK отвалятся, когда истечёт текущий токен. "
-            + "Нужна повторная авторизация: scripts/vk-id-auth.py на сервере.");
+            + "Нужна повторная авторизация: браузерная сессия (scripts/vk-token-refresh.js) или scripts/vk-id-auth.py.");
     }
 
     private Map<?, ?> post(Map<String, String> form) throws IOException {
