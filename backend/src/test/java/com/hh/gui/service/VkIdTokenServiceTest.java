@@ -61,9 +61,13 @@ class VkIdTokenServiceTest {
     }
 
     private Path tokenFile(long expiresAt) throws Exception {
+        return tokenFile(expiresAt, "OLD_AT", "OLD_RT");
+    }
+
+    private Path tokenFile(long expiresAt, String accessToken, String refreshToken) throws Exception {
         Path f = dir.resolve("vk-id-token.json");
         Files.writeString(f, new ObjectMapper().writeValueAsString(Map.of(
-            "access_token", "OLD_AT", "refresh_token", "OLD_RT", "device_id", "DEV1",
+            "access_token", accessToken, "refresh_token", refreshToken, "device_id", "DEV1",
             "state", "st1", "expires_at", expiresAt, "user_id", 22019477, "scope", "wall photos")));
         return f;
     }
@@ -153,5 +157,47 @@ class VkIdTokenServiceTest {
         VkIdTokenService s = service(tokenFile(NOW.getEpochSecond() + 1234), NOW);
         s.accessToken();
         assertEquals(1234.0, registry.get("vk_id_token_expires_in_seconds").gauge().value());
+    }
+
+    // ── режим «обновляют снаружи» (vk-token-refresh.js, refresh_token пустой) ──
+
+    @Test
+    void externallyRefreshed_neverCallsVkId_evenWhenExpiring() throws Exception {
+        VkIdTokenService s = service(tokenFile(NOW.getEpochSecond() + 100, "EXT_AT", ""), NOW);
+        assertEquals("EXT_AT", s.accessToken().orElseThrow());
+        s.refreshIfDue();
+        assertEquals(0, calls.get(), "без refresh-токена обменивать нечего — в VK ID не ходим");
+    }
+
+    @Test
+    void fileRewrittenByExternalScript_isPickedUpWithoutRestart() throws Exception {
+        Path f = tokenFile(NOW.getEpochSecond() + 3000, "FIRST", "");
+        VkIdTokenService s = service(f, NOW);
+        assertEquals("FIRST", s.accessToken().orElseThrow());
+
+        Files.writeString(f, new ObjectMapper().writeValueAsString(Map.of(
+            "access_token", "SECOND", "refresh_token", "", "device_id", "", "state", "",
+            "expires_at", NOW.getEpochSecond() + 86400, "user_id", 22019477, "scope", "photos wall")));
+        Files.setLastModifiedTime(f, java.nio.file.attribute.FileTime.fromMillis(System.currentTimeMillis() + 5000));
+
+        assertEquals("SECOND", s.accessToken().orElseThrow(), "новый файл от внешнего скрипта должен подхватиться по mtime");
+        assertEquals(0, calls.get());
+    }
+
+    @Test
+    void externallyRefreshed_expiredAndNotReplaced_alertsOwnerOnce() throws Exception {
+        java.util.List<String> sent = new java.util.ArrayList<>();
+        TelegramNotifier notifier = new TelegramNotifier() {
+            @Override public boolean send(String message) { sent.add(message); return true; }
+        };
+        VkIdTokenService s = new VkIdTokenService("54780855", tokenFile(NOW.getEpochSecond() + 60, "EXT_AT", ""),
+            authUrl, Clock.fixed(NOW, ZoneOffset.UTC), registry, notifier);
+
+        s.refreshIfDue();
+        s.refreshIfDue();
+
+        assertEquals(1, sent.size(), "владельцу — одно предупреждение, не по одному на каждый тик");
+        assertTrue(sent.get(0).contains("vk-token-refresh"), sent.get(0));
+        assertEquals("EXT_AT", s.accessToken().orElseThrow(), "пока минута есть — токен ещё отдаём");
     }
 }

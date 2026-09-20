@@ -149,6 +149,16 @@ jobs:
           sudo systemctl enable tg-scraper
           sudo systemctl restart tg-scraper
 
+      - name: Deploy VK token refresher
+        run: |
+          # Живёт рядом с tg-scraper, чтобы брать его Playwright и Chromium; профиль
+          # браузера (/opt/hh-gui/vk-session, залогиненная сессия VK) деплой не трогает.
+          sudo cp scripts/vk-token-refresh.js /opt/hh-gui/tg-scraper/vk-token-refresh.js
+          sudo chown rover:rover /opt/hh-gui/tg-scraper/vk-token-refresh.js
+          sudo cp scripts/vk-token-refresh.service scripts/vk-token-refresh.timer /etc/systemd/system/
+          sudo systemctl daemon-reload
+          sudo systemctl enable --now vk-token-refresh.timer
+
       - name: Deploy
         run: |
           DEPLOY_DIR=/opt/hh-gui

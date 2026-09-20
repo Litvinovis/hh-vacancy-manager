@@ -1,0 +1,11 @@
+[Unit]
+Description=Обновлять пользовательский токен VK дважды в сутки (токен живёт 24 ч)
+
+[Timer]
+# Дважды в сутки: запас в 12 часов на случай, если один запуск упадёт (сеть, VK).
+OnCalendar=*-*-* 03:20,15:20
+RandomizedDelaySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
