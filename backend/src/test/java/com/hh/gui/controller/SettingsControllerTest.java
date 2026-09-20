@@ -272,4 +272,15 @@ class SettingsControllerTest {
         assertEquals(200, response.getStatusCode().value());
         assertEquals(1, updater.calls.get());
     }
+
+    @Test
+    void updateSettings_acceptsBothPostAndPut() throws Exception {
+        // Две аннотации @PostMapping+@PutMapping Spring не складывает — берёт первую, PUT давал 405.
+        var mapping = SettingsController.class.getMethod("updateSettings", Map.class, com.hh.gui.model.User.class)
+            .getAnnotation(org.springframework.web.bind.annotation.RequestMapping.class);
+        assertNotNull(mapping, "updateSettings должен объявлять методы через @RequestMapping");
+        assertEquals(java.util.Set.of(org.springframework.web.bind.annotation.RequestMethod.POST,
+                org.springframework.web.bind.annotation.RequestMethod.PUT),
+            java.util.Set.of(mapping.method()));
+    }
 }

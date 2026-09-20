@@ -52,8 +52,9 @@ public class SettingsController {
 
     // PUT принимается наравне с POST: обновление настроек по смыслу идемпотентно, и
     // 405 на привычный PUT — лишняя ловушка при работе через API (18.09.2026).
-    @PostMapping
-    @PutMapping
+    // Именно @RequestMapping с двумя методами: две аннотации @PostMapping + @PutMapping
+    // Spring не объединяет — берёт первую и предупреждает при старте (20.09.2026).
+    @RequestMapping(method = {RequestMethod.POST, RequestMethod.PUT})
     public ResponseEntity<Map<String, Object>> updateSettings(@RequestBody Map<String, Object> body,
                                                                 @RequestAttribute("currentUser") User currentUser) {
         if (!currentUser.isAdmin()) return ResponseEntity.status(403).body(Map.of("error", "Требуются права администратора"));

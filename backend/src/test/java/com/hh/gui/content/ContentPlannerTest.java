@@ -88,6 +88,15 @@ class ContentPlannerTest {
     }
 
     @Test
+    void sundayAfterAllContentDays_createsNothingAndLeavesNextWeekAlone() {
+        FakeArticles repo = new FakeArticles();
+        // воскресенье: вт/чт/сб этой недели позади — ничего не планируем и не забегаем на следующую
+        int created = new ContentPlanner(repo, config(2, 1, "TUE,THU,SAT"), at("2026-09-20T12:00:00")).planCurrentWeek();
+        assertEquals(0, created);
+        assertTrue(repo.saved.isEmpty());
+    }
+
+    @Test
     void unknownDayName_isSkippedNotFatal() {
         ContentPlanner p = new ContentPlanner(new FakeArticles(), config(1, 0, "TUE, среда, SAT"), at("2026-09-21T08:00:00"));
         assertEquals(2, p.contentDays(LocalDate.of(2026, 9, 21), LocalDate.of(2026, 9, 21)).size());
