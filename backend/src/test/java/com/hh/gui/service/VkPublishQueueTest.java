@@ -48,7 +48,12 @@ class VkPublishQueueTest {
         final List<String> posts = new ArrayList<>();
         final List<String> comments = new ArrayList<>();
         boolean fail = false;
-        @Override public Long postReturningId(String message) { if (fail) return null; posts.add(message); return (long) posts.size(); }
+        final List<String> attachments = new ArrayList<>();
+        @Override public Long postReturningId(String message) { return postReturningId(message, null); }
+        @Override public Long postReturningId(String message, String attachment) {
+            if (fail) return null; posts.add(message); attachments.add(attachment); return (long) posts.size();
+        }
+        @Override public String uploadWallPhoto(byte[] png, String fileName) { return "photo-1_" + fileName; }
         @Override public boolean comment(long postId, String text) { comments.add(text); return true; }
         @Override public String screenName() { return "remotevibe"; }
     }
@@ -96,6 +101,17 @@ class VkPublishQueueTest {
         assertTrue(vk.posts.get(0).startsWith("Ассистент руководителя — "), vk.posts.get(0));
         assertTrue(vk.posts.get(0).contains("#вакансии@remotevibe"), "сообщественный тег из screenName");
         assertEquals(List.of("Откликнуться: https://hh.ru/vacancy/1"), vk.comments, "ссылка — в первом комментарии");
+        assertEquals("photo-1_vacancy-1.png", vk.attachments.get(0), "к посту приложена карточка");
+    }
+
+    @Test
+    void cardsDisabled_postGoesWithoutAttachment() {
+        FakeRepo repo = new FakeRepo(); repo.queued.add(vacancy(1, "Ассистент"));
+        FakeVk vk = new FakeVk();
+        RuntimeConfig config = config(); config.setVkCardsEnabled(false);
+        queue(repo, vk, config, moscow("2026-09-21T09:05:00")).publishDue();
+        assertEquals(1, vk.posts.size());
+        assertNull(vk.attachments.get(0));
     }
 
     @Test
