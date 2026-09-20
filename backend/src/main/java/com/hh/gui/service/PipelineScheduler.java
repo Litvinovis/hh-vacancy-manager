@@ -390,7 +390,8 @@ public class PipelineScheduler implements SchedulingConfigurer {
             .filter(j -> j.queries != null && !j.queries.isEmpty())
             .toList();
         if (jobs.isEmpty()) {
-            log.warn("Ни одного активного поиска не настроено ни у одного пользователя");
+            log.info("Поисков по запросам нет — RSS-цикл пропущен (поиски по ссылке идут своим расписанием, "
+                + "см. runDueUrlSearches)");
         }
         for (SearchJob job : jobs) {
             try {
