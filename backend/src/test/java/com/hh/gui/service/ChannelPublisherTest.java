@@ -148,7 +148,7 @@ class ChannelPublisherTest {
      *  это то же «что уйдёт в VK», что раньше проверялось на самом нотификаторе. */
     private static class RecordingVkQueue extends VkPublishQueue {
         final List<String> posted = new ArrayList<>();
-        RecordingVkQueue() { super(null, null, null, null); }
+        RecordingVkQueue() { super(null, null, null, null, (com.hh.gui.repository.VkArticleRepository) null); }
         @Override
         public void enqueue(List<Vacancy> vacancies) {
             for (Vacancy v : vacancies) posted.add(v.getTitle());

@@ -674,6 +674,27 @@ public class VacancyAiAnalyzer {
     }
 
     /**
+     * Свободный текст от модели — для генератора статей сообщества (ArticleGenerator).
+     * Тот же провайдер, та же пауза между запросами и тот же учёт метрик, что у анализа:
+     * статьи не должны обходить ни лимиты, ни защиту от блокировок щитом.
+     * Возвращает содержимое ответа или null, если модель не ответила.
+     */
+    public String generateText(String prompt, int maxTokens) {
+        try {
+            String body = callLlm(prompt, maxTokens);
+            Map<?, ?> response = mapper.readValue(body, Map.class);
+            List<?> choices = (List<?>) response.get("choices");
+            if (choices == null || choices.isEmpty()) return null;
+            Object message = ((Map<?, ?>) choices.get(0)).get("message");
+            Object content = message instanceof Map<?, ?> m ? m.get("content") : null;
+            return content instanceof String str && !str.isBlank() ? str.trim() : null;
+        } catch (Exception e) {
+            log.warn("Генерация текста не удалась: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /**
      * modelOverride replaces the provider's configured model string for this one call —
      * FreeModelUpdater needs it because its whole reason to call is that the CONFIGURED
      * list contains a dead model: routing the ranking request through that same list

@@ -290,3 +290,23 @@ CREATE INDEX IF NOT EXISTS idx_searches_user_id ON searches(user_id);
 -- referencing a missing column fails immediately and prevents the app from starting
 -- at all, before SchemaMigrator ever gets a chance to add the column. SchemaMigrator
 -- creates these same indexes itself, right after it adds the column.
+
+-- Статьи и опросы для сообщества VK (20.09.2026). Контент-план на неделю составляется по
+-- каталогу тем (ContentTopics) с защитой от повторов по topic_key; текст генерирует модель
+-- (ArticleGenerator) на основе реальных данных из этой же базы; публикует VkPublishQueue в
+-- свой слот. status: planned → generated → published | failed.
+CREATE TABLE IF NOT EXISTS vk_articles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    topic_key TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'article',      -- article | poll
+    title TEXT DEFAULT '',
+    body TEXT DEFAULT '',
+    poll_options TEXT DEFAULT '',               -- JSON-массив вариантов для kind=poll
+    status TEXT NOT NULL DEFAULT 'planned',
+    planned_for TEXT NOT NULL,                  -- дата YYYY-MM-DD по часовому поясу VK
+    generated_at TEXT DEFAULT NULL,
+    published_at TEXT DEFAULT NULL,
+    vk_post_id TEXT DEFAULT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_vk_articles_topic ON vk_articles(topic_key, published_at);

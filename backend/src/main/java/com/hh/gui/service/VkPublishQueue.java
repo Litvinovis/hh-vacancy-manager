@@ -4,6 +4,8 @@ import com.hh.gui.ai.AiMetrics;
 import com.hh.gui.config.RuntimeConfig;
 import com.hh.gui.model.Vacancy;
 import com.hh.gui.repository.VacancyRepository;
+import com.hh.gui.repository.VkArticleRepository;
+import com.hh.gui.model.VkArticle;
 import com.hh.gui.util.VkPostFormatter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -46,20 +48,28 @@ public class VkPublishQueue {
     private final RuntimeConfig runtimeConfig;
     private final AiMetrics metrics;
     private final Clock clock;
+    /** Может быть null в тестах очереди вакансий — тогда контентный слот просто пропускается. */
+    private final VkArticleRepository articles;
 
     @org.springframework.beans.factory.annotation.Autowired
     public VkPublishQueue(VacancyRepository vacancyRepo, VkNotifier vkNotifier,
-                          RuntimeConfig runtimeConfig, AiMetrics metrics) {
-        this(vacancyRepo, vkNotifier, runtimeConfig, metrics, Clock.systemUTC());
+                          RuntimeConfig runtimeConfig, AiMetrics metrics, VkArticleRepository articles) {
+        this(vacancyRepo, vkNotifier, runtimeConfig, metrics, Clock.systemUTC(), articles);
     }
 
     VkPublishQueue(VacancyRepository vacancyRepo, VkNotifier vkNotifier,
                    RuntimeConfig runtimeConfig, AiMetrics metrics, Clock clock) {
+        this(vacancyRepo, vkNotifier, runtimeConfig, metrics, clock, null);
+    }
+
+    VkPublishQueue(VacancyRepository vacancyRepo, VkNotifier vkNotifier,
+                   RuntimeConfig runtimeConfig, AiMetrics metrics, Clock clock, VkArticleRepository articles) {
         this.vacancyRepo = vacancyRepo;
         this.vkNotifier = vkNotifier;
         this.runtimeConfig = runtimeConfig;
         this.metrics = metrics;
         this.clock = clock;
+        this.articles = articles;
     }
 
     /** Ставит вакансии в очередь VK. Вызывается там, где раньше был немедленный кросс-пост. */
@@ -85,9 +95,45 @@ public class VkPublishQueue {
             if (sinceLast.toMinutes() < runtimeConfig.getVkMinGapMinutes()) return;
         }
 
+        // Контент (статья/опрос) идёт первым в своём слоте — обеденное окно, когда читают
+        // дольше; занимает один пост окна, как и вакансия, чтобы лента не переполнялась.
+        if (publishContentIfDue(window)) return;
+
         List<Vacancy> next = vacancyRepo.findVkQueued(1);
         if (next.isEmpty()) return;
         publishOne(next.get(0));
+    }
+
+    /** Второе окно дня (или единственное) — слот для статей и опросов. */
+    private boolean publishContentIfDue(Window window) {
+        if (articles == null) return false;
+        List<LocalTime> starts = windowStarts();
+        LocalTime contentSlot = starts.size() >= 2 ? starts.get(1) : starts.get(0);
+        if (!window.start.toLocalTime().equals(contentSlot)) return false;
+        String today = window.start.toLocalDate().toString();
+        var due = articles.nextToPublish(today);
+        if (due.isEmpty()) return false;
+        VkArticle a = due.get();
+        Long postId;
+        if (a.isPoll()) {
+            List<String> options = List.of(a.getPollOptions().split("\n"));
+            postId = vkNotifier.postPoll(a.getTitle(), a.getTitle(), options);
+        } else {
+            postId = vkNotifier.postReturningId(a.getBody());
+        }
+        a.setPublishedAt(clock.instant().toString());
+        if (postId == null) {
+            a.setStatus("failed");
+            articles.update(a);
+            log.warn("VK: {} «{}» не опубликован(а)", a.isPoll() ? "опрос" : "статья", a.getTitle());
+            return true;   // слот использован — попытка была; вакансию в этот тик не гоним
+        }
+        a.setStatus("published");
+        a.setVkPostId(String.valueOf(postId));
+        articles.update(a);
+        metrics.recordVkPost();
+        log.info("Опубликован(а) в VK {} «{}» (post_id={})", a.isPoll() ? "опрос" : "статья", a.getTitle(), postId);
+        return true;
     }
 
     private void publishOne(Vacancy v) {

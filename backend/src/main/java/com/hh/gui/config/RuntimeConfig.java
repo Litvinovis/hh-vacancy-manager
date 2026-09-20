@@ -181,6 +181,11 @@ public class RuntimeConfig {
     private volatile int vkPostsPerWindow = 2;
     private volatile int vkMinGapMinutes = 10;
     private volatile String vkTimezone = "Europe/Moscow";
+    /** Контент-план VK (20.09.2026): статей в неделю, опросов в неделю, дни недели, антиповтор тем. */
+    private volatile int vkArticlesPerWeek = 2;
+    private volatile int vkPollsPerWeek = 1;
+    private volatile String vkContentDays = "TUE,THU,SAT";
+    private volatile int vkTopicCooldownDays = 60;
     // 0 = disabled (default) — same "0 means off" convention as cooldownHours below.
     // A vacancy scoring at or above this on an EDITORIAL search skips human moderation
     // entirely and publishes straight away. Off by default: ships alongside
@@ -374,6 +379,22 @@ public class RuntimeConfig {
                 "Часовой пояс окон публикации VK. Аудитория — вся Россия, ориентир Москва.",
                 "text", null, null, vkTimezone),
 
+            SettingDescriptor.of("vkArticlesPerWeek", "Статей VK в неделю",
+                "Сколько статей генерировать и публиковать в сообществе VK за неделю (тексты пишет модель " +
+                "по каталогу тем, часть — на данных из базы).", "number", 0, 7, vkArticlesPerWeek),
+
+            SettingDescriptor.of("vkPollsPerWeek", "Опросов VK в неделю",
+                "Сколько опросов публиковать в VK за неделю. Опрос — реакция в один клик, лента такое любит.",
+                "number", 0, 7, vkPollsPerWeek),
+
+            SettingDescriptor.of("vkContentDays", "Дни контента VK",
+                "Дни недели для статей и опросов через запятую (MON..SUN), например TUE,THU,SAT.",
+                "text", null, null, vkContentDays),
+
+            SettingDescriptor.of("vkTopicCooldownDays", "Антиповтор тем, дней",
+                "Тема не берётся в план повторно, пока не пройдёт столько дней с прошлой публикации.",
+                "number", 7, 365, vkTopicCooldownDays),
+
             SettingDescriptor.of("channelMinScore", "Мин. скор для канала",
                 "Порог AI-скора для публикации в публичный канал и рассылку подписчикам. " +
                 "0 — использовать общий «Мин. скор уведомлений». Обычно выше него: в канал идёт " +
@@ -495,6 +516,10 @@ public class RuntimeConfig {
                     case "vkPostsPerWindow" -> setVkPostsPerWindow(toInt(value, errors, key, 1, 10));
                     case "vkMinGapMinutes" -> setVkMinGapMinutes(toInt(value, errors, key, 1, 120));
                     case "vkTimezone" -> setVkTimezone(String.valueOf(value));
+                    case "vkArticlesPerWeek" -> setVkArticlesPerWeek(toInt(value, errors, key, 0, 7));
+                    case "vkPollsPerWeek" -> setVkPollsPerWeek(toInt(value, errors, key, 0, 7));
+                    case "vkContentDays" -> setVkContentDays(String.valueOf(value));
+                    case "vkTopicCooldownDays" -> setVkTopicCooldownDays(toInt(value, errors, key, 7, 365));
                     case "autoApproveScoreThreshold" -> setAutoApproveScoreThreshold(toInt(value, errors, key, 0, 100));
                     case "maxApproved" -> setMaxApproved(toInt(value, errors, key, 1, 50));
                     case "cooldownHours" -> setCooldownHours(toInt(value, errors, key, 0, 72));
@@ -554,6 +579,10 @@ public class RuntimeConfig {
         m.put("vkPostsPerWindow", vkPostsPerWindow);
         m.put("vkMinGapMinutes", vkMinGapMinutes);
         m.put("vkTimezone", vkTimezone);
+        m.put("vkArticlesPerWeek", vkArticlesPerWeek);
+        m.put("vkPollsPerWeek", vkPollsPerWeek);
+        m.put("vkContentDays", vkContentDays);
+        m.put("vkTopicCooldownDays", vkTopicCooldownDays);
         m.put("autoApproveScoreThreshold", autoApproveScoreThreshold);
         m.put("maxApproved", maxApproved);
         m.put("cooldownHours", cooldownHours);
@@ -704,6 +733,14 @@ public class RuntimeConfig {
     public void setVkMinGapMinutes(int v) { this.vkMinGapMinutes = v; }
     public String getVkTimezone() { return vkTimezone; }
     public void setVkTimezone(String v) { this.vkTimezone = v; }
+    public int getVkArticlesPerWeek() { return vkArticlesPerWeek; }
+    public void setVkArticlesPerWeek(int v) { this.vkArticlesPerWeek = v; }
+    public int getVkPollsPerWeek() { return vkPollsPerWeek; }
+    public void setVkPollsPerWeek(int v) { this.vkPollsPerWeek = v; }
+    public String getVkContentDays() { return vkContentDays; }
+    public void setVkContentDays(String v) { this.vkContentDays = v; }
+    public int getVkTopicCooldownDays() { return vkTopicCooldownDays; }
+    public void setVkTopicCooldownDays(int v) { this.vkTopicCooldownDays = v; }
     public void setMinScore(int v) { this.minScore = v; }
 
     public int getAutoApproveScoreThreshold() { return autoApproveScoreThreshold; }

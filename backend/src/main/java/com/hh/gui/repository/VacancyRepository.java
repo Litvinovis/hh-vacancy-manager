@@ -1127,6 +1127,80 @@ public class VacancyRepository {
         return stages;
     }
 
+    // ── факты для статей сообщества (ArticleGenerator) ─────────────────────────
+
+    /** Причины fraud-вердиктов, свежие первыми, без дублей. Материал для статьи про обман. */
+    public List<String> recentFraudReasons(int limit) {
+        return jdbc.queryForList(
+            "SELECT DISTINCT ai_reason FROM vacancies WHERE ai_verdict='fraud' AND ai_reason <> '' " +
+            "ORDER BY updated_at DESC LIMIT ?", String.class, limit);
+    }
+
+    /** Причины отказа модели (verdict=no), свежие первыми, без дублей. */
+    public List<String> recentRejectReasons(int limit) {
+        return jdbc.queryForList(
+            "SELECT DISTINCT ai_reason FROM vacancies WHERE ai_verdict='no' AND ai_reason <> '' " +
+            "ORDER BY updated_at DESC LIMIT ?", String.class, limit);
+    }
+
+    /** Самые частые названия вакансий, собранных после даты — «кого искали». */
+    public Map<String, Integer> topTitlesSince(String sinceIso, int limit) {
+        Map<String, Integer> out = new LinkedHashMap<>();
+        for (Map<String, Object> row : jdbc.queryForList(
+                "SELECT title, COUNT(*) AS cnt FROM vacancies WHERE created_at >= ? " +
+                "GROUP BY title ORDER BY cnt DESC LIMIT ?", sinceIso, limit)) {
+            out.put(String.valueOf(row.get("title")), ((Number) row.get("cnt")).intValue());
+        }
+        return out;
+    }
+
+    /**
+     * Медиана зарплаты «от» по грубым типам работ (по ключевым словам названия) среди
+     * вакансий с указанной зарплатой в рублях. Медиана, а не среднее: одна вакансия с
+     * зарплатой «от 300 000» не должна тянуть картину.
+     */
+    public Map<String, Integer> medianSalaryByKind(String sinceIso) {
+        Map<String, List<Integer>> buckets = new LinkedHashMap<>();
+        String[][] kinds = {
+            {"ассистент|помощник|секретар", "ассистенты и помощники"},
+            {"поддержк|оператор чат|чат", "поддержка и чаты"},
+            {"smm|смм|контент|копирайт|редактор", "контент и SMM"},
+            {"маркетплейс|wildberries|ozon|озон", "маркетплейсы"},
+            {"менеджер по продаж|продаж", "продажи"},
+            {"дизайн", "дизайн"},
+        };
+        for (Map<String, Object> row : jdbc.queryForList(
+                "SELECT title, salary_from FROM vacancies WHERE created_at >= ? AND salary_from IS NOT NULL " +
+                "AND salary_from > 0 AND (currency IS NULL OR currency IN ('RUR','RUB'))", sinceIso)) {
+            String title = String.valueOf(row.get("title")).toLowerCase();
+            int salary = ((Number) row.get("salary_from")).intValue();
+            for (String[] k : kinds) {
+                if (java.util.regex.Pattern.compile(k[0]).matcher(title).find()) {
+                    buckets.computeIfAbsent(k[1], x -> new ArrayList<>()).add(salary);
+                    break;
+                }
+            }
+        }
+        Map<String, Integer> out = new LinkedHashMap<>();
+        buckets.forEach((kind, list) -> {
+            if (list.size() < 3) return;   // по двум вакансиям медиана — это шум
+            java.util.Collections.sort(list);
+            out.put(kind + " (по " + list.size() + " вакансиям)", list.get(list.size() / 2));
+        });
+        return out;
+    }
+
+    /** Сколько вердиктов каждого вида получено после даты. */
+    public Map<String, Integer> verdictCountsSince(String sinceIso) {
+        Map<String, Integer> out = new LinkedHashMap<>();
+        for (Map<String, Object> row : jdbc.queryForList(
+                "SELECT ai_verdict, COUNT(*) AS cnt FROM vacancies WHERE updated_at >= ? AND ai_verdict IN ('yes','no','fraud') " +
+                "GROUP BY ai_verdict", sinceIso)) {
+            out.put(String.valueOf(row.get("ai_verdict")), ((Number) row.get("cnt")).intValue());
+        }
+        return out;
+    }
+
     // ── очередь VK ─────────────────────────────────────────────────────────────
 
     /** Поставить в очередь VK; уже стоящие в ней или отправленные не трогаем. */

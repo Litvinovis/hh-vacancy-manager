@@ -107,6 +107,13 @@ public class SchemaMigrator implements ApplicationRunner {
         // comment) — these are safe here since the columns above are guaranteed to exist
         // by this point, and CREATE INDEX IF NOT EXISTS is a no-op on later boots anyway.
         runIgnoringErrors("CREATE INDEX IF NOT EXISTS idx_vac_dedup_key ON vacancies(dedup_key)");
+        // vk_articles — новая таблица (20.09.2026); на старой базе schema.sql её не создаст.
+        runIgnoringErrors("CREATE TABLE IF NOT EXISTS vk_articles (" +
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, topic_key TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'article', " +
+            "title TEXT DEFAULT '', body TEXT DEFAULT '', poll_options TEXT DEFAULT '', " +
+            "status TEXT NOT NULL DEFAULT 'planned', planned_for TEXT NOT NULL, generated_at TEXT DEFAULT NULL, " +
+            "published_at TEXT DEFAULT NULL, vk_post_id TEXT DEFAULT NULL, created_at TEXT NOT NULL)");
+        runIgnoringErrors("CREATE INDEX IF NOT EXISTS idx_vk_articles_topic ON vk_articles(topic_key, published_at)");
         runIgnoringErrors("CREATE INDEX IF NOT EXISTS idx_searches_is_global ON searches(is_global)");
         runIgnoringErrors("CREATE INDEX IF NOT EXISTS idx_uvs_user_id ON user_vacancy_status(user_id)");
         runIgnoringErrors("CREATE INDEX IF NOT EXISTS idx_uvs_vacancy_id ON user_vacancy_status(vacancy_id)");
