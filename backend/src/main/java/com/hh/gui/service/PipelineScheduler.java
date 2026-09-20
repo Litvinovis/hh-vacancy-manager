@@ -74,6 +74,7 @@ public class PipelineScheduler implements SchedulingConfigurer {
     private final SubscriptionService subscriptionService;
     private final ChannelPublisher channelPublisher;
     private final ChannelEngagementTracker engagementTracker;
+    private final VkPublishQueue vkPublishQueue;
     private final VacancyRepository vacancyRepo;
     private final TelegramMetrics telegramMetrics;
     private final ModerationService moderationService;
@@ -145,6 +146,7 @@ public class PipelineScheduler implements SchedulingConfigurer {
                               FreeModelUpdater freeModelUpdater, FeatureFlags featureFlags, SchemaMigrator schemaMigrator,
                               SubscriptionService subscriptionService, ChannelPublisher channelPublisher,
                               ChannelEngagementTracker engagementTracker, VacancyRepository vacancyRepo,
+                              VkPublishQueue vkPublishQueue,
                               TelegramMetrics telegramMetrics, ModerationService moderationService,
                               com.hh.gui.client.CurrencyRateService currencyRateService,
                               CommentRadarService commentRadarService) {
@@ -159,6 +161,7 @@ public class PipelineScheduler implements SchedulingConfigurer {
         this.subscriptionService = subscriptionService;
         this.channelPublisher = channelPublisher;
         this.engagementTracker = engagementTracker;
+        this.vkPublishQueue = vkPublishQueue;
         this.vacancyRepo = vacancyRepo;
         this.telegramMetrics = telegramMetrics;
         this.moderationService = moderationService;

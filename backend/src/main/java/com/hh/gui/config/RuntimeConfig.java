@@ -172,6 +172,15 @@ public class RuntimeConfig {
      * дайджест владельцу полезно видеть и пограничные вакансии.
      */
     private volatile int channelMinScore = 0;
+    /**
+     * Очередь VK (20.09.2026). Окна — время начала по vkTimezone; в каждое окно уходит не
+     * больше vkPostsPerWindow постов с паузой vkMinGapMinutes между ними. Значения по
+     * умолчанию — пики активности в ВК по замерам 2026 (утро, обед, вечер, МСК).
+     */
+    private volatile String vkPublishWindows = "09:00,12:30,18:30";
+    private volatile int vkPostsPerWindow = 2;
+    private volatile int vkMinGapMinutes = 10;
+    private volatile String vkTimezone = "Europe/Moscow";
     // 0 = disabled (default) — same "0 means off" convention as cooldownHours below.
     // A vacancy scoring at or above this on an EDITORIAL search skips human moderation
     // entirely and publishes straight away. Off by default: ships alongside
@@ -348,6 +357,23 @@ public class RuntimeConfig {
                 "240000 = 4 минуты.",
                 "number", 30000, 600000, scraperReadTimeoutMs),
 
+            SettingDescriptor.of("vkPublishWindows", "Окна публикации VK",
+                "Время начала окон по часовому поясу VK через запятую, например 09:00,12:30,18:30. " +
+                "Посты в VK уходят только в эти окна — пачки вне окон умная лента режет.",
+                "text", null, null, vkPublishWindows),
+
+            SettingDescriptor.of("vkPostsPerWindow", "Постов VK в окно",
+                "Сколько вакансий публиковать в VK за одно окно. Дневной лимит = окна × это число.",
+                "number", 1, 10, vkPostsPerWindow),
+
+            SettingDescriptor.of("vkMinGapMinutes", "Пауза между постами VK",
+                "Минимум минут между двумя постами в VK внутри окна.",
+                "number", 1, 120, vkMinGapMinutes),
+
+            SettingDescriptor.of("vkTimezone", "Часовой пояс VK",
+                "Часовой пояс окон публикации VK. Аудитория — вся Россия, ориентир Москва.",
+                "text", null, null, vkTimezone),
+
             SettingDescriptor.of("channelMinScore", "Мин. скор для канала",
                 "Порог AI-скора для публикации в публичный канал и рассылку подписчикам. " +
                 "0 — использовать общий «Мин. скор уведомлений». Обычно выше него: в канал идёт " +
@@ -465,6 +491,10 @@ public class RuntimeConfig {
                     case "scraperReadTimeoutMs" -> setScraperReadTimeoutMs(toInt(value, errors, key, 30000, 600000));
                     case "minScore" -> setMinScore(toInt(value, errors, key, 0, 100));
                     case "channelMinScore" -> setChannelMinScore(toInt(value, errors, key, 0, 100));
+                    case "vkPublishWindows" -> setVkPublishWindows(String.valueOf(value));
+                    case "vkPostsPerWindow" -> setVkPostsPerWindow(toInt(value, errors, key, 1, 10));
+                    case "vkMinGapMinutes" -> setVkMinGapMinutes(toInt(value, errors, key, 1, 120));
+                    case "vkTimezone" -> setVkTimezone(String.valueOf(value));
                     case "autoApproveScoreThreshold" -> setAutoApproveScoreThreshold(toInt(value, errors, key, 0, 100));
                     case "maxApproved" -> setMaxApproved(toInt(value, errors, key, 1, 50));
                     case "cooldownHours" -> setCooldownHours(toInt(value, errors, key, 0, 72));
@@ -520,6 +550,10 @@ public class RuntimeConfig {
         m.put("scraperReadTimeoutMs", scraperReadTimeoutMs);
         m.put("minScore", minScore);
         m.put("channelMinScore", channelMinScore);
+        m.put("vkPublishWindows", vkPublishWindows);
+        m.put("vkPostsPerWindow", vkPostsPerWindow);
+        m.put("vkMinGapMinutes", vkMinGapMinutes);
+        m.put("vkTimezone", vkTimezone);
         m.put("autoApproveScoreThreshold", autoApproveScoreThreshold);
         m.put("maxApproved", maxApproved);
         m.put("cooldownHours", cooldownHours);
@@ -662,6 +696,14 @@ public class RuntimeConfig {
     public int getChannelMinScore() { return channelMinScore > 0 ? channelMinScore : minScore; }
     public int getChannelMinScoreRaw() { return channelMinScore; }
     public void setChannelMinScore(int v) { this.channelMinScore = v; }
+    public String getVkPublishWindows() { return vkPublishWindows; }
+    public void setVkPublishWindows(String v) { this.vkPublishWindows = v; }
+    public int getVkPostsPerWindow() { return vkPostsPerWindow; }
+    public void setVkPostsPerWindow(int v) { this.vkPostsPerWindow = v; }
+    public int getVkMinGapMinutes() { return vkMinGapMinutes; }
+    public void setVkMinGapMinutes(int v) { this.vkMinGapMinutes = v; }
+    public String getVkTimezone() { return vkTimezone; }
+    public void setVkTimezone(String v) { this.vkTimezone = v; }
     public void setMinScore(int v) { this.minScore = v; }
 
     public int getAutoApproveScoreThreshold() { return autoApproveScoreThreshold; }

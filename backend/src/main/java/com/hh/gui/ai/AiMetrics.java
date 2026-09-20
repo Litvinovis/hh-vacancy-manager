@@ -70,6 +70,11 @@ public class AiMetrics {
         registry.counter("vacancies_dropped_total", "application", "hh-gui", "reason", reason).increment(count);
     }
 
+    /** Пост ушёл на стену VK (см. VkPublishQueue). */
+    public void recordVkPost() {
+        registry.counter("vk_posts_published_total", "application", "hh-gui").increment();
+    }
+
     /** Record a request attempt to a provider. */
     public void recordRequest(String provider) {
         registry.counter("ai_requests_total", "application", "hh-gui", "provider", provider).increment();
@@ -172,6 +177,7 @@ public class AiMetrics {
         registry.counter("ai_vacancies_analyzed_total", "application", "hh-gui");
         registry.counter("ai_vacancies_deduped_total", "application", "hh-gui");
         registry.counter("vacancies_prescreen_rejected_total", "application", "hh-gui");
+        registry.counter("vk_posts_published_total", "application", "hh-gui");
         for (String verdict : new String[]{"yes", "no", "fraud"}) {
             registry.counter("vacancies_verdict_total", "application", "hh-gui", "verdict", verdict);
         }

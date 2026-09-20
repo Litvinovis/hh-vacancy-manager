@@ -63,23 +63,22 @@ public class ChannelPublisher {
     private final TelegramNotifier telegramNotifier;
     private final TelegramMetrics telegramMetrics;
     private final RuntimeConfig runtimeConfig;
-    private final VkNotifier vkNotifier;
+    private final VkPublishQueue vkQueue;
 
     public ChannelPublisher(VacancyRepository vacancyRepo, SearchRepository searchRepo,
                             TelegramNotifier telegramNotifier, TelegramMetrics telegramMetrics,
-                            RuntimeConfig runtimeConfig, VkNotifier vkNotifier) {
+                            RuntimeConfig runtimeConfig, VkPublishQueue vkQueue) {
         this.vacancyRepo = vacancyRepo;
         this.searchRepo = searchRepo;
         this.telegramNotifier = telegramNotifier;
         this.telegramMetrics = telegramMetrics;
         this.runtimeConfig = runtimeConfig;
-        this.vkNotifier = vkNotifier;
+        this.vkQueue = vkQueue;
     }
 
     /**
-     * Best-effort VK mirror of a post that already went out to Telegram — gated on
-     * RuntimeConfig.vkEnabled, called only after the Telegram send it mirrors actually
-     * succeeded. Deliberately not tied into Telegram's own retry/notified bookkeeping:
+     * VK-зеркало поста, который уже ушёл в Telegram — ставится в очередь VkPublishQueue,
+     * а не отправляется сразу; вызывается только после успешной отправки в Telegram. Deliberately not tied into Telegram's own retry/notified bookkeeping:
      * a VK failure here is logged and dropped rather than retried, since there is no
      * separate "vk_notified" column to drive a retry off without re-sending to Telegram
      * too. One post per vacancy, even when several vacancies went out as one combined
@@ -87,13 +86,10 @@ public class ChannelPublisher {
      */
     private void mirrorToVk(List<Vacancy> vacancies) {
         if (!runtimeConfig.isVkEnabled()) return;
-        for (Vacancy v : vacancies) {
-            if (vkNotifier.post(VkPostFormatter.publicPost(v))) {
-                log.info("Продублировано в VK: вакансия id={} «{}»", v.getId(), v.getTitle());
-            } else {
-                log.warn("Не удалось продублировать в VK вакансию id={}", v.getId());
-            }
-        }
+        // Не постим сразу — ставим в очередь VK. Мгновенный кросс-пост давал пачки
+        // одинаковых постов (20 за 4 минуты после сбоя 20.09.2026), а умная лента ВК
+        // такие всплески режет; очередь выпускает их порциями в окна активности.
+        vkQueue.enqueue(vacancies);
     }
 
     /**

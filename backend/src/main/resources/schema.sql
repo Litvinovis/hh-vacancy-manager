@@ -124,6 +124,11 @@ CREATE TABLE IF NOT EXISTS vacancies (
     -- которое приходит от hh.ru) — нужны, чтобы пост можно было найти, удалить или дополнить
     channel_message_id TEXT DEFAULT NULL,
     channel_published_at TEXT DEFAULT NULL,
+    -- очередь VK: queued / sent / failed; id поста и время — чтобы пост можно было найти
+    vk_status TEXT DEFAULT NULL,
+    vk_queued_at TEXT DEFAULT NULL,
+    vk_post_id TEXT DEFAULT NULL,
+    vk_published_at TEXT DEFAULT NULL,
     found_by_scan INTEGER DEFAULT 0,
     -- dedup_key: normalized title+employer (city-independent) — lets the pipeline
     -- recognize "same real posting, different city" (e.g. the same remote support

@@ -11,6 +11,7 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -47,6 +48,63 @@ public class VkNotifier {
      * so the body has to be parsed either way to tell success from failure.
      */
     public boolean post(String message) {
+        return postReturningId(message) != null;
+    }
+
+    /**
+     * wall.post; возвращает id созданного поста или null, если не отправлено. Id нужен
+     * очереди VK: по нему под постом создаётся первый комментарий со ссылкой на отклик
+     * (см. {@link #comment}) и пост потом можно найти или удалить.
+     */
+    public Long postReturningId(String message) {
+        if (!configured()) return null;
+        Map<String, String> params = new java.util.LinkedHashMap<>();
+        params.put("owner_id", "-" + groupId);
+        params.put("from_group", "1");
+        params.put("message", message);
+        Map<?, ?> resp = call("wall.post", params);
+        if (resp == null) return null;
+        Object postId = ((Map<?, ?>) resp.get("response")).get("post_id");
+        return postId instanceof Number n ? n.longValue() : null;
+    }
+
+    /**
+     * Первый комментарий под постом от имени сообщества. Ссылку на отклик держим здесь, а не
+     * в тексте: внешние ссылки в самом посте режут охват в умной ленте (разборы 2026), а
+     * комментарий под постом ещё и сам по себе засчитывается как активность.
+     */
+    public boolean comment(long postId, String text) {
+        if (!configured()) return false;
+        Map<String, String> params = new java.util.LinkedHashMap<>();
+        params.put("owner_id", "-" + groupId);
+        params.put("post_id", String.valueOf(postId));
+        params.put("from_group", groupId);
+        params.put("message", text);
+        return call("wall.createComment", params) != null;
+    }
+
+    /** Короткое имя сообщества (vk.com/<имя>) — для сообщественного хэштега #тег@имя. Кэшируется. */
+    public String screenName() {
+        if (cachedScreenName != null) return cachedScreenName;
+        if (!configured()) return null;
+        Map<String, String> params = new java.util.LinkedHashMap<>();
+        params.put("group_id", groupId);
+        Map<?, ?> resp = call("groups.getById", params);
+        if (resp == null) return null;
+        try {
+            Object r = resp.get("response");
+            Object groups = r instanceof Map<?, ?> m ? m.get("groups") : r;
+            Map<?, ?> g = (Map<?, ?>) ((List<?>) groups).get(0);
+            cachedScreenName = String.valueOf(g.get("screen_name"));
+        } catch (Exception e) {
+            log.warn("Не удалось разобрать screen_name сообщества VK: {}", e.getMessage());
+        }
+        return cachedScreenName;
+    }
+
+    private volatile String cachedScreenName;
+
+    private boolean configured() {
         if (accessToken == null || accessToken.isEmpty()) {
             log.warn("VK access token не настроен (app.vk.access-token) — пост в VK не отправлен");
             return false;
@@ -55,37 +113,44 @@ public class VkNotifier {
             log.warn("VK group id не настроен (app.vk.group-id) — пост в VK не отправлен");
             return false;
         }
-        try {
-            String body = "owner_id=" + URLEncoder.encode("-" + groupId, StandardCharsets.UTF_8)
-                + "&from_group=1"
-                + "&message=" + URLEncoder.encode(message, StandardCharsets.UTF_8)
-                + "&access_token=" + URLEncoder.encode(accessToken, StandardCharsets.UTF_8)
-                + "&v=" + URLEncoder.encode(apiVersion, StandardCharsets.UTF_8);
+        return true;
+    }
 
-            HttpURLConnection conn = (HttpURLConnection) new URL(apiBaseUrl + "/method/wall.post").openConnection();
+    /** POST к методу VK API; null при любой ошибке (сетевой, HTTP или в теле ответа). */
+    private Map<?, ?> call(String method, Map<String, String> params) {
+        try {
+            StringBuilder body = new StringBuilder();
+            for (var e : params.entrySet()) {
+                if (body.length() > 0) body.append('&');
+                body.append(URLEncoder.encode(e.getKey(), StandardCharsets.UTF_8)).append('=')
+                    .append(URLEncoder.encode(e.getValue(), StandardCharsets.UTF_8));
+            }
+            body.append("&access_token=").append(URLEncoder.encode(accessToken, StandardCharsets.UTF_8))
+                .append("&v=").append(URLEncoder.encode(apiVersion, StandardCharsets.UTF_8));
+            HttpURLConnection conn = (HttpURLConnection) new URL(apiBaseUrl + "/method/" + method).openConnection();
             conn.setRequestMethod("POST");
             conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
             conn.setConnectTimeout(15000);
             conn.setReadTimeout(30000);
             conn.setDoOutput(true);
             try (OutputStream os = conn.getOutputStream()) {
-                os.write(body.getBytes(StandardCharsets.UTF_8));
+                os.write(body.toString().getBytes(StandardCharsets.UTF_8));
             }
-
             int code = conn.getResponseCode();
             String respBody = HttpUtil.readBody(conn, code);
             if (code != 200) {
-                log.error("Ошибка VK API {}: {}", code, respBody);
-                return false;
+                log.error("Ошибка VK API {} ({}): {}", code, method, respBody);
+                return null;
             }
-            if (hasError(respBody)) {
-                log.error("VK API вернул ошибку: {}", respBody);
-                return false;
+            Map<?, ?> parsed = mapper.readValue(respBody, Map.class);
+            if (parsed.containsKey("error")) {
+                log.error("VK API {} вернул ошибку: {}", method, respBody);
+                return null;
             }
-            return true;
+            return parsed;
         } catch (Exception e) {
-            log.error("Не удалось отправить пост в VK: {}", e.getMessage());
-            return false;
+            log.error("Не удалось вызвать VK API {}: {}", method, e.getMessage());
+            return null;
         }
     }
 
