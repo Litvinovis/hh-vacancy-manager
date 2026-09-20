@@ -62,7 +62,14 @@ public class ContentPlanner {
 
         List<LocalDate> days = contentDays(monday, today);
         if (days.isEmpty()) {
-            log.warn("Контент-план VK: в настройке vkContentDays нет ни одного дня — план не составлен");
+            // Пустой список — либо настройка кривая (стоит предупредить), либо просто все дни
+            // контента на этой неделе уже позади (обычная ситуация в субботу-воскресенье:
+            // планировщик дёргается каждый час, а план строится в понедельник) — это не WARN.
+            if (contentDays(monday, monday).isEmpty()) {
+                log.warn("Контент-план VK: в настройке vkContentDays нет ни одного дня — план не составлен");
+            } else {
+                log.info("Контент-план VK: дни контента этой недели уже прошли — план построится в понедельник");
+            }
             return 0;
         }
         Set<String> used = articles.topicsUsedSince(today.minusDays(config.getVkTopicCooldownDays()).toString());
