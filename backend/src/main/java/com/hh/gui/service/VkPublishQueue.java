@@ -115,11 +115,12 @@ public class VkPublishQueue {
         if (due.isEmpty()) return false;
         VkArticle a = due.get();
         Long postId;
+        String card = cardFor(a);
         if (a.isPoll()) {
             List<String> options = List.of(a.getPollOptions().split("\n"));
-            postId = vkNotifier.postPoll(a.getTitle(), a.getTitle(), options);
+            postId = vkNotifier.postPoll(a.getTitle(), a.getTitle(), options, card);
         } else {
-            postId = vkNotifier.postReturningId(a.getBody());
+            postId = vkNotifier.postReturningId(a.getBody(), card);
         }
         a.setPublishedAt(clock.instant().toString());
         if (postId == null) {
@@ -138,7 +139,7 @@ public class VkPublishQueue {
 
     private void publishOne(Vacancy v) {
         String screenName = vkNotifier.screenName();
-        Long postId = vkNotifier.postReturningId(VkPostFormatter.publicPost(v, screenName));
+        Long postId = vkNotifier.postReturningId(VkPostFormatter.publicPost(v, screenName), cardFor(v));
         if (postId == null) {
             vacancyRepo.markVkFailed(v.getId());
             log.warn("VK: пост не отправлен, вакансия id={} помечена failed (вернётся в очередь при следующем enqueue)", v.getId());
@@ -154,6 +155,40 @@ public class VkPublishQueue {
             // Пост уже вышел — не откатываем, но без ссылки читателю некуда откликаться.
             log.warn("VK: комментарий со ссылкой под постом {} не создан — ссылка на отклик потеряна", postId);
         }
+    }
+
+
+    /**
+     * Карточка к посту, загруженная в VK; null — если нарисовать или загрузить не удалось.
+     * Картинка — усиление, а не условие: без неё пост всё равно уходит, просто текстом.
+     */
+    private String cardFor(Vacancy v) {
+        if (!runtimeConfig.isVkCardsEnabled()) return null;
+        try {
+            byte[] png = com.hh.gui.content.CardImageRenderer.vacancyCard(v, communityLabel());
+            return vkNotifier.uploadWallPhoto(png, "vacancy-" + v.getId() + ".png");
+        } catch (Exception e) {
+            log.warn("Карточка для вакансии id={} не создана: {}", v.getId(), e.getMessage());
+            return null;
+        }
+    }
+
+    private String cardFor(VkArticle a) {
+        if (!runtimeConfig.isVkCardsEnabled()) return null;
+        try {
+            byte[] png = com.hh.gui.content.CardImageRenderer.articleCard(
+                a.getTitle(), a.isPoll() ? "опрос" : "разбор", communityLabel());
+            return vkNotifier.uploadWallPhoto(png, (a.isPoll() ? "poll-" : "article-") + a.getId() + ".png");
+        } catch (Exception e) {
+            log.warn("Карточка для статьи id={} не создана: {}", a.getId(), e.getMessage());
+            return null;
+        }
+    }
+
+    /** Подпись на карточке: vk.com/<имя>, чтобы репост уводил обратно в сообщество. */
+    private String communityLabel() {
+        String name = vkNotifier.screenName();
+        return name != null ? "vk.com/" + name : "Интересная удалёнка";
     }
 
     /** Окно, в котором находится «сейчас», или null вне окон / при некорректной настройке. */

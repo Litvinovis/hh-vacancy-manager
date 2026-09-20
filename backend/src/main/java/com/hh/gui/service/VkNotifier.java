@@ -57,15 +57,7 @@ public class VkNotifier {
      * (см. {@link #comment}) и пост потом можно найти или удалить.
      */
     public Long postReturningId(String message) {
-        if (!configured()) return null;
-        Map<String, String> params = new java.util.LinkedHashMap<>();
-        params.put("owner_id", "-" + groupId);
-        params.put("from_group", "1");
-        params.put("message", message);
-        Map<?, ?> resp = call("wall.post", params);
-        if (resp == null) return null;
-        Object postId = ((Map<?, ?>) resp.get("response")).get("post_id");
-        return postId instanceof Number n ? n.longValue() : null;
+        return postReturningId(message, null);
     }
 
     /**
@@ -88,6 +80,10 @@ public class VkNotifier {
      * Возвращает id поста или null.
      */
     public Long postPoll(String message, String question, List<String> options) {
+        return postPoll(message, question, options, null);
+    }
+
+    public Long postPoll(String message, String question, List<String> options, String extraAttachment) {
         if (!configured()) return null;
         Map<String, String> p = new java.util.LinkedHashMap<>();
         p.put("owner_id", "-" + groupId);
@@ -108,7 +104,73 @@ public class VkNotifier {
         params.put("owner_id", "-" + groupId);
         params.put("from_group", "1");
         params.put("message", message);
-        params.put("attachments", "poll" + ownerId + "_" + pollId);
+        String attachments = "poll" + ownerId + "_" + pollId;
+        if (extraAttachment != null && !extraAttachment.isBlank()) attachments += "," + extraAttachment;
+        params.put("attachments", attachments);
+        Map<?, ?> resp = call("wall.post", params);
+        if (resp == null) return null;
+        Object postId = ((Map<?, ?>) resp.get("response")).get("post_id");
+        return postId instanceof Number n ? n.longValue() : null;
+    }
+
+    /**
+     * Загружает PNG на стену сообщества: photos.getWallUploadServer → multipart POST →
+     * photos.saveWallPhoto. Возвращает attachment-строку «photo{owner}_{id}» для wall.post
+     * или null, если что-то не вышло — тогда пост уйдёт без картинки, а не не уйдёт вовсе.
+     */
+    public String uploadWallPhoto(byte[] png, String fileName) {
+        if (!configured()) return null;
+        try {
+            Map<String, String> p = new java.util.LinkedHashMap<>();
+            p.put("group_id", groupId);
+            Map<?, ?> server = call("photos.getWallUploadServer", p);
+            if (server == null) return null;
+            String uploadUrl = String.valueOf(((Map<?, ?>) server.get("response")).get("upload_url"));
+
+            String boundary = "----hhgui" + System.nanoTime();
+            HttpURLConnection conn = (HttpURLConnection) new URL(uploadUrl).openConnection();
+            conn.setRequestMethod("POST");
+            conn.setDoOutput(true);
+            conn.setConnectTimeout(15000);
+            conn.setReadTimeout(60000);
+            conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
+            try (OutputStream os = conn.getOutputStream()) {
+                os.write(("--" + boundary + "\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"" + fileName
+                    + "\"\r\nContent-Type: image/png\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+                os.write(png);
+                os.write(("\r\n--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
+            }
+            int code = conn.getResponseCode();
+            String body = HttpUtil.readBody(conn, code);
+            if (code != 200) {
+                log.error("VK upload вернул {}: {}", code, body);
+                return null;
+            }
+            Map<?, ?> uploaded = mapper.readValue(body, Map.class);
+
+            Map<String, String> save = new java.util.LinkedHashMap<>();
+            save.put("group_id", groupId);
+            save.put("photo", String.valueOf(uploaded.get("photo")));
+            save.put("server", String.valueOf(uploaded.get("server")));
+            save.put("hash", String.valueOf(uploaded.get("hash")));
+            Map<?, ?> saved = call("photos.saveWallPhoto", save);
+            if (saved == null) return null;
+            Map<?, ?> photo = (Map<?, ?>) ((List<?>) saved.get("response")).get(0);
+            return "photo" + photo.get("owner_id") + "_" + photo.get("id");
+        } catch (Exception e) {
+            log.error("Не удалось загрузить картинку в VK: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /** wall.post с вложениями (attachments через запятую); null — не отправлено. */
+    public Long postReturningId(String message, String attachments) {
+        if (!configured()) return null;
+        Map<String, String> params = new java.util.LinkedHashMap<>();
+        params.put("owner_id", "-" + groupId);
+        params.put("from_group", "1");
+        params.put("message", message);
+        if (attachments != null && !attachments.isBlank()) params.put("attachments", attachments);
         Map<?, ?> resp = call("wall.post", params);
         if (resp == null) return null;
         Object postId = ((Map<?, ?>) resp.get("response")).get("post_id");

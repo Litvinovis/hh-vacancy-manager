@@ -186,6 +186,8 @@ public class RuntimeConfig {
     private volatile int vkPollsPerWeek = 1;
     private volatile String vkContentDays = "TUE,THU,SAT";
     private volatile int vkTopicCooldownDays = 60;
+    /** Карточки-картинки к постам VK (рисуются на сервере, CardImageRenderer). */
+    private volatile boolean vkCardsEnabled = true;
     // 0 = disabled (default) — same "0 means off" convention as cooldownHours below.
     // A vacancy scoring at or above this on an EDITORIAL search skips human moderation
     // entirely and publishes straight away. Off by default: ships alongside
@@ -395,6 +397,11 @@ public class RuntimeConfig {
                 "Тема не берётся в план повторно, пока не пройдёт столько дней с прошлой публикации.",
                 "number", 7, 365, vkTopicCooldownDays),
 
+            SettingDescriptor.of("vkCardsEnabled", "Карточки к постам VK",
+                "Прикреплять к каждому посту в VK сгенерированную карточку (название, зарплата, формат). " +
+                "Пост с картинкой в ленте ВК обгоняет голый текст; при сбое загрузки пост уйдёт без неё.",
+                "boolean", null, null, vkCardsEnabled),
+
             SettingDescriptor.of("channelMinScore", "Мин. скор для канала",
                 "Порог AI-скора для публикации в публичный канал и рассылку подписчикам. " +
                 "0 — использовать общий «Мин. скор уведомлений». Обычно выше него: в канал идёт " +
@@ -520,6 +527,7 @@ public class RuntimeConfig {
                     case "vkPollsPerWeek" -> setVkPollsPerWeek(toInt(value, errors, key, 0, 7));
                     case "vkContentDays" -> setVkContentDays(String.valueOf(value));
                     case "vkTopicCooldownDays" -> setVkTopicCooldownDays(toInt(value, errors, key, 7, 365));
+                    case "vkCardsEnabled" -> setVkCardsEnabled(toBool(value, errors, key));
                     case "autoApproveScoreThreshold" -> setAutoApproveScoreThreshold(toInt(value, errors, key, 0, 100));
                     case "maxApproved" -> setMaxApproved(toInt(value, errors, key, 1, 50));
                     case "cooldownHours" -> setCooldownHours(toInt(value, errors, key, 0, 72));
@@ -583,6 +591,7 @@ public class RuntimeConfig {
         m.put("vkPollsPerWeek", vkPollsPerWeek);
         m.put("vkContentDays", vkContentDays);
         m.put("vkTopicCooldownDays", vkTopicCooldownDays);
+        m.put("vkCardsEnabled", vkCardsEnabled);
         m.put("autoApproveScoreThreshold", autoApproveScoreThreshold);
         m.put("maxApproved", maxApproved);
         m.put("cooldownHours", cooldownHours);
@@ -741,6 +750,8 @@ public class RuntimeConfig {
     public void setVkContentDays(String v) { this.vkContentDays = v; }
     public int getVkTopicCooldownDays() { return vkTopicCooldownDays; }
     public void setVkTopicCooldownDays(int v) { this.vkTopicCooldownDays = v; }
+    public boolean isVkCardsEnabled() { return vkCardsEnabled; }
+    public void setVkCardsEnabled(boolean v) { this.vkCardsEnabled = v; }
     public void setMinScore(int v) { this.minScore = v; }
 
     public int getAutoApproveScoreThreshold() { return autoApproveScoreThreshold; }
