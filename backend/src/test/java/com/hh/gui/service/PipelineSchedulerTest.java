@@ -289,7 +289,10 @@ class PipelineSchedulerTest {
 
     @Test
     void configureTasks_registersEveryTrigger() {
-        assertEquals(16, tasks().size(),
+        // 20.09.2026: очередь VK и контент-план были смержены без своих триггеров (правка
+        // планировщика не записалась), и этот тест их не поймал — число не менялось.
+        // Теперь 18: +runVkQueue, +runContentPlan.
+        assertEquals(18, tasks().size(),
             "все триггеры должны быть зарегистрированы — молча пропавший = молча не работающая функция");
     }
 

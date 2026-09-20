@@ -210,6 +210,12 @@ public class PipelineScheduler implements SchedulingConfigurer {
         // advance yet) and the rare case a send silently failed.
         registrar.addTriggerTask(this::runModerationQueueAdvance, new PeriodicTrigger(Duration.ofMinutes(1)));
         registrar.addTriggerTask(this::runVkRadarScan, new PeriodicTrigger(VK_RADAR_SCAN_INTERVAL));
+        // Очередь VK и контент-план — в конце: тесты планировщика адресуют старые триггеры
+        // по позиции (см. subscriberTrigger_firstExecutionIsDelayed…).
+        registrar.addTriggerTask(this::runVkQueue, new PeriodicTrigger(VK_QUEUE_CHECK_INTERVAL));
+        PeriodicTrigger contentTrigger = new PeriodicTrigger(CONTENT_PLAN_CHECK_INTERVAL);
+        contentTrigger.setInitialDelay(Duration.ofMinutes(3));
+        registrar.addTriggerTask(this::runContentPlan, contentTrigger);
     }
 
     private void runVkRadarScan() {
@@ -291,6 +297,36 @@ public class PipelineScheduler implements SchedulingConfigurer {
     // queued in the first place unless publicFormatEnabled was already on when
     // sendReport ran (see ChannelPublisher.send), so this is a
     // natural no-op otherwise — an extra flag check would just duplicate that.
+    /** Очередь VK проверяется чаще окна, чтобы паузу между постами держать точно. */
+    private static final Duration VK_QUEUE_CHECK_INTERVAL = Duration.ofMinutes(2);
+
+    private void runVkQueue() {
+        if (schemaNotReady()) return;
+        try {
+            vkPublishQueue.publishDue();
+        } catch (Exception e) {
+            log.error("Публикация из очереди VK завершилась ошибкой: {}", e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Контент-план и генерация статей. План идемпотентен (на неделю строится один раз),
+     * генерация берёт только то, чему пора, — поэтому дёргать раз в час безопасно, а
+     * запускаться после рестарта в любое время суток — удобно.
+     */
+    private static final Duration CONTENT_PLAN_CHECK_INTERVAL = Duration.ofHours(1);
+
+    private void runContentPlan() {
+        if (schemaNotReady() || !runtimeConfig.isVkEnabled()) return;
+        try {
+            contentPlanner.planCurrentWeek();
+            String today = java.time.LocalDate.now(java.time.ZoneId.of(runtimeConfig.getVkTimezone())).toString();
+            articleGenerator.generateDue(today);
+        } catch (Exception e) {
+            log.error("Контент-план VK завершился ошибкой: {}", e.getMessage(), e);
+        }
+    }
+
     private void runDueQueuedPublications() {
         if (schemaNotReady()) return;
         try {
