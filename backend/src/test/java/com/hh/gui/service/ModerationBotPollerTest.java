@@ -1,5 +1,8 @@
 package com.hh.gui.service;
 
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import com.hh.gui.config.RuntimeConfig;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -16,7 +19,7 @@ class ModerationBotPollerTest {
     Path tempDir;
 
     private ModerationBotPoller pollerWithDataDir() {
-        ModerationBotPoller p = new ModerationBotPoller(null, null, null);
+        ModerationBotPoller p = new ModerationBotPoller(null, null, null, new com.hh.gui.config.RuntimeConfig());
         ReflectionTestUtils.setField(p, "dataDir", tempDir.toString());
         return p;
     }
@@ -97,5 +100,19 @@ class ModerationBotPollerTest {
         // literal BEFORE calling parseVacancyId (see ModerationService.resolveApproveAll),
         // this just documents that the general parser correctly has nothing to say about it.
         assertNull(ModerationBotPoller.parseVacancyId("modpuball"));
+    }
+
+    @Test
+    void autoMode_pollerStaysIdle_andResumesWhenModeChanges() throws Exception {
+        // Режим auto: карточек нет, нажимать нечего — Telegram опрашивать незачем.
+        // 20.09.2026 холостой опрос дал 3541 запись «Connection reset» за ночь.
+        RuntimeConfig config = new RuntimeConfig();
+        config.setModerationMode("auto");
+        ModerationBotPoller poller = new ModerationBotPoller(null, null, null, config);
+
+        assertTrue(config.isModerationAuto(), "auto — поллер обязан молчать");
+
+        config.setModerationMode("single");
+        assertFalse(config.isModerationAuto(), "смена режима подхватывается на лету, без перезапуска");
     }
 }

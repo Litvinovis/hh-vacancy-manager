@@ -1,5 +1,6 @@
 package com.hh.gui.service;
 
+import com.hh.gui.config.RuntimeConfig;
 import com.hh.gui.config.FeatureFlags;
 import com.hh.gui.util.HttpUtil;
 import jakarta.annotation.PostConstruct;
@@ -60,12 +61,16 @@ public class ModerationBotPoller {
     // button. ModerationService.alreadySent is a second, independent safety net against
     // the same failure mode, but the fix belongs here: don't create the replay at all.
     private volatile long offset = 0;
+    private final RuntimeConfig runtimeConfig;
+    /** Логируем переход «ждём/опрашиваем» один раз, а не на каждой итерации цикла. */
+    private volatile boolean idleLogged = false;
 
     public ModerationBotPoller(FeatureFlags featureFlags, ModerationService moderationService,
-                                TelegramNotifier telegramNotifier) {
+                                TelegramNotifier telegramNotifier, RuntimeConfig runtimeConfig) {
         this.featureFlags = featureFlags;
         this.moderationService = moderationService;
         this.telegramNotifier = telegramNotifier;
+        this.runtimeConfig = runtimeConfig;
     }
 
     @PostConstruct
@@ -121,6 +126,24 @@ public class ModerationBotPoller {
 
     private void pollLoop() {
         while (running) {
+            // В режиме auto карточки на подтверждение не отправляются вовсе
+            // (VacancyPipelineService публикует сразу), и нажимать в них нечего — значит
+            // long-polling держать незачем. Проверяем в цикле, а не при старте: режим
+            // меняется в настройках на лету, и поллер должен сам включаться и выключаться.
+            // 20.09.2026: за ночь он дал 3541 запись «Connection reset», опрашивая Telegram
+            // вхолостую при auto — сетевой сбой превращался в стену ошибок ни о чём.
+            if (runtimeConfig.isModerationAuto()) {
+                if (!idleLogged) {
+                    log.info("Режим модерации auto — поллер ждёт, Telegram не опрашивается");
+                    idleLogged = true;
+                }
+                sleepQuietly(IDLE_RECHECK_MS);
+                continue;
+            }
+            if (idleLogged) {
+                log.info("Режим модерации {} — поллер возобновляет опрос Telegram", runtimeConfig.getModerationMode());
+                idleLogged = false;
+            }
             try {
                 poll();
             } catch (Exception e) {
@@ -129,6 +152,9 @@ public class ModerationBotPoller {
             }
         }
     }
+
+    /** Как часто перечитывать режим, пока поллер спит: смена режима — действие редкое и ручное. */
+    private static final long IDLE_RECHECK_MS = 30_000;
 
     private void sleepQuietly(long ms) {
         try {
