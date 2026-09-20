@@ -91,6 +91,14 @@ public class SchemaMigrator implements ApplicationRunner {
         // соседство с channel_published_at/queued_publish_at делало это окончательно неочевидным
         // (18.09.2026 на этом уже был сделан неверный вывод о содержимом канала).
         renameColumnIfPresent("vacancies", "published_at", "hh_published_at");
+        // Своя очередь VK (20.09.2026). Раньше VK получал копию каждого Telegram-батча сразу —
+        // 20 постов за 4 минуты после сетевого сбоя, а лента подписчика забивалась одним
+        // источником; алгоритм ВК такие всплески режет. Теперь вакансия сначала встаёт в
+        // очередь (vk_status='queued'), а отдельный публикатор выпускает её в окно активности.
+        addColumnIfMissing("vacancies", "vk_status", "TEXT DEFAULT NULL");
+        addColumnIfMissing("vacancies", "vk_queued_at", "TEXT DEFAULT NULL");
+        addColumnIfMissing("vacancies", "vk_post_id", "TEXT DEFAULT NULL");
+        addColumnIfMissing("vacancies", "vk_published_at", "TEXT DEFAULT NULL");
         addColumnIfMissing("subscriptions", "cancel_requested", "INTEGER NOT NULL DEFAULT 0");
         addColumnIfMissing("subscriptions", "renewal_reminder_sent_at", "TEXT DEFAULT NULL");
 

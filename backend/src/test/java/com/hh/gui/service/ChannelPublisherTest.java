@@ -42,13 +42,13 @@ class ChannelPublisherTest {
         private TelegramNotifier notifier = new TelegramNotifier();
         private RuntimeConfig config = new RuntimeConfig();
         private SimpleMeterRegistry registry = new SimpleMeterRegistry();
-        private VkNotifier vk = new VkNotifier();
+        private RecordingVkQueue vk = new RecordingVkQueue();
 
         Builder repo(VacancyRepository v) { this.repo = v; return this; }
         Builder searchRepo(SearchRepository v) { this.searchRepo = v; return this; }
         Builder notifier(TelegramNotifier v) { this.notifier = v; return this; }
         Builder config(RuntimeConfig v) { this.config = v; return this; }
-        Builder vk(VkNotifier v) { this.vk = v; return this; }
+        Builder vk(RecordingVkQueue v) { this.vk = v; return this; }
         /** Only when a test asserts on the recorded metrics and needs the registry back. */
         Builder metricsRegistry(SimpleMeterRegistry v) { this.registry = v; return this; }
 
@@ -144,13 +144,14 @@ class ChannelPublisherTest {
         }
     }
 
-    private static class RecordingVkNotifier extends VkNotifier {
+    /** Очередь VK записывает, какие вакансии в неё поставили (по названию) — по смыслу
+     *  это то же «что уйдёт в VK», что раньше проверялось на самом нотификаторе. */
+    private static class RecordingVkQueue extends VkPublishQueue {
         final List<String> posted = new ArrayList<>();
-        boolean postResult = true;
+        RecordingVkQueue() { super(null, null, null, null); }
         @Override
-        public boolean post(String message) {
-            if (postResult) posted.add(message);
-            return postResult;
+        public void enqueue(List<Vacancy> vacancies) {
+            for (Vacancy v : vacancies) posted.add(v.getTitle());
         }
     }
 
@@ -426,7 +427,7 @@ class ChannelPublisherTest {
     void send_vkEnabledAndTelegramSucceeds_mirrorsEachVacancyToVk() {
         FakeDueQueueRepo repo = new FakeDueQueueRepo();
         RecordingChannelBotNotifier notifier = new RecordingChannelBotNotifier();
-        RecordingVkNotifier vk = new RecordingVkNotifier();
+        RecordingVkQueue vk = new RecordingVkQueue();
         RuntimeConfig config = new RuntimeConfig();
         config.setVkEnabled(true);
         ChannelPublisher publisher = publisher().repo(repo).notifier(notifier).vk(vk).config(config).build();
@@ -444,7 +445,7 @@ class ChannelPublisherTest {
     void send_vkDisabled_neverCallsVk() {
         FakeDueQueueRepo repo = new FakeDueQueueRepo();
         RecordingChannelBotNotifier notifier = new RecordingChannelBotNotifier();
-        RecordingVkNotifier vk = new RecordingVkNotifier();
+        RecordingVkQueue vk = new RecordingVkQueue();
         RuntimeConfig config = new RuntimeConfig();
         config.setVkEnabled(false);
         ChannelPublisher publisher = publisher().repo(repo).notifier(notifier).vk(vk).config(config).build();
@@ -463,7 +464,7 @@ class ChannelPublisherTest {
         FakeDueQueueRepo repo = new FakeDueQueueRepo();
         RecordingChannelBotNotifier notifier = new RecordingChannelBotNotifier();
         notifier.sendResult = false;
-        RecordingVkNotifier vk = new RecordingVkNotifier();
+        RecordingVkQueue vk = new RecordingVkQueue();
         RuntimeConfig config = new RuntimeConfig();
         config.setVkEnabled(true);
         ChannelPublisher publisher = publisher().repo(repo).notifier(notifier).vk(vk).config(config).build();
@@ -483,7 +484,7 @@ class ChannelPublisherTest {
         FakeDueQueueRepo repo = new FakeDueQueueRepo();
         repo.due = List.of(vacancy(1, "tg_testchan_1", "Оператор чата"), vacancy(2, "tg_testchan_2", "Ассистент"));
         RecordingChannelBotNotifier notifier = new RecordingChannelBotNotifier();
-        RecordingVkNotifier vk = new RecordingVkNotifier();
+        RecordingVkQueue vk = new RecordingVkQueue();
         RuntimeConfig config = new RuntimeConfig();
         config.setChannelNotificationsEnabled(true);
         config.setVkEnabled(true);

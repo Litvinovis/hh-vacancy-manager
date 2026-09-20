@@ -248,7 +248,7 @@ class PipelineSchedulerTest {
         metricsRegistry = new SimpleMeterRegistry();
         telegramMetrics = new TelegramMetrics(metricsRegistry);
         scheduler = new PipelineScheduler(pipeline, profiles, config, analyzer, searchRepo,
-            freeModels, flags, schema, subscriptions, publisher, engagement, vacancyRepo,
+            freeModels, flags, schema, subscriptions, publisher, engagement, vacancyRepo, null /* vkPublishQueue */,
             telegramMetrics, null, currencyRates, null);
     }
 
@@ -359,7 +359,7 @@ class PipelineSchedulerTest {
 
     private PipelineScheduler schedulerWithRadar(FakeCommentRadarService radar) {
         return new PipelineScheduler(pipeline, profiles, config, analyzer, searchRepo,
-            freeModels, flags, schema, subscriptions, publisher, engagement, vacancyRepo,
+            freeModels, flags, schema, subscriptions, publisher, engagement, vacancyRepo, null /* vkPublishQueue */,
             telegramMetrics, null, currencyRates, radar);
     }
 
@@ -471,7 +471,7 @@ class PipelineSchedulerTest {
             }
         };
         scheduler = new PipelineScheduler(pipeline, profiles, config, analyzer, searchRepo,
-            freeModels, flags, schema, subscriptions, publisher, engagement, throwing, telegramMetrics, null, currencyRates, null);
+            freeModels, flags, schema, subscriptions, publisher, engagement, throwing, null /* vkPublishQueue */, telegramMetrics, null, currencyRates, null);
 
         assertDoesNotThrow(this::runAllTasks);
     }
@@ -615,7 +615,7 @@ class PipelineSchedulerTest {
             @Override public void publishDueDelayed(int limit) { throw new IllegalStateException("бум"); }
         };
         scheduler = new PipelineScheduler(pipeline, profiles, config, analyzer, searchRepo,
-            freeModels, flags, schema, subscriptions, exploding, engagement, vacancyRepo,
+            freeModels, flags, schema, subscriptions, exploding, engagement, vacancyRepo, null /* vkPublishQueue */,
             new TelegramMetrics(new SimpleMeterRegistry()), null, currencyRates, null);
 
         assertDoesNotThrow(this::runAllTasks);

@@ -74,6 +74,10 @@ public class VacancyRepository {
             v.setHhPublishedAt(rs.getString("hh_published_at"));
             v.setChannelMessageId(rs.getString("channel_message_id"));
             v.setChannelPublishedAt(rs.getString("channel_published_at"));
+            v.setVkStatus(rs.getString("vk_status"));
+            v.setVkQueuedAt(rs.getString("vk_queued_at"));
+            v.setVkPostId(rs.getString("vk_post_id"));
+            v.setVkPublishedAt(rs.getString("vk_published_at"));
             v.setFoundByScan(rs.getInt("found_by_scan"));
             long userId = rs.getLong("user_id");
             v.setUserId(rs.wasNull() ? null : userId);
@@ -1121,6 +1125,50 @@ public class VacancyRepository {
             stages.put(String.valueOf(row.get("stage")), ((Number) row.get("cnt")).intValue());
         }
         return stages;
+    }
+
+    // ── очередь VK ─────────────────────────────────────────────────────────────
+
+    /** Поставить в очередь VK; уже стоящие в ней или отправленные не трогаем. */
+    public void enqueueForVk(List<Long> ids) {
+        String now = Instant.now().toString();
+        for (Long id : ids) {
+            jdbc.update("UPDATE vacancies SET vk_status='queued', vk_queued_at=?, updated_at=? " +
+                "WHERE id=? AND (vk_status IS NULL OR vk_status='failed')", now, now, id);
+        }
+    }
+
+    /** Следующие кандидаты на публикацию в VK: лучшие по скору, при равенстве — старшие в очереди. */
+    public List<Vacancy> findVkQueued(int limit) {
+        return jdbc.query("SELECT * FROM vacancies WHERE vk_status='queued' " +
+            "ORDER BY ai_score DESC, vk_queued_at ASC LIMIT ?", rowMapper, limit);
+    }
+
+    public int countVkQueued() {
+        Integer n = jdbc.queryForObject("SELECT COUNT(*) FROM vacancies WHERE vk_status='queued'", Integer.class);
+        return n != null ? n : 0;
+    }
+
+    /** Сколько ушло в VK начиная с момента (ISO) — для дневных и оконных лимитов. */
+    public int countVkPublishedSince(String sinceIso) {
+        Integer n = jdbc.queryForObject("SELECT COUNT(*) FROM vacancies WHERE vk_status='sent' AND vk_published_at >= ?",
+            Integer.class, sinceIso);
+        return n != null ? n : 0;
+    }
+
+    public String lastVkPublishedAt() {
+        return jdbc.query("SELECT MAX(vk_published_at) AS t FROM vacancies WHERE vk_status='sent'",
+            rs -> rs.next() ? rs.getString("t") : null);
+    }
+
+    public void markVkSent(Long id, String postId) {
+        String now = Instant.now().toString();
+        jdbc.update("UPDATE vacancies SET vk_status='sent', vk_post_id=?, vk_published_at=?, updated_at=? WHERE id=?",
+            postId, now, now, id);
+    }
+
+    public void markVkFailed(Long id) {
+        jdbc.update("UPDATE vacancies SET vk_status='failed', updated_at=? WHERE id=?", Instant.now().toString(), id);
     }
 
     /** Same reasoning as {@link #countPublishedSince} — collection volume by source, DB-backed. */

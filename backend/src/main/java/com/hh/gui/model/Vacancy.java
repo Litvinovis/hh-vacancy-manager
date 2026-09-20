@@ -46,6 +46,11 @@ public class Vacancy {
     /** Id сообщения нашего поста в публичном канале и время отправки — см. ChannelPublisher. */
     private String channelMessageId;
     private String channelPublishedAt;
+    /** Очередь VK: null — не для VK, queued / sent / failed; см. VkPublishQueue. */
+    private String vkStatus;
+    private String vkQueuedAt;
+    private String vkPostId;
+    private String vkPublishedAt;
     private int foundByScan; // 1 = full scan, 0 = incremental
 
     // Multi-profile + browser-scraper fields
@@ -166,6 +171,14 @@ public class Vacancy {
     public void setChannelMessageId(String channelMessageId) { this.channelMessageId = channelMessageId; }
     public String getChannelPublishedAt() { return channelPublishedAt; }
     public void setChannelPublishedAt(String channelPublishedAt) { this.channelPublishedAt = channelPublishedAt; }
+    public String getVkStatus() { return vkStatus; }
+    public void setVkStatus(String vkStatus) { this.vkStatus = vkStatus; }
+    public String getVkQueuedAt() { return vkQueuedAt; }
+    public void setVkQueuedAt(String vkQueuedAt) { this.vkQueuedAt = vkQueuedAt; }
+    public String getVkPostId() { return vkPostId; }
+    public void setVkPostId(String vkPostId) { this.vkPostId = vkPostId; }
+    public String getVkPublishedAt() { return vkPublishedAt; }
+    public void setVkPublishedAt(String vkPublishedAt) { this.vkPublishedAt = vkPublishedAt; }
     public void setHhPublishedAt(String hhPublishedAt) { this.hhPublishedAt = hhPublishedAt; }
 
     public int getFoundByScan() { return foundByScan; }
