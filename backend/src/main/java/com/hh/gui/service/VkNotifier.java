@@ -38,6 +38,12 @@ public class VkNotifier {
     @Value("${app.vk.api-version:5.199}")
     private String apiVersion;
 
+    /** См. application.yml — отдельный пользовательский токен под загрузку картинок. */
+    @Value("${app.vk.photo-upload-token:}")
+    private String photoUploadToken;
+    /** Причина, по которой карточки не грузятся, пишется в лог один раз, а не на каждом посте. */
+    private volatile boolean uploadUnavailableLogged;
+
     private final tools.jackson.databind.ObjectMapper mapper = new tools.jackson.databind.ObjectMapper();
 
     /**
@@ -120,10 +126,18 @@ public class VkNotifier {
      */
     public String uploadWallPhoto(byte[] png, String fileName) {
         if (!configured()) return null;
+        if (photoUploadToken == null || photoUploadToken.isBlank()) {
+            if (!uploadUnavailableLogged) {
+                log.warn("Карточки к постам VK отключены: не задан VK_PHOTO_UPLOAD_TOKEN (пользовательский токен с правами " +
+                    "photos, wall — групповой загружать картинки не умеет). Посты уходят текстом.");
+                uploadUnavailableLogged = true;
+            }
+            return null;
+        }
         try {
             Map<String, String> p = new java.util.LinkedHashMap<>();
             p.put("group_id", groupId);
-            Map<?, ?> server = call("photos.getWallUploadServer", p);
+            Map<?, ?> server = callWithToken("photos.getWallUploadServer", p, photoUploadToken);
             if (server == null) return null;
             String uploadUrl = String.valueOf(((Map<?, ?>) server.get("response")).get("upload_url"));
 
@@ -153,7 +167,7 @@ public class VkNotifier {
             save.put("photo", String.valueOf(uploaded.get("photo")));
             save.put("server", String.valueOf(uploaded.get("server")));
             save.put("hash", String.valueOf(uploaded.get("hash")));
-            Map<?, ?> saved = call("photos.saveWallPhoto", save);
+            Map<?, ?> saved = callWithToken("photos.saveWallPhoto", save, photoUploadToken);
             if (saved == null) return null;
             Map<?, ?> photo = (Map<?, ?>) ((List<?>) saved.get("response")).get(0);
             return "photo" + photo.get("owner_id") + "_" + photo.get("id");
@@ -212,6 +226,10 @@ public class VkNotifier {
 
     /** POST к методу VK API; null при любой ошибке (сетевой, HTTP или в теле ответа). */
     private Map<?, ?> call(String method, Map<String, String> params) {
+        return callWithToken(method, params, accessToken);
+    }
+
+    private Map<?, ?> callWithToken(String method, Map<String, String> params, String token) {
         try {
             StringBuilder body = new StringBuilder();
             for (var e : params.entrySet()) {
@@ -219,7 +237,7 @@ public class VkNotifier {
                 body.append(URLEncoder.encode(e.getKey(), StandardCharsets.UTF_8)).append('=')
                     .append(URLEncoder.encode(e.getValue(), StandardCharsets.UTF_8));
             }
-            body.append("&access_token=").append(URLEncoder.encode(accessToken, StandardCharsets.UTF_8))
+            body.append("&access_token=").append(URLEncoder.encode(token, StandardCharsets.UTF_8))
                 .append("&v=").append(URLEncoder.encode(apiVersion, StandardCharsets.UTF_8));
             HttpURLConnection conn = (HttpURLConnection) new URL(apiBaseUrl + "/method/" + method).openConnection();
             conn.setRequestMethod("POST");

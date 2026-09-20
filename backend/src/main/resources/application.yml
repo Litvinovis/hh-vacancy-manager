@@ -74,6 +74,11 @@ app:
     # read (wall) rights. Read-only by contract: nothing in this codebase ever posts,
     # comments, or sends anything using this token — a human always does that manually.
     user-read-token: ${VK_USER_READ_TOKEN:}
+    # Пользовательский токен ТОЛЬКО для загрузки картинок к постам (photos.getWallUploadServer
+    # и photos.saveWallPhoto с group_id): групповой токен эти методы не умеет — «method is
+    # unavailable with group auth», проверено 20.09.2026. Нужны права photos и wall у
+    # администратора сообщества. Пусто — посты уходят без карточек, а не не уходят вовсе.
+    photo-upload-token: ${VK_PHOTO_UPLOAD_TOKEN:}
   subscriptions:
     enabled: ${SUBSCRIPTIONS_ENABLED:false}
     # Shared secret the payment provider's webhook must present (see
