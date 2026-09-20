@@ -317,6 +317,9 @@ public class VacancyAiAnalyzer {
     private static final double MAX_PACE_MULTIPLIER = 8.0;
     private static final int SUCCESSES_TO_SPEED_UP = 5;
 
+    /** Сколько раз подряд глотаем «не тот регион» у Gemini, прежде чем считать это настоящим отказом. */
+    private static final int MAX_GEO_RETRIES = 6;
+
     private synchronized void backOffAfterEdgeBlock() {
         successesSinceBlock.set(0);
         if (paceMultiplier >= MAX_PACE_MULTIPLIER) return;
@@ -701,6 +704,21 @@ public class VacancyAiAnalyzer {
      * got a 400 back (observed live) and the AI selection silently never ran.
      */
     String callLlm(String prompt, int maxTokens, String modelOverride) throws Exception {
+        // Отказ по региону выхода повторяем прямо здесь, а не в analyzeWithRetry: через
+        // этот метод ходят и генератор статей, и пробы моделей, у которых своего цикла
+        // повторов нет. Повтор мгновенный и не считается попыткой — у выхода VPN
+        // несколько адресов, и следующий запрос уходит уже с другого.
+        for (int geoRetry = 0; ; geoRetry++) {
+            try {
+                return callLlmOnce(prompt, maxTokens, modelOverride);
+            } catch (LlmException e) {
+                if (e.kind() != LlmException.Kind.GEO_BLOCKED || geoRetry >= MAX_GEO_RETRIES) throw e;
+                log.warn("Запрос отклонён по региону выхода (повтор {}/{})", geoRetry + 1, MAX_GEO_RETRIES);
+            }
+        }
+    }
+
+    private String callLlmOnce(String prompt, int maxTokens, String modelOverride) throws Exception {
         String url = providerManager.getCurrentUrl();
         String key = providerManager.getCurrentKey();
         String model = modelOverride != null ? modelOverride : providerManager.getCurrentModel();
@@ -749,6 +767,12 @@ public class VacancyAiAnalyzer {
         if (url != null && url.contains("openrouter")) {
             requestBody.put("reasoning", Map.of("enabled", false));
         }
+        // То же самое для Gemini, но своим параметром: у моделей 3.x «мышление» включено
+        // по умолчанию и съедает весь бюджет ответа — с max_tokens=30 приходит пустой
+        // content при completion_tokens=5 и total_tokens=190 (замерено 20.09.2026).
+        if (url != null && url.contains("generativelanguage.googleapis.com")) {
+            requestBody.put("reasoning_effort", "none");
+        }
         byte[] payload = mapper.writeValueAsBytes(requestBody);
 
         long startNanos = System.nanoTime();
@@ -775,6 +799,13 @@ public class VacancyAiAnalyzer {
                 // не упоминаем её: иначе FreeModelUpdater спишет исправную модель.
                 log.warn("Запрос к {} заблокирован щитом перед API (HTTP {}): {}", provider, code, body);
                 throw new LlmException(kind, code, "Заблокировано щитом перед API (" + provider + ")");
+            }
+            if (kind == LlmException.Kind.GEO_BLOCKED) {
+                // Не ошибка запроса и не вина модели — адрес выхода. Пишем WARN без модели,
+                // иначе FreeModelUpdater спишет исправную модель, а лог заполнится ERROR'ами
+                // на каждом повторе (повторы тут же, выше по стеку).
+                log.warn("{} отклонил запрос по региону выхода (HTTP {})", provider, code);
+                throw new LlmException(kind, code, "Отклонено по региону выхода (" + provider + ")");
             }
             // Пробные вызовы с явной моделью (FreeModelUpdater, CommentRadar) регулярно ловят
             // 403 от free-моделей с ограничениями провайдера — это ожидаемый исход проверки,

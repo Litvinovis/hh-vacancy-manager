@@ -56,4 +56,29 @@ class LlmExceptionTest {
         assertFalse(LlmException.looksLikeEdgeBlock(OPENROUTER_403, "cloudflare"));
         assertFalse(LlmException.looksLikeEdgeBlock("{\"error\":{\"message\":\"x\"}}", "nginx"));
     }
+
+    // ── Gemini: «не тот регион выхода» ──
+
+    private static final String GEMINI_GEO_400 =
+        "[{\"error\":{\"code\":400,\"message\":\"User location is not supported for the API use.\","
+        + "\"status\":\"FAILED_PRECONDITION\"}}]";
+
+    @Test
+    void gemini400AboutLocation_isGeoBlockedNotPlainHttpError() {
+        assertEquals(LlmException.Kind.GEO_BLOCKED,
+            LlmException.kindForResponse(400, GEMINI_GEO_400, null),
+            "адрес выхода не подошёл — это повторяемо, а не ошибка запроса");
+    }
+
+    @Test
+    void other400_staysHttpError() {
+        assertEquals(LlmException.Kind.HTTP_ERROR,
+            LlmException.kindForResponse(400, "{\"error\":{\"message\":\"Invalid JSON payload\"}}", null));
+    }
+
+    @Test
+    void geoWordingIsMatchedCaseInsensitively() {
+        assertTrue(LlmException.looksLikeGeoBlock("USER LOCATION IS NOT SUPPORTED for the API use."));
+        assertFalse(LlmException.looksLikeGeoBlock("{\"error\":{\"message\":\"model not found\"}}"));
+    }
 }

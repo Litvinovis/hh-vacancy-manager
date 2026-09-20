@@ -27,6 +27,14 @@ public class LlmException extends RuntimeException {
          * Лечится не сменой провайдера, а паузой и повтором.
          */
         EDGE_BLOCKED,
+        /**
+         * HTTP 400 «User location is not supported for the API use» от Google Gemini:
+         * ключ и модель исправны, не подошёл адрес, с которого ушёл запрос. У выхода
+         * VPN несколько адресов, часть из них Google считает неподдерживаемым регионом,
+         * поэтому подряд идущие одинаковые запросы дают то 200, то 400 (замерено
+         * 20.09.2026: 5 из 12 прошли). Лечится повтором, а не сменой ключа или провайдера.
+         */
+        GEO_BLOCKED,
         /** Transport-level: connect/read timeout, DNS, connection reset. No usable HTTP status. */
         TRANSPORT,
         /** A 2xx response whose body we cannot use: no choices, empty content, no JSON array, truncated. */
@@ -74,7 +82,14 @@ public class LlmException extends RuntimeException {
      */
     public static Kind kindForResponse(int status, String body, String serverHeader) {
         if (status == 403 && looksLikeEdgeBlock(body, serverHeader)) return Kind.EDGE_BLOCKED;
+        if (status == 400 && looksLikeGeoBlock(body)) return Kind.GEO_BLOCKED;
         return kindForStatus(status);
+    }
+
+    /** См. {@link Kind#GEO_BLOCKED} — единственный признак у Google в теле ответа. */
+    static boolean looksLikeGeoBlock(String body) {
+        String text = body == null ? "" : body.toLowerCase();
+        return text.contains("location is not supported");
     }
 
     static boolean looksLikeEdgeBlock(String body, String serverHeader) {
