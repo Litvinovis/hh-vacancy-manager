@@ -23,6 +23,8 @@ import java.util.Map;
 public class VkNotifier {
 
     private static final Logger log = LoggerFactory.getLogger(VkNotifier.class);
+    /** Сколько раз грузить PNG на upload_url, если VK отвечает пустым photo. */
+    private static final int UPLOAD_ATTEMPTS = 2;
 
     @Value("${app.vk.api-base-url:https://api.vk.com}")
     private String apiBaseUrl;
@@ -145,26 +147,8 @@ public class VkNotifier {
             if (server == null) return null;
             String uploadUrl = String.valueOf(((Map<?, ?>) server.get("response")).get("upload_url"));
 
-            String boundary = "----hhgui" + System.nanoTime();
-            HttpURLConnection conn = (HttpURLConnection) new URL(uploadUrl).openConnection();
-            conn.setRequestMethod("POST");
-            conn.setDoOutput(true);
-            conn.setConnectTimeout(15000);
-            conn.setReadTimeout(60000);
-            conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
-            try (OutputStream os = conn.getOutputStream()) {
-                os.write(("--" + boundary + "\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"" + fileName
-                    + "\"\r\nContent-Type: image/png\r\n\r\n").getBytes(StandardCharsets.UTF_8));
-                os.write(png);
-                os.write(("\r\n--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
-            }
-            int code = conn.getResponseCode();
-            String body = HttpUtil.readBody(conn, code);
-            if (code != 200) {
-                log.error("VK upload вернул {}: {}", code, body);
-                return null;
-            }
-            Map<?, ?> uploaded = mapper.readValue(body, Map.class);
+            Map<?, ?> uploaded = uploadPngWithRetry(uploadUrl, png, fileName);
+            if (uploaded == null) return null;
 
             Map<String, String> save = new java.util.LinkedHashMap<>();
             save.put("group_id", groupId);
@@ -179,6 +163,55 @@ public class VkNotifier {
             log.error("Не удалось загрузить картинку в VK: {}", e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * Сервер загрузки VK изредка отвечает 200 с пустым полем photo («"photo":""» или «[]»),
+     * и следующий за этим photos.saveWallPhoto падает с error 100 «photo is undefined»
+     * (наблюдалось 21.09.2026, пост ушёл без карточки). Повторная загрузка того же PNG
+     * проходит, поэтому при пустом photo пробуем ещё раз и логируем сырой ответ —
+     * чтобы в следующий раз было видно, что именно вернул VK.
+     */
+    private Map<?, ?> uploadPngWithRetry(String uploadUrl, byte[] png, String fileName) throws Exception {
+        for (int attempt = 1; attempt <= UPLOAD_ATTEMPTS; attempt++) {
+            String body = uploadPng(uploadUrl, png, fileName);
+            if (body == null) return null;
+            Map<?, ?> uploaded = mapper.readValue(body, Map.class);
+            if (hasPhoto(uploaded)) return uploaded;
+            log.warn("VK upload вернул пустое photo (попытка {}/{}): {}", attempt, UPLOAD_ATTEMPTS, body);
+        }
+        return null;
+    }
+
+    static boolean hasPhoto(Map<?, ?> uploaded) {
+        Object photo = uploaded.get("photo");
+        if (photo == null) return false;
+        String s = String.valueOf(photo).trim();
+        return !s.isEmpty() && !s.equals("[]") && !s.equals("null");
+    }
+
+    /** multipart POST на upload_url; тело ответа VK или null, если HTTP-статус не 200. */
+    private String uploadPng(String uploadUrl, byte[] png, String fileName) throws Exception {
+        String boundary = "----hhgui" + System.nanoTime();
+        HttpURLConnection conn = (HttpURLConnection) new URL(uploadUrl).openConnection();
+        conn.setRequestMethod("POST");
+        conn.setDoOutput(true);
+        conn.setConnectTimeout(15000);
+        conn.setReadTimeout(60000);
+        conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
+        try (OutputStream os = conn.getOutputStream()) {
+            os.write(("--" + boundary + "\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"" + fileName
+                + "\"\r\nContent-Type: image/png\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+            os.write(png);
+            os.write(("\r\n--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
+        }
+        int code = conn.getResponseCode();
+        String body = HttpUtil.readBody(conn, code);
+        if (code != 200) {
+            log.error("VK upload вернул {}: {}", code, body);
+            return null;
+        }
+        return body;
     }
 
     /** wall.post с вложениями (attachments через запятую); null — не отправлено. */
