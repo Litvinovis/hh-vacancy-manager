@@ -880,7 +880,16 @@ public class VacancyAiAnalyzer {
                     + content.substring(0, Math.min(200, content.length())));
             }
         }
-        List<?> items = mapper.readValue(jsonArray, List.class);
+        List<?> items;
+        try {
+            items = mapper.readValue(jsonArray, List.class);
+        } catch (tools.jackson.core.JacksonException e) {
+            // Модель оборвала или испортила массив (живой случай 21.09.2026: три ответа
+            // подряд с «Unexpected close marker ']'»). Без обёртки это уходило в лог и
+            // метрику как TRANSPORT — будто сеть, — хотя сеть и провайдер здоровы.
+            throw new LlmException(LlmException.Kind.BAD_RESPONSE, 200,
+                "AI вернул некорректный JSON: " + e.getOriginalMessage());
+        }
 
         for (Object rawItem : items) {
             if (!(rawItem instanceof Map<?, ?> item)) {

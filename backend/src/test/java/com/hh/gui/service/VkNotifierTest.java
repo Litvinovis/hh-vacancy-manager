@@ -30,11 +30,16 @@ class VkNotifierTest {
     private VkNotifier notifier;
     private final AtomicReference<String> lastRequestBody = new AtomicReference<>();
     private final AtomicReference<String> lastUploadServerBody = new AtomicReference<>();
+    private final java.util.concurrent.atomic.AtomicInteger uploads = new java.util.concurrent.atomic.AtomicInteger();
+    private final AtomicReference<String> lastSaveWallPhotoBody = new AtomicReference<>();
+    /** Сколько первых загрузок PNG сервер VK «примет», но вернёт пустое photo. */
+    private volatile int emptyPhotoUploads;
     @TempDir Path dir;
 
     @BeforeEach
     void setUp() throws Exception {
         server = HttpServer.create(new InetSocketAddress(0), 0);
+        port = server.getAddress().getPort();
         server.createContext("/method/wall.post", ex -> {
             lastRequestBody.set(new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
             String requestBody = lastRequestBody.get();
@@ -57,14 +62,29 @@ class VkNotifierTest {
         });
         server.createContext("/method/photos.getWallUploadServer", ex -> {
             lastUploadServerBody.set(new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
-            // Пустой ответ без upload_url — дальше по цепочке идти не надо, нам важен только запрос.
-            byte[] body = "{\"response\":{}}".getBytes(StandardCharsets.UTF_8);
+            byte[] body = ("{\"response\":{\"upload_url\":\"http://127.0.0.1:" + port + "/upload\"}}")
+                .getBytes(StandardCharsets.UTF_8);
+            ex.sendResponseHeaders(200, body.length);
+            ex.getResponseBody().write(body);
+            ex.close();
+        });
+        server.createContext("/upload", ex -> {
+            ex.getRequestBody().readAllBytes();
+            boolean empty = uploads.incrementAndGet() <= emptyPhotoUploads;
+            byte[] body = ("{\"server\":906618,\"photo\":" + (empty ? "\"\"" : "\"[{\\\"photo\\\":\\\"abc\\\"}]\"")
+                + ",\"hash\":\"h\"}").getBytes(StandardCharsets.UTF_8);
+            ex.sendResponseHeaders(200, body.length);
+            ex.getResponseBody().write(body);
+            ex.close();
+        });
+        server.createContext("/method/photos.saveWallPhoto", ex -> {
+            lastSaveWallPhotoBody.set(new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            byte[] body = "{\"response\":[{\"owner_id\":-123456789,\"id\":42}]}".getBytes(StandardCharsets.UTF_8);
             ex.sendResponseHeaders(200, body.length);
             ex.getResponseBody().write(body);
             ex.close();
         });
         server.start();
-        port = server.getAddress().getPort();
 
         notifier = new VkNotifier();
         ReflectionTestUtils.setField(notifier, "apiBaseUrl", "http://127.0.0.1:" + port);
@@ -176,5 +196,36 @@ class VkNotifierTest {
     void uploadWallPhoto_noUserTokenAtAll_returnsNullWithoutCallingVk() {
         assertNull(notifier.uploadWallPhoto(new byte[]{1}, "card.png"));
         assertNull(lastUploadServerBody.get(), "без пользовательского токена в VK ходить незачем");
+    }
+
+    @Test
+    void uploadWallPhoto_happyPath_returnsAttachmentFromSaveWallPhoto() throws Exception {
+        ReflectionTestUtils.setField(notifier, "photoUploadToken", "STATIC_USER_TOKEN");
+
+        assertEquals("photo-123456789_42", notifier.uploadWallPhoto(new byte[]{1, 2, 3}, "card.png"));
+        assertEquals(1, uploads.get());
+        assertTrue(lastSaveWallPhotoBody.get().contains("server=906618"), lastSaveWallPhotoBody.get());
+    }
+
+    @Test
+    void uploadWallPhoto_emptyPhotoFromUploadServer_isRetriedOnceBeforeSaving() throws Exception {
+        // Живой случай 21.09.2026: upload_url ответил 200 с photo="", и saveWallPhoto упал
+        // с error 100 «photo is undefined» — пост ушёл без карточки. Повтор загрузки спасает.
+        ReflectionTestUtils.setField(notifier, "photoUploadToken", "STATIC_USER_TOKEN");
+        emptyPhotoUploads = 1;
+
+        assertEquals("photo-123456789_42", notifier.uploadWallPhoto(new byte[]{1, 2, 3}, "card.png"));
+        assertEquals(2, uploads.get(), "первая загрузка пустая, вторая — рабочая");
+        assertFalse(lastSaveWallPhotoBody.get().contains("photo=&"), "в saveWallPhoto не должно уходить пустое photo");
+    }
+
+    @Test
+    void uploadWallPhoto_persistentlyEmptyPhoto_givesUpWithoutCallingSaveWallPhoto() throws Exception {
+        ReflectionTestUtils.setField(notifier, "photoUploadToken", "STATIC_USER_TOKEN");
+        emptyPhotoUploads = Integer.MAX_VALUE;
+
+        assertNull(notifier.uploadWallPhoto(new byte[]{1, 2, 3}, "card.png"));
+        assertEquals(2, uploads.get(), "две попытки — и хватит, пост уйдёт текстом");
+        assertNull(lastSaveWallPhotoBody.get(), "с пустым photo в saveWallPhoto ходить бессмысленно");
     }
 }
