@@ -45,6 +45,7 @@ class PipelineSchedulerTest {
         final List<String> fullRuns = new ArrayList<>();
         final List<String> urlRuns = new ArrayList<>();
         final List<String> telegramRuns = new ArrayList<>();
+        final List<String> topUps = new ArrayList<>();
         final List<String> analyzedAll = new ArrayList<>();
         int freshnessChecks = 0;
         /** Search names that should blow up when run, to test error isolation. */
@@ -69,6 +70,11 @@ class PipelineSchedulerTest {
             fullRuns.add(job.searchName);
             maybeFail(job);
             return result(job);
+        }
+        @Override
+        public int topUpChannelQueue(SearchJob job) {
+            topUps.add(job.searchName);
+            return 0;
         }
         @Override
         public PipelineResult runFullPipelineFromUrl(SearchJob job, String url, int maxPages) {
@@ -292,7 +298,7 @@ class PipelineSchedulerTest {
         // 20.09.2026: очередь VK и контент-план были смержены без своих триггеров (правка
         // планировщика не записалась), и этот тест их не поймал — число не менялось.
         // Теперь 18: +runVkQueue, +runContentPlan.
-        assertEquals(18, tasks().size(),
+        assertEquals(19, tasks().size(),
             "все триггеры должны быть зарегистрированы — молча пропавший = молча не работающая функция");
     }
 
@@ -317,6 +323,33 @@ class PipelineSchedulerTest {
         assertTrue(vacancyRepo.publishedSinceCalls.isEmpty(), "rolling-метрики не должны обращаться к БД до готовности схемы");
         assertEquals(1, freeModels.refreshes,
             "обновление списка free-моделей к БД не обращается — единственная задача без этой защиты");
+    }
+
+    // ── подпитка очереди канала ──
+
+    @Test
+    void channelTopUp_runsForEveryScheduledSearch_regardlessOfSearchInterval() {
+        // Смысл подпитки — работать МЕЖДУ прогонами поиска, поэтому isDue поиска
+        // здесь не при чём: поиск с интервалом 6 ч, запущенный минуту назад, всё равно
+        // получает подпитку очереди.
+        profiles.jobs = List.of(job("Ссылка", 1L, "оператор"), job("Телеграм", 2L, "оператор"));
+        searchRepo.urlSearches = List.of(scheduled(1L, Instant.now().toString(), 6));
+        searchRepo.telegramSearches = List.of(scheduled(2L, Instant.now().toString(), 6));
+
+        runAllTasks();
+
+        assertEquals(List.of("Ссылка", "Телеграм"), pipeline.topUps);
+    }
+
+    @Test
+    void channelTopUp_waitsForSchemaLikeEverythingElse() {
+        schema.ready = false;
+        profiles.jobs = List.of(job("Ссылка", 1L, "оператор"));
+        searchRepo.urlSearches = List.of(scheduled(1L, null, 6));
+
+        runAllTasks();
+
+        assertTrue(pipeline.topUps.isEmpty());
     }
 
     // ── общий выключатель пайплайна ──

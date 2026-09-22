@@ -292,6 +292,53 @@ public class VacancyPipelineService {
     }
 
 
+    // Подпитка очереди канала: минимум один батч в час; на каждые TOP_UP_PER_BACKLOG
+    // одобренных в хвосте — ещё по одной вакансии, но не больше TOP_UP_MAX_PER_HOUR
+    // (пост каждые три минуты — предел, после которого лента канала превращается в шум).
+    static final int TOP_UP_MIN_PER_HOUR = ChannelPublisher.PUBLISH_BATCH_SIZE;
+    static final int TOP_UP_MAX_PER_HOUR = 20;
+    static final int TOP_UP_PER_BACKLOG = 10;
+
+    /**
+     * Подпитка очереди публикации в канал между прогонами поиска. Сам прогон идёт раз в
+     * несколько часов и ставит в очередь не больше maxApproved — очередь вычерпывается за
+     * час, и канал молчит до следующего прогона (22.09.2026: посты в 07, 08, 09, потом
+     * тишина до 13:27, при 194 одобренных 80+ в ожидании). Здесь — тот же «Шаг 4», но
+     * только когда очередь пуста, и размер порции зависит от хвоста: чем больше одобренных
+     * ждёт, тем больше уходит за час ({@link #adaptiveTopUpLimit}). Темп публикации внутри
+     * часа задаёт {@link ChannelPublisher#enqueue} — батчи по 5 с паузой, которая сама
+     * сжимается при глубокой очереди. Все фильтры sendReport (планка канала, качество,
+     * дедуп) действуют как обычно.
+     *
+     * Возвращает число вакансий, отданных в sendReport; 0 — очередь не пуста, поиск не
+     * канальный/без темпа, кандидатов нет или пайплайн этого поиска сейчас выполняется.
+     */
+    public int topUpChannelQueue(SearchJob job) {
+        if (!job.publicFormat || job.publishPaceMinutes == null || job.publishPaceMinutes <= 0) return 0;
+        if (vacancyRepo.countQueued(job.searchId) > 0) return 0;
+        java.util.concurrent.locks.ReentrantLock lock = lockFor(job);
+        if (!lock.tryLock()) return 0;
+        try {
+            int backlog = vacancyRepo.countApprovedBacklog(job.personName, job.searchName, runtimeConfig.getChannelMinScore());
+            int limit = adaptiveTopUpLimit(backlog);
+            List<Vacancy> approved = vacancyRepo.findUnnotifiedApproved(
+                job.personName, job.searchName, runtimeConfig.getMinScore(), limit);
+            if (approved.isEmpty()) return 0;
+            log.info("Подпитка очереди канала ({} · {}): хвост {} → порция {}, взято {}",
+                job.personName, job.searchName, backlog, limit, approved.size());
+            sendReport(approved, job);
+            return approved.size();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /** Сколько вакансий отдать в очередь за этот час при таком хвосте одобренных. */
+    static int adaptiveTopUpLimit(int backlog) {
+        int extra = Math.max(0, backlog) / TOP_UP_PER_BACKLOG;
+        return Math.max(TOP_UP_MIN_PER_HOUR, Math.min(TOP_UP_MAX_PER_HOUR, TOP_UP_MIN_PER_HOUR + extra));
+    }
+
     /**
      * EXPERIMENTAL, manual-trigger only (see runFullPipelineFromUrl for the analogous
      * hh.ru-URL feature) — reads configured public Telegram channels via the tg-scraper

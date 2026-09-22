@@ -555,6 +555,20 @@ public class VacancyRepository {
             rowMapper, person, searchName, minScore, limit);
     }
 
+    /**
+     * Хвост канала: одобренные со скором не ниже планки, которые ещё никуда не ушли и не
+     * стоят в очереди. Те же условия, что у {@link #findUnnotifiedApproved}, без
+     * dedup-защиты — для размера порции подпитки точность до клона не нужна.
+     */
+    public int countApprovedBacklog(String person, String searchName, int minScore) {
+        Integer n = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM vacancies WHERE person=? AND search_name=? " +
+            "AND ai_verdict='yes' AND ai_score >= ? AND notified = 0 AND closed_at IS NULL " +
+            "AND queued_publish_at IS NULL AND moderation_status = 'none'",
+            Integer.class, person, searchName, minScore);
+        return n == null ? 0 : n;
+    }
+
     // ── Manual moderation (see ModerationService) ──
 
     /** Approved-but-unsent vacancies enter the queue here instead of going straight to

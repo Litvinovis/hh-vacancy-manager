@@ -142,6 +142,10 @@ public class PipelineScheduler implements SchedulingConfigurer {
     // personal token, not the app's own group token; see CommentRadarService's javadoc
     // and the plan's Risks section for why this stays infrequent and read-only.
     private static final Duration VK_RADAR_SCAN_INTERVAL = Duration.ofHours(5);
+    // Подпитка очереди канала раз в час; размер порции зависит от хвоста одобренных
+    // (см. VacancyPipelineService.topUpChannelQueue) — ровный поток вместо залпа после прогона поиска.
+    private static final Duration CHANNEL_TOP_UP_INTERVAL = Duration.ofHours(1);
+    private static final Duration CHANNEL_TOP_UP_INITIAL_DELAY = Duration.ofMinutes(4);
 
     public PipelineScheduler(VacancyPipelineService pipelineService, SearchProfileFactory profileFactory,
                               RuntimeConfig runtimeConfig, VacancyAiAnalyzer aiAnalyzer, SearchRepository searchRepo,
@@ -216,6 +220,26 @@ public class PipelineScheduler implements SchedulingConfigurer {
         PeriodicTrigger contentTrigger = new PeriodicTrigger(CONTENT_PLAN_CHECK_INTERVAL);
         contentTrigger.setInitialDelay(Duration.ofMinutes(3));
         registrar.addTriggerTask(this::runContentPlan, contentTrigger);
+        PeriodicTrigger topUpTrigger = new PeriodicTrigger(CHANNEL_TOP_UP_INTERVAL);
+        topUpTrigger.setInitialDelay(CHANNEL_TOP_UP_INITIAL_DELAY);
+        registrar.addTriggerTask(this::runChannelQueueTopUp, topUpTrigger);
+    }
+
+    private void runChannelQueueTopUp() {
+        if (schemaNotReady()) return;
+        List<SearchConfig> searches = new ArrayList<>(searchRepo.findScheduledUrlSearches());
+        searches.addAll(searchRepo.findScheduledTelegramSearches());
+        for (SearchConfig search : searches) {
+            Optional<SearchJob> jobOpt = profileFactory.buildForSearchId(search.getId());
+            if (jobOpt.isEmpty()) continue;
+            SearchJob job = jobOpt.get();
+            try {
+                int fed = pipelineService.topUpChannelQueue(job);
+                if (fed > 0) log.info("Очередь канала пополнена: {} вакансий ({} · {})", fed, job.personName, job.searchName);
+            } catch (Exception e) {
+                log.error("Подпитка очереди канала {} · {} завершилась ошибкой: {}", job.personName, job.searchName, e.getMessage(), e);
+            }
+        }
     }
 
     private void runVkRadarScan() {
