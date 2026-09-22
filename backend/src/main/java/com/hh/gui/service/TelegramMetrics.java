@@ -164,11 +164,15 @@ public class TelegramMetrics {
      * неотличима от поломки сбора (19.09.2026: после рестарта в тихий час так и вышло).
      */
     public void preRegisterRolling(Collection<String> searchNames, Collection<String> sources) {
+        // Только регистрация, без записи значения: этот метод зовут после каждого обновления
+        // из БД, и вариант с set(0) затирал только что посчитанные числа — с 19.09.2026 (#225)
+        // «Собрано по источникам» и «Публикаций в час» в Prometheus были нулями при живых
+        // данных в БД (замечено 22.09 по легенде дашборда).
         for (String search : searchNames) {
-            if (search != null && !search.isBlank()) setPublishedRolling(search, 0);
+            if (search != null && !search.isBlank()) publishedRollingGauge(search);
         }
         for (String source : sources) {
-            if (source != null && !source.isBlank()) setCollectedRolling(source, 0);
+            if (source != null && !source.isBlank()) collectedRollingGauge(source);
         }
     }
 
@@ -182,13 +186,17 @@ public class TelegramMetrics {
     }
 
     private void setPublishedRolling(String search, int count) {
-        publishedRollingGauges.computeIfAbsent(search, s -> {
+        publishedRollingGauge(search).set(count);
+    }
+
+    private AtomicInteger publishedRollingGauge(String search) {
+        return publishedRollingGauges.computeIfAbsent(search, s -> {
             AtomicInteger value = new AtomicInteger();
             Gauge.builder("vacancies_published_rolling_1h", value, AtomicInteger::get)
                 .description("Vacancies published to a public destination in the trailing 1h, recomputed from the DB every refresh")
                 .tag("application", "hh-gui").tag("search", s).register(registry);
             return value;
-        }).set(count);
+        });
     }
 
     /**
@@ -227,12 +235,16 @@ public class TelegramMetrics {
     }
 
     private void setCollectedRolling(String source, int count) {
-        collectedRollingGauges.computeIfAbsent(source, s -> {
+        collectedRollingGauge(source).set(count);
+    }
+
+    private AtomicInteger collectedRollingGauge(String source) {
+        return collectedRollingGauges.computeIfAbsent(source, s -> {
             AtomicInteger value = new AtomicInteger();
             Gauge.builder("vacancies_collected_rolling_1d", value, AtomicInteger::get)
                 .description("Vacancies collected in the trailing 24h, by source, recomputed from the DB every refresh")
                 .tag("application", "hh-gui").tag("source", s).register(registry);
             return value;
-        }).set(count);
+        });
     }
 }

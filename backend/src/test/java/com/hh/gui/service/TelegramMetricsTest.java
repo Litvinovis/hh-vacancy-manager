@@ -166,6 +166,24 @@ class TelegramMetricsTest {
     }
 
     @Test
+    void preRegisterRolling_afterRefresh_keepsTheValuesJustComputedFromDb() {
+        // Живой дефект 19–22.09.2026: планировщик звал preRegisterRolling после каждого
+        // обновления из БД, а тот записывал 0 — Prometheus видел только нули.
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        TelegramMetrics metrics = new TelegramMetrics(registry);
+
+        metrics.refreshCollectedRolling(java.util.Map.of("hh", 40, "telegram", 15));
+        metrics.refreshPublishedRolling(java.util.Map.of("Общая удалёнка", 3));
+        metrics.preRegisterRolling(java.util.List.of("Общая удалёнка", "Новый поиск"), java.util.List.of("hh", "telegram"));
+
+        assertEquals(40.0, registry.find("vacancies_collected_rolling_1d").tag("source", "hh").gauge().value());
+        assertEquals(15.0, registry.find("vacancies_collected_rolling_1d").tag("source", "telegram").gauge().value());
+        assertEquals(3.0, registry.find("vacancies_published_rolling_1h").tag("search", "Общая удалёнка").gauge().value());
+        assertEquals(0.0, registry.find("vacancies_published_rolling_1h").tag("search", "Новый поиск").gauge().value(),
+            "новый поиск регистрируется нулём, чтобы ряд существовал");
+    }
+
+    @Test
     void recordSubscribers_setsGaugeToLatestValue() {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         TelegramMetrics metrics = new TelegramMetrics(registry);
