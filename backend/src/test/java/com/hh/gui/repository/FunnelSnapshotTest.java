@@ -35,7 +35,12 @@ class FunnelSnapshotTest {
     }
 
     private Vacancy saved(String verdict, String scrapeStatus, boolean notified) {
+        return saved(verdict, scrapeStatus, notified, 0);
+    }
+
+    private Vacancy saved(String verdict, String scrapeStatus, boolean notified, int score) {
         Vacancy v = new Vacancy();
+        v.setAiScore(score);
         v.setHhId("f" + (++seq));
         v.setTitle("Вакансия " + seq);
         v.setPerson("Все пользователи");
@@ -57,7 +62,7 @@ class FunnelSnapshotTest {
         saved("yes", "ok", false);            // одобрено, ещё не отправлено
         saved("yes", "ok", true);             // опубликовано
 
-        Map<String, Integer> funnel = repo.funnelSnapshot();
+        Map<String, Integer> funnel = repo.funnelSnapshot(0);
 
         assertEquals(1, funnel.getOrDefault("awaiting_scrape", 0));
         assertEquals(1, funnel.getOrDefault("scrape_failed", 0));
@@ -76,11 +81,25 @@ class FunnelSnapshotTest {
         // вакансией на этом этапе — до того панель показывала «No data» вместо 0 (22.09.2026).
         saved("yes", "ok", true);
 
-        Map<String, Integer> funnel = repo.funnelSnapshot();
+        Map<String, Integer> funnel = repo.funnelSnapshot(0);
 
         assertEquals(VacancyRepository.FUNNEL_STAGES.size(), funnel.size(), "все этапы, даже пустые");
         assertEquals(0, funnel.get("awaiting_ai"));
         assertEquals(0, funnel.get("awaiting_scrape"));
         assertEquals(1, funnel.get("published"));
+    }
+
+    @Test
+    void approvedBelowChannelFloor_isNotCountedAsWaitingForPublication() {
+        // 22.09.2026: канал берёт топ по скору, и одобренные с 60–79 «ждали» вечно —
+        // 752 в панели при ~200 реальных кандидатах. Планка делит их на два этапа.
+        saved("yes", "ok", false, 85);
+        saved("yes", "ok", false, 72);
+
+        Map<String, Integer> funnel = repo.funnelSnapshot(80);
+
+        assertEquals(1, funnel.get("approved_queued"));
+        assertEquals(1, funnel.get("approved_below_channel"));
+        assertEquals(0, funnel.get("published"));
     }
 }

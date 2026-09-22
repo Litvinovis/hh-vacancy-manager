@@ -117,7 +117,8 @@ public class ArticleGenerator {
                     return sb.toString();
                 }
                 case "week_digest", "rejected_reasons" -> {
-                    Map<String, Integer> f = vacancies.funnelSnapshot();
+                    // Для статьи планка канала не важна: «одобрено» — это всё одобренное.
+                    Map<String, Integer> f = vacancies.funnelSnapshot(0);
                     Map<String, Integer> verdicts = vacancies.verdictCountsSince(daysAgo(7));
                     List<String> reasons = vacancies.recentRejectReasons(10);
                     return "воронка сейчас (этап: количество): " + f + "\n"

@@ -1112,9 +1112,30 @@ public class VacancyRepository {
      */
     /** Все этапы воронки в порядке прохождения — чтобы метрика существовала и для пустого этапа. */
     public static final List<String> FUNNEL_STAGES = List.of(
-        "awaiting_scrape", "scrape_failed", "awaiting_ai", "rejected", "fraud", "approved_queued", "published");
+        "awaiting_scrape", "scrape_failed", "awaiting_ai", "rejected", "fraud",
+        "approved_below_channel", "approved_queued", "published");
 
-    public Map<String, Integer> funnelSnapshot() {
+    /**
+     * Срез воронки: сколько строк сейчас на каждом этапе. Именно срез, а не счётчик событий —
+     * счётчики после рестарта начинаются с нуля и не отвечают на вопрос «где сейчас затор»
+     * (18.09.2026: хвост в 480 необработанных был виден только запросом в БД руками).
+     *
+     * Этапы не пересекаются и покрывают все строки:
+     *   awaiting_scrape        — собрано, описание ещё не скачано
+     *   scrape_failed          — скрейп не удался, анализ невозможен
+     *   awaiting_ai            — описание есть, вердикта нет
+     *   rejected               — AI отклонил
+     *   fraud                  — AI признал обманом
+     *   approved_below_channel — одобрено, но скор ниже планки канала: в канал не пойдёт,
+     *                            останется в личных отчётах и веб-интерфейсе
+     *   approved_queued        — одобрено со скором не ниже планки, ещё не опубликовано
+     *   published              — ушло в канал или личный отчёт
+     *
+     * Планка — {@code channelFloor}: без неё в «ждут публикации» попадали и те, кому ждать
+     * нечего — канал берёт топ по скору, и 60–79 никогда не всплывали (22.09.2026: 752
+     * «ждущих», из них реальных кандидатов ~200).
+     */
+    public Map<String, Integer> funnelSnapshot(int channelFloor) {
         // Пустой этап — тоже значение: без явного нуля ряд для него не появлялся в Prometheus
         // до первой вакансии на этом этапе после рестарта, и панель «Ждут анализа» показывала
         // «No data» вместо 0 (22.09.2026).
@@ -1128,8 +1149,9 @@ public class VacancyRepository {
                 "  WHEN ai_verdict = 'fraud' THEN 'fraud' " +
                 "  WHEN ai_verdict = 'no' THEN 'rejected' " +
                 "  WHEN notified = 1 THEN 'published' " +
+                "  WHEN COALESCE(ai_score, 0) < ? THEN 'approved_below_channel' " +
                 "  ELSE 'approved_queued' END AS stage, COUNT(*) AS cnt " +
-                "FROM vacancies GROUP BY stage")) {
+                "FROM vacancies GROUP BY stage", channelFloor)) {
             stages.put(String.valueOf(row.get("stage")), ((Number) row.get("cnt")).intValue());
         }
         return stages;
