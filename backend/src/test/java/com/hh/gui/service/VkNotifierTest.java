@@ -34,6 +34,8 @@ class VkNotifierTest {
     private final AtomicReference<String> lastSaveWallPhotoBody = new AtomicReference<>();
     /** Сколько первых загрузок PNG сервер VK «примет», но вернёт пустое photo. */
     private volatile int emptyPhotoUploads;
+    private final java.util.List<Long> sleeps = new java.util.ArrayList<>();
+    private final java.util.concurrent.atomic.AtomicInteger uploadServerRequests = new java.util.concurrent.atomic.AtomicInteger();
     @TempDir Path dir;
 
     @BeforeEach
@@ -62,6 +64,7 @@ class VkNotifierTest {
         });
         server.createContext("/method/photos.getWallUploadServer", ex -> {
             lastUploadServerBody.set(new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            uploadServerRequests.incrementAndGet();
             byte[] body = ("{\"response\":{\"upload_url\":\"http://127.0.0.1:" + port + "/upload\"}}")
                 .getBytes(StandardCharsets.UTF_8);
             ex.sendResponseHeaders(200, body.length);
@@ -91,6 +94,7 @@ class VkNotifierTest {
         ReflectionTestUtils.setField(notifier, "accessToken", "GOODTOKEN");
         ReflectionTestUtils.setField(notifier, "groupId", "123456789");
         ReflectionTestUtils.setField(notifier, "apiVersion", "5.199");
+        notifier.setSleeper(ms -> sleeps.add(ms));
     }
 
     @AfterEach
@@ -208,15 +212,25 @@ class VkNotifierTest {
     }
 
     @Test
-    void uploadWallPhoto_emptyPhotoFromUploadServer_isRetriedOnceBeforeSaving() throws Exception {
-        // Живой случай 21.09.2026: upload_url ответил 200 с photo="", и saveWallPhoto упал
-        // с error 100 «photo is undefined» — пост ушёл без карточки. Повтор загрузки спасает.
+    void uploadWallPhoto_emptyPhotoFromUploadServer_isRetriedOnFreshUploadUrlAfterPause() throws Exception {
+        // Живой случай 21–22.09.2026: upload_url отвечает 200 с photo="" — сбой узла загрузки
+        // в этот момент, а не картинки. Мгновенный повтор на тот же узел не помогал.
         ReflectionTestUtils.setField(notifier, "photoUploadToken", "STATIC_USER_TOKEN");
-        emptyPhotoUploads = 1;
+        emptyPhotoUploads = 2;
 
         assertEquals("photo-123456789_42", notifier.uploadWallPhoto(new byte[]{1, 2, 3}, "card.png"));
-        assertEquals(2, uploads.get(), "первая загрузка пустая, вторая — рабочая");
+        assertEquals(3, uploads.get(), "две пустые загрузки, третья — рабочая");
+        assertEquals(3, uploadServerRequests.get(), "на каждую попытку — свежий upload_url");
+        assertEquals(java.util.List.of(1500L, 3000L), sleeps, "пауза перед повтором растёт");
         assertFalse(lastSaveWallPhotoBody.get().contains("photo=&"), "в saveWallPhoto не должно уходить пустое photo");
+    }
+
+    @Test
+    void uploadWallPhoto_happyPath_doesNotSleep() throws Exception {
+        ReflectionTestUtils.setField(notifier, "photoUploadToken", "STATIC_USER_TOKEN");
+
+        notifier.uploadWallPhoto(new byte[]{1, 2, 3}, "card.png");
+        assertTrue(sleeps.isEmpty(), "без сбоя ждать нечего");
     }
 
     @Test
@@ -225,7 +239,7 @@ class VkNotifierTest {
         emptyPhotoUploads = Integer.MAX_VALUE;
 
         assertNull(notifier.uploadWallPhoto(new byte[]{1, 2, 3}, "card.png"));
-        assertEquals(2, uploads.get(), "две попытки — и хватит, пост уйдёт текстом");
+        assertEquals(4, uploads.get(), "четыре попытки — и хватит, пост уйдёт текстом");
         assertNull(lastSaveWallPhotoBody.get(), "с пустым photo в saveWallPhoto ходить бессмысленно");
     }
 }

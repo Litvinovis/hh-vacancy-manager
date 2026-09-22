@@ -23,8 +23,16 @@ import java.util.Map;
 public class VkNotifier {
 
     private static final Logger log = LoggerFactory.getLogger(VkNotifier.class);
-    /** Сколько раз грузить PNG на upload_url, если VK отвечает пустым photo. */
-    private static final int UPLOAD_ATTEMPTS = 2;
+    /** Сколько раз грузить PNG, если VK отвечает пустым photo (каждый раз — на свежий upload_url). */
+    private static final int UPLOAD_ATTEMPTS = 4;
+    /** Пауза перед повторной загрузкой; удваивается с каждой попыткой. */
+    private static final long UPLOAD_RETRY_BASE_MS = 1500;
+
+    /** Пауза между попытками загрузки; в тестах подменяется, чтобы не ждать по-настоящему. */
+    interface Sleeper { void sleep(long ms) throws InterruptedException; }
+    private Sleeper sleeper = Thread::sleep;
+
+    void setSleeper(Sleeper sleeper) { this.sleeper = sleeper; }
 
     @Value("${app.vk.api-base-url:https://api.vk.com}")
     private String apiBaseUrl;
@@ -141,13 +149,7 @@ public class VkNotifier {
             return null;
         }
         try {
-            Map<String, String> p = new java.util.LinkedHashMap<>();
-            p.put("group_id", groupId);
-            Map<?, ?> server = callWithToken("photos.getWallUploadServer", p, uploadToken);
-            if (server == null) return null;
-            String uploadUrl = String.valueOf(((Map<?, ?>) server.get("response")).get("upload_url"));
-
-            Map<?, ?> uploaded = uploadPngWithRetry(uploadUrl, png, fileName);
+            Map<?, ?> uploaded = uploadPngWithRetry(png, fileName, uploadToken);
             if (uploaded == null) return null;
 
             Map<String, String> save = new java.util.LinkedHashMap<>();
@@ -166,14 +168,24 @@ public class VkNotifier {
     }
 
     /**
-     * Сервер загрузки VK изредка отвечает 200 с пустым полем photo («"photo":""» или «[]»),
-     * и следующий за этим photos.saveWallPhoto падает с error 100 «photo is undefined»
-     * (наблюдалось 21.09.2026, пост ушёл без карточки). Повторная загрузка того же PNG
-     * проходит, поэтому при пустом photo пробуем ещё раз и логируем сырой ответ —
-     * чтобы в следующий раз было видно, что именно вернул VK.
+     * Сервер загрузки VK время от времени отвечает 200 с пустым полем photo («"photo":""»),
+     * и следующий за этим photos.saveWallPhoto падает с error 100 «photo is undefined».
+     * Проверено вручную 22.09.2026: один и тот же PNG (байт в байт) три раза подряд
+     * получал пустое photo и через минуту — восемь раз подряд проходил; то есть это
+     * не картинка, а сбой конкретного узла загрузки в конкретный момент. Поэтому
+     * на каждую попытку берём свежий upload_url (getWallUploadServer каждый раз выдаёт
+     * другой узел) и ждём перед повтором — мгновенный повтор на тот же узел, как
+     * показали логи 21.09, упирается в тот же отказ.
      */
-    private Map<?, ?> uploadPngWithRetry(String uploadUrl, byte[] png, String fileName) throws Exception {
+    private Map<?, ?> uploadPngWithRetry(byte[] png, String fileName, String uploadToken) throws Exception {
         for (int attempt = 1; attempt <= UPLOAD_ATTEMPTS; attempt++) {
+            if (attempt > 1) sleeper.sleep(UPLOAD_RETRY_BASE_MS << (attempt - 2));
+            Map<String, String> p = new java.util.LinkedHashMap<>();
+            p.put("group_id", groupId);
+            Map<?, ?> server = callWithToken("photos.getWallUploadServer", p, uploadToken);
+            if (server == null) return null;
+            String uploadUrl = String.valueOf(((Map<?, ?>) server.get("response")).get("upload_url"));
+
             String body = uploadPng(uploadUrl, png, fileName);
             if (body == null) return null;
             Map<?, ?> uploaded = mapper.readValue(body, Map.class);
