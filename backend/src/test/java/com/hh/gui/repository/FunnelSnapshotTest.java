@@ -69,4 +69,18 @@ class FunnelSnapshotTest {
         assertEquals(7, funnel.values().stream().mapToInt(Integer::intValue).sum(),
             "сумма по этапам должна совпадать с числом строк — иначе этапы пересекаются или не покрывают всё");
     }
+
+    @Test
+    void emptyStages_areReportedAsZeroSoTheGaugeAlwaysExists() {
+        // После рестарта ряд vacancies_funnel_stage{stage="awaiting_ai"} появлялся только с первой
+        // вакансией на этом этапе — до того панель показывала «No data» вместо 0 (22.09.2026).
+        saved("yes", "ok", true);
+
+        Map<String, Integer> funnel = repo.funnelSnapshot();
+
+        assertEquals(VacancyRepository.FUNNEL_STAGES.size(), funnel.size(), "все этапы, даже пустые");
+        assertEquals(0, funnel.get("awaiting_ai"));
+        assertEquals(0, funnel.get("awaiting_scrape"));
+        assertEquals(1, funnel.get("published"));
+    }
 }

@@ -1110,8 +1110,16 @@ public class VacancyRepository {
      *   approved_queued — одобрено, ещё не опубликовано
      *   published       — ушло в канал или личный отчёт
      */
+    /** Все этапы воронки в порядке прохождения — чтобы метрика существовала и для пустого этапа. */
+    public static final List<String> FUNNEL_STAGES = List.of(
+        "awaiting_scrape", "scrape_failed", "awaiting_ai", "rejected", "fraud", "approved_queued", "published");
+
     public Map<String, Integer> funnelSnapshot() {
+        // Пустой этап — тоже значение: без явного нуля ряд для него не появлялся в Prometheus
+        // до первой вакансии на этом этапе после рестарта, и панель «Ждут анализа» показывала
+        // «No data» вместо 0 (22.09.2026).
         Map<String, Integer> stages = new LinkedHashMap<>();
+        for (String stage : FUNNEL_STAGES) stages.put(stage, 0);
         for (Map<String, Object> row : jdbc.queryForList(
                 "SELECT CASE " +
                 "  WHEN ai_verdict = 'pending' AND COALESCE(scrape_status,'pending') = 'failed' THEN 'scrape_failed' " +
