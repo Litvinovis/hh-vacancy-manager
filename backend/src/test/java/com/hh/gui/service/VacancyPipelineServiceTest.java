@@ -119,7 +119,7 @@ class VacancyPipelineServiceTest {
         return (String) m.invoke(service, v);
     }
 
-    private Vacancy vacancy(String title, String reason, int score) {
+    private static Vacancy vacancy(String title, String reason, int score) {
         Vacancy v = new Vacancy();
         v.setHhId("1");
         v.setTitle(title);
@@ -666,6 +666,108 @@ class VacancyPipelineServiceTest {
 
         assertEquals(0, r.alive + r.closed + r.inconclusive);
         assertEquals(0, scraper.calls, "при заморозке скрейпинга актуализация уступает");
+    }
+
+    // ── подпитка очереди канала ──
+
+    /** Репозиторий для подпитки: отдаёт заданные глубину очереди и хвост, копит limit,
+     *  с которым запросили одобренных. */
+    private static class FakeTopUpRepo extends VacancyRepository {
+        int queued = 0;
+        int backlog = 0;
+        int approvedAvailable = 0;
+        final List<Integer> requestedLimits = new ArrayList<>();
+        FakeTopUpRepo() { super(null); }
+        @Override
+        public int countQueued(Long searchId) { return queued; }
+        @Override
+        public int countApprovedBacklog(String person, String searchName, int minScore) { return backlog; }
+        @Override
+        public List<Vacancy> findUnnotifiedApproved(String person, String searchName, int minScore, int limit) {
+            requestedLimits.add(limit);
+            List<Vacancy> out = new ArrayList<>();
+            for (int i = 0; i < Math.min(limit, approvedAvailable); i++) out.add(vacancy("Вакансия " + i, "ок", 85));
+            return out;
+        }
+    }
+
+    private static SearchJob channelJob() {
+        SearchJob job = new SearchJob();
+        job.personName = "Все пользователи";
+        job.searchName = "Общая удалёнка";
+        job.searchId = 1L;
+        job.publicFormat = true;
+        job.publishPaceMinutes = 15;
+        return job;
+    }
+
+    /** Доставка выключена: sendReport возвращается сразу, и тест проверяет только
+     *  логику подпитки — когда она срабатывает и сколько просит. */
+    private static RuntimeConfig deliveryOff() {
+        RuntimeConfig config = new RuntimeConfig();
+        config.setNotificationsEnabled(false);
+        config.setChannelNotificationsEnabled(false);
+        return config;
+    }
+
+    @Test
+    void adaptiveTopUpLimit_growsWithBacklogWithinBounds() {
+        assertEquals(5, VacancyPipelineService.adaptiveTopUpLimit(0), "пустой хвост — один батч");
+        assertEquals(5, VacancyPipelineService.adaptiveTopUpLimit(9));
+        assertEquals(8, VacancyPipelineService.adaptiveTopUpLimit(30), "+1 на каждые 10 в хвосте");
+        assertEquals(15, VacancyPipelineService.adaptiveTopUpLimit(100));
+        assertEquals(20, VacancyPipelineService.adaptiveTopUpLimit(194), "живой хвост 22.09 — потолок");
+        assertEquals(20, VacancyPipelineService.adaptiveTopUpLimit(5000), "потолок не пробивается");
+    }
+
+    @Test
+    void topUpChannelQueue_queueNotEmpty_doesNothing() {
+        FakeTopUpRepo repo = new FakeTopUpRepo();
+        repo.queued = 3;
+        repo.backlog = 100;
+        repo.approvedAvailable = 100;
+        VacancyPipelineService svc = service().repo(repo).config(deliveryOff()).build();
+
+        assertEquals(0, svc.topUpChannelQueue(channelJob()));
+        assertTrue(repo.requestedLimits.isEmpty(), "пока очередь не пуста, кандидатов не запрашиваем");
+    }
+
+    @Test
+    void topUpChannelQueue_emptyQueue_asksForAdaptivePortion() {
+        FakeTopUpRepo repo = new FakeTopUpRepo();
+        repo.backlog = 194;
+        repo.approvedAvailable = 194;
+        VacancyPipelineService svc = service().repo(repo).config(deliveryOff()).build();
+
+        assertEquals(20, svc.topUpChannelQueue(channelJob()));
+        assertEquals(List.of(20), repo.requestedLimits);
+    }
+
+    @Test
+    void topUpChannelQueue_smallBacklog_takesOneBatch() {
+        FakeTopUpRepo repo = new FakeTopUpRepo();
+        repo.backlog = 7;
+        repo.approvedAvailable = 7;
+        VacancyPipelineService svc = service().repo(repo).config(deliveryOff()).build();
+
+        assertEquals(5, svc.topUpChannelQueue(channelJob()));
+    }
+
+    @Test
+    void topUpChannelQueue_notAPacedChannelSearch_isIgnored() {
+        FakeTopUpRepo repo = new FakeTopUpRepo();
+        repo.backlog = 50;
+        repo.approvedAvailable = 50;
+        VacancyPipelineService svc = service().repo(repo).config(deliveryOff()).build();
+
+        SearchJob personal = channelJob();
+        personal.publicFormat = false;
+        assertEquals(0, svc.topUpChannelQueue(personal), "личный отчёт подпиткой не занимаемся");
+
+        SearchJob unpaced = channelJob();
+        unpaced.publishPaceMinutes = null;
+        assertEquals(0, svc.topUpChannelQueue(unpaced), "без темпа очереди нет — нечего подпитывать");
+        assertTrue(repo.requestedLimits.isEmpty());
     }
 
     private void sendReport(VacancyPipelineService svc, List<Vacancy> approved, SearchJob job) throws Exception {
