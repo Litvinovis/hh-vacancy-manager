@@ -103,13 +103,25 @@ public class SearchService {
 
     /** @return empty if the search doesn't exist or isn't owned by userId (unless isAdmin). */
     public Optional<SearchConfig> update(Long id, Long userId, boolean isAdmin, SearchConfig updates) {
+        return update(id, userId, isAdmin, updates, null);
+    }
+
+    /**
+     * @param presentFields поля, реально пришедшие в запросе; null — считать присланными все
+     *                      (прежнее поведение для клиентов, отправляющих поиск целиком).
+     *                      Админские настройки публикации, которых в запросе нет, остаются
+     *                      как были: личный кабинет их не показывает и не отправляет.
+     */
+    public Optional<SearchConfig> update(Long id, Long userId, boolean isAdmin, SearchConfig updates,
+                                         java.util.Set<String> presentFields) {
+        java.util.function.Predicate<String> sent = f -> presentFields == null || presentFields.contains(f);
         Optional<SearchConfig> existingOpt = searchRepo.findById(id);
         if (existingOpt.isEmpty()) return Optional.empty();
         SearchConfig existing = existingOpt.get();
         if (!isAdmin && !existing.getUserId().equals(userId)) return Optional.empty();
 
         existing.setName(updates.getName());
-        existing.setQueries(updates.getQueries());
+        if (sent.test("queries")) existing.setQueries(updates.getQueries());
         existing.setArea(updates.getArea());
         existing.setSchedule(updates.getSchedule());
         existing.setSalaryMin(updates.getSalaryMin());
@@ -122,16 +134,16 @@ public class SearchService {
             // URL-based discovery and the Telegram publishing overrides are admin-only:
             // a non-admin's update keeps whatever is already stored instead of accepting
             // (or wiping) them.
-            existing.setSourceUrl(updates.getSourceUrl());
-            existing.setRunIntervalHours(updates.getRunIntervalHours());
-            existing.setChatId(updates.getChatId());
-            existing.setPublicFormat(updates.isPublicFormat());
-            existing.setDelayedChatId(updates.getDelayedChatId());
-            existing.setDelayedPublishMinutes(updates.getDelayedPublishMinutes());
-            existing.setSubscriberFeed(updates.isSubscriberFeed());
-            existing.setPublishPaceMinutes(updates.getPublishPaceMinutes());
-            existing.setRunPriority(updates.getRunPriority());
-            existing.setTelegramChannels(updates.getTelegramChannels());
+            if (sent.test("sourceUrl")) existing.setSourceUrl(updates.getSourceUrl());
+            if (sent.test("runIntervalHours")) existing.setRunIntervalHours(updates.getRunIntervalHours());
+            if (sent.test("chatId")) existing.setChatId(updates.getChatId());
+            if (sent.test("publicFormat")) existing.setPublicFormat(updates.isPublicFormat());
+            if (sent.test("delayedChatId")) existing.setDelayedChatId(updates.getDelayedChatId());
+            if (sent.test("delayedPublishMinutes")) existing.setDelayedPublishMinutes(updates.getDelayedPublishMinutes());
+            if (sent.test("subscriberFeed")) existing.setSubscriberFeed(updates.isSubscriberFeed());
+            if (sent.test("publishPaceMinutes")) existing.setPublishPaceMinutes(updates.getPublishPaceMinutes());
+            if (sent.test("runPriority")) existing.setRunPriority(updates.getRunPriority());
+            if (sent.test("telegramChannels")) existing.setTelegramChannels(updates.getTelegramChannels());
             adoptExcludeWordsFromUrl(existing);
         }
         if (updates.isEnabled() != existing.isEnabled()) {
@@ -151,7 +163,8 @@ public class SearchService {
     private static void requireDiscoverySource(SearchConfig search, boolean isAdmin) {
         boolean hasQueries = search.getQueries() != null && !search.getQueries().isEmpty();
         boolean hasUrl = search.getSourceUrl() != null && !search.getSourceUrl().isBlank();
-        if (!hasQueries && !hasUrl) {
+        boolean hasChannels = search.getTelegramChannels() != null && !search.getTelegramChannels().isEmpty();
+        if (!hasQueries && !hasUrl && !hasChannels) {
             throw new IllegalStateException(isAdmin
                 ? "Укажите поисковые запросы или ссылку на поиск hh.ru"
                 : "Укажите хотя бы один поисковый запрос");

@@ -208,9 +208,12 @@ public class VacancyPipelineService {
         if (urlOnly) {
             discovered = timed("url", "discover", () -> discovery.fromUrl(job, job.sourceUrl, VacancyDiscovery.MAX_URL_SEARCH_PAGES));
             log.info("Шаг 1 по ссылке ({} · {}): {} новых вакансий", job.personName, job.searchName, discovered);
-        } else {
+        } else if (runtimeConfig.isRssEnabled()) {
             discovered = timed("rss", "discover", () -> discovery.fromRss(job));
             log.info("Шаг 1 ({} · {}): {} новых вакансий", job.personName, job.searchName, discovered);
+        } else {
+            discovered = 0;
+            log.info("Шаг 1 ({} · {}): поиск по RSS выключен в настройках — сбор пропущен", job.personName, job.searchName);
         }
 
         int scraped = timed(urlOnly ? "url" : "rss", "scrape", () -> scrapePending(job));

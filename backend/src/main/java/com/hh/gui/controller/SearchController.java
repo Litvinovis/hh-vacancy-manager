@@ -42,12 +42,22 @@ public class SearchController {
         }
     }
 
+    private final tools.jackson.databind.ObjectMapper mapper = tools.jackson.databind.json.JsonMapper.builder()
+        .disable(tools.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES).build();
+
+    /**
+     * Тело читается как Map, чтобы знать, какие поля клиент прислал на самом деле. Личный
+     * кабинет отправляет только свои поля, а сервис перезаписывал и админские настройки
+     * публикации — одно сохранение общего поиска в интерфейсе стирало Telegram-каналы,
+     * темп очереди канала и публичный формат (найдено 24.09.2026).
+     */
     @PutMapping("/{id}")
-    public ResponseEntity<?> update(@PathVariable Long id, @RequestBody SearchConfig search,
+    public ResponseEntity<?> update(@PathVariable Long id, @RequestBody Map<String, Object> body,
                                      @RequestAttribute("currentUser") User currentUser) {
         Optional<SearchConfig> updated;
         try {
-            updated = searchService.update(id, currentUser.getId(), currentUser.isAdmin(), search);
+            SearchConfig search = mapper.convertValue(body, SearchConfig.class);
+            updated = searchService.update(id, currentUser.getId(), currentUser.isAdmin(), search, body.keySet());
         } catch (IllegalStateException e) {
             return ResponseEntity.status(400).body(Map.of("error", e.getMessage()));
         }

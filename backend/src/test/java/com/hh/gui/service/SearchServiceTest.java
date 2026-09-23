@@ -126,4 +126,50 @@ class SearchServiceTest {
         assertThrows(IllegalStateException.class,
             () -> new SearchService(repo).update(5L, 7L, false, wipe));
     }
+
+    @Test
+    void create_admin_telegramChannelsOnly_allowed() {
+        // Поиск, который собирает только из Telegram, — полноценный источник.
+        SearchConfig s = new SearchConfig();
+        s.setName("Каналы");
+        s.setTelegramChannels(List.of("remote_jobsz"));
+        assertDoesNotThrow(() -> new SearchService(new FakeRepo()).create(1L, s, true));
+    }
+
+    // ── сохранение из личного кабинета не стирает админские настройки публикации ──
+
+    @Test
+    void update_admin_fromCabinet_keepsPublishSettingsItDoesNotSend() {
+        FakeRepo repo = new FakeRepo();
+        repo.existing = searchWithUrl();
+        repo.existing.setUserId(1L);
+        repo.existing.setTelegramChannels(List.of("freelancce", "udafrii"));
+        repo.existing.setPublishPaceMinutes(15);
+        repo.existing.setPublicFormat(true);
+        repo.existing.setChatId("-100500");
+
+        // Ровно то, что шлёт кабинет (app.js readCabinetSearchCard): без каналов и темпа.
+        SearchConfig fromUi = searchWithUrl();
+        fromUi.setChatId("-100500");
+        java.util.Set<String> sent = java.util.Set.of("name", "area", "schedule", "salaryMin", "priorityDistricts",
+            "skills", "notSuitable", "excludeWords", "aiNotes", "enabled", "sourceUrl", "runIntervalHours", "chatId");
+        SearchConfig saved = new SearchService(repo).update(5L, 1L, true, fromUi, sent).orElseThrow();
+
+        assertEquals(List.of("freelancce", "udafrii"), saved.getTelegramChannels(), "каналы-источники не стёрты");
+        assertEquals(15, saved.getPublishPaceMinutes(), "темп очереди канала не сброшен — иначе посты пошли бы залпом");
+        assertTrue(saved.isPublicFormat(), "публичный формат постов не выключен");
+    }
+
+    @Test
+    void update_admin_explicitFieldStillApplies() {
+        FakeRepo repo = new FakeRepo();
+        repo.existing = searchWithUrl();
+        repo.existing.setUserId(1L);
+        repo.existing.setTelegramChannels(List.of("freelancce"));
+        SearchConfig upd = searchWithUrl();
+        upd.setTelegramChannels(List.of("remote_jobsz"));
+        SearchConfig saved = new SearchService(repo).update(5L, 1L, true, upd,
+            java.util.Set.of("name", "sourceUrl", "telegramChannels")).orElseThrow();
+        assertEquals(List.of("remote_jobsz"), saved.getTelegramChannels());
+    }
 }
