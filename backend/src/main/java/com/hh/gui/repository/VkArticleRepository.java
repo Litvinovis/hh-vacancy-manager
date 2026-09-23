@@ -110,6 +110,14 @@ public class VkArticleRepository {
             rs -> rs.next() ? rs.getString("t") : null);
     }
 
+    /** post_id опубликованных статей и опросов → вид (article/poll) — для разбора вовлечённости по типам. */
+    public java.util.Map<String, String> publishedPostKinds() {
+        java.util.Map<String, String> kinds = new java.util.HashMap<>();
+        jdbc.query("SELECT vk_post_id, kind FROM vk_articles WHERE status='published' AND vk_post_id IS NOT NULL",
+            rs -> { kinds.put(rs.getString("vk_post_id"), rs.getString("kind")); });
+        return kinds;
+    }
+
     public List<VkArticle> findAll(int limit) {
         return jdbc.query("SELECT * FROM vk_articles ORDER BY planned_for DESC, id DESC LIMIT ?", MAPPER, limit);
     }
