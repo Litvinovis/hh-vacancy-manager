@@ -115,6 +115,20 @@ public class TelegramMetrics {
         }).set(totalViews);
     }
 
+    private final Map<String, AtomicInteger> postsSampledGauges = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** Сколько постов канала попало в выборку, по которой посчитаны views/reactions_recent. */
+    public void recordPostsSampled(String channel, int posts) {
+        if (channel == null) return;
+        postsSampledGauges.computeIfAbsent(channel, ch -> {
+            AtomicInteger value = new AtomicInteger();
+            Gauge.builder("telegram_channel_posts_recent", value, AtomicInteger::get)
+                .description("Posts in the latest engagement sample of this channel")
+                .tag("application", "hh-gui").tag("channel", ch).register(registry);
+            return value;
+        }).set(posts);
+    }
+
     /** Reaction counts summed across the posts just re-scraped from this channel, tagged by emoji. */
     public void recordReactions(String channel, Map<String, Integer> reactionCounts) {
         if (channel == null || reactionCounts == null) return;

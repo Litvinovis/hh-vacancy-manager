@@ -136,6 +136,9 @@ public class ChannelEngagementTracker {
         }
         telegramMetrics.recordViews(channel, totalViews);
         telegramMetrics.recordReactions(channel, totalReactions);
+        // Число постов в выборке — чтобы на дашборде считать просмотры и реакции на пост:
+        // сумма по «последним N постам» растёт или падает просто от того, сколько постов попало.
+        telegramMetrics.recordPostsSampled(channel, messages.size());
     }
 
     /** Distinct chat_ids currently configured as SOME enabled search's public-post

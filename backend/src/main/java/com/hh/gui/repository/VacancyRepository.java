@@ -1376,6 +1376,15 @@ public class VacancyRepository {
         return result;
     }
 
+    /** Сколько вакансий в каждом посте VK: 1 — одиночный пост, больше — подборка. */
+    public Map<String, Integer> vkPostSizes() {
+        Map<String, Integer> sizes = new HashMap<>();
+        jdbc.query("SELECT vk_post_id, COUNT(*) AS n FROM vacancies WHERE vk_status='sent' AND vk_post_id IS NOT NULL " +
+                "GROUP BY vk_post_id",
+            rs -> { sizes.put(rs.getString("vk_post_id"), rs.getInt("n")); });
+        return sizes;
+    }
+
     /** Отметить вакансии подборки отправленными — один пост, общий post_id. */
     public void markVkSentBatch(List<Long> ids, String postId) {
         String now = Instant.now().toString();
