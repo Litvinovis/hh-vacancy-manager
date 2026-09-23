@@ -210,7 +210,9 @@ public class RuntimeConfig {
     // sane value can be picked from actual rejection data, not a guess.
     private volatile int autoApproveScoreThreshold = 0;
     private volatile int maxApproved = 10;
-    private volatile int cooldownHours = 0;
+    // 2 ч по умолчанию (24.09.2026): «0 = до 06:00» при исчерпании провайдеров днём
+    // останавливало анализ почти на сутки (18.09: пауза с 11:56 до 06:00).
+    private volatile int cooldownHours = 2;
     private volatile int pipelineBatchSize = 10;
     private volatile boolean notificationsEnabled = false;
     // Separate master switch for public-channel sends (public-format posts, delayed
@@ -457,9 +459,8 @@ public class RuntimeConfig {
                 "number", 1, 50, maxApproved),
 
             SettingDescriptor.of("cooldownHours", "Охлаждение после 429",
-                "Продолжительность блокировки AI-запросов после ошибки 429 (rate limit). " +
-                "0 = до 06:00 следующего дня (по умолчанию). " +
-                "Иначе — указанное количество часов от текущего момента.",
+                "На сколько часов остановить AI-запросы, когда все провайдеры исчерпаны. " +
+                "По умолчанию 2. 0 — до 06:00 следующего дня (при сбое днём это почти сутки простоя).",
                 "number", 0, 72, cooldownHours),
 
             SettingDescriptor.of("pipelineBatchSize", "Размер пачки пайплайна",

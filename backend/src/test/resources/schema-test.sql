@@ -90,6 +90,7 @@ CREATE TABLE IF NOT EXISTS vacancies (
     vk_queued_at VARCHAR(64),
     vk_post_id VARCHAR(64),
     vk_published_at VARCHAR(64),
+    ai_model VARCHAR(128),
     found_by_scan INTEGER DEFAULT 0,
     dedup_key VARCHAR(512) DEFAULT '',
     last_checked_at VARCHAR(64) DEFAULT NULL,

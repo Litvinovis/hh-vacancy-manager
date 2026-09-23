@@ -801,4 +801,31 @@ class VacancyAiAnalyzerTest {
     void parsePrescreen_emptyArrayMeansEverythingPasses() throws Exception {
         assertTrue(analyzer.parsePrescreenResponse(completion("[]")).isEmpty());
     }
+
+    // ── какая модель ответила и справилась ли (ModelHealth, 24.09.2026) ──
+
+    @Test
+    void analyzeBatch_recordsRespondingModel_andCountsOmissionAsFailure() throws Exception {
+        RuntimeConfig config = new RuntimeConfig();
+        config.setAiProviders(List.of(new AiProviderConfig("test", "http://localhost:8089/mock", "k", "a:free, b:free")));
+        AiMetrics metrics = new AiMetrics(new SimpleMeterRegistry(), config);
+        ModelHealth health = new ModelHealth();
+        String body = new ObjectMapper().writeValueAsString(java.util.Map.of(
+            "model", "b:free",
+            "choices", List.of(java.util.Map.of("message", java.util.Map.of("content",
+                "[{\"id\":\"1\",\"score\":80,\"verdict\":\"yes\",\"reason\":\"ок\",\"noveltyColor\":\"yellow\",\"noveltyNote\":\"ок\"}]")))));
+        VacancyAiAnalyzer stub = new VacancyAiAnalyzer(config, new AiProviderManager(config, metrics), metrics,
+                new com.hh.gui.client.CurrencyRateService()) {
+            @Override String callLlm(String prompt, int maxTokens) { return body; }
+        };
+        stub.setModelHealth(health);
+        Vacancy one = new Vacancy(); one.setHhId("1"); one.setTitle("Ассистент"); one.setCompany("ООО");
+        Vacancy two = new Vacancy(); two.setHhId("2"); two.setTitle("Оператор"); two.setCompany("ООО");
+        SearchJob job = new SearchJob(); job.personName = "p"; job.searchName = "s";
+
+        var results = stub.analyzeBatch(List.of(one, two), job);
+
+        assertEquals("b:free", results.get(0).model(), "вердикт помечен моделью, которая реально ответила");
+        assertEquals("0", health.snapshot().get("b:free").outcomes, "вторая вакансия пропущена — ответ засчитан как сбой");
+    }
 }

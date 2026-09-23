@@ -99,6 +99,9 @@ public class SchemaMigrator implements ApplicationRunner {
         addColumnIfMissing("vacancies", "vk_queued_at", "TEXT DEFAULT NULL");
         addColumnIfMissing("vacancies", "vk_post_id", "TEXT DEFAULT NULL");
         addColumnIfMissing("vacancies", "vk_published_at", "TEXT DEFAULT NULL");
+        // Какая модель дала вердикт (24.09.2026): разные бесплатные модели ставят оценки по-
+        // разному, а планка канала одна — без этого расхождение было не увидеть.
+        addColumnIfMissing("vacancies", "ai_model", "TEXT DEFAULT NULL");
         addColumnIfMissing("subscriptions", "cancel_requested", "INTEGER NOT NULL DEFAULT 0");
         addColumnIfMissing("subscriptions", "renewal_reminder_sent_at", "TEXT DEFAULT NULL");
 

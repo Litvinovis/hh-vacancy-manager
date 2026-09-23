@@ -129,6 +129,7 @@ CREATE TABLE IF NOT EXISTS vacancies (
     vk_queued_at TEXT DEFAULT NULL,
     vk_post_id TEXT DEFAULT NULL,
     vk_published_at TEXT DEFAULT NULL,
+    ai_model TEXT DEFAULT NULL,
     found_by_scan INTEGER DEFAULT 0,
     -- dedup_key: normalized title+employer (city-independent) — lets the pipeline
     -- recognize "same real posting, different city" (e.g. the same remote support

@@ -27,10 +27,16 @@ class FreeModelUpdaterTest {
         Map<String, Integer> scoreById = new java.util.HashMap<>();
         /** Модели, чья проверка падает с 429. */
         Set<String> rateLimited = Set.of();
+        /** Модели, чья проверка падает по таймауту или 5xx. */
+        Set<String> transientFail = Set.of();
         final List<String> probed = new ArrayList<>();
 
         TestUpdater(RuntimeConfig config) {
             super(config, null);
+        }
+
+        TestUpdater(RuntimeConfig config, ModelHealth health) {
+            super(config, null, health);
         }
 
         @Override
@@ -42,6 +48,7 @@ class FreeModelUpdaterTest {
         protected int probeModel(String modelId) {
             probed.add(modelId);
             if (rateLimited.contains(modelId)) return FreeModelUpdater.RATE_LIMITED;
+            if (transientFail.contains(modelId)) return FreeModelUpdater.TRANSIENT;
             if (scoreById.containsKey(modelId)) return scoreById.get(modelId);
             return healthy.contains(modelId) ? FreeModelUpdater.PROBE_MAX_SCORE : 0;
         }
@@ -459,5 +466,84 @@ class FreeModelUpdaterTest {
 
         assertEquals(1, updater.probed.stream().filter("dead/instruct:free"::equals).count(),
             "кандидат проверяется один раз");
+    }
+
+    // ── история моделей (ModelHealth, 24.09.2026) ──
+
+    private TestUpdater withHealth(ModelHealth health) {
+        TestUpdater updater = new TestUpdater(config, health);
+        updater.catalog = List.of(model("a/one:free", 100_000), model("b/two:free", 100_000),
+            model("c/three:free", 100_000), model("d/new-instruct:free", 200_000), model("e/other-instruct:free", 200_000));
+        return updater;
+    }
+
+    @Test
+    void timeoutOnIncumbent_keepsItUntilSeveralRefreshesInARow() {
+        // 23.09.2026 живую nemotron-3-ultra исключили после двух таймаутов в одной проверке.
+        ModelHealth health = new ModelHealth();
+        for (int refresh = 1; refresh < ModelHealth.TRANSIENT_STRIKES_TO_EVICT; refresh++) {
+            TestUpdater updater = withHealth(health);
+            updater.healthy = Set.of("a/one:free", "c/three:free", "d/new-instruct:free");
+            updater.transientFail = Set.of("b/two:free");
+            assertEquals("unchanged", updater.refresh().get("status"), "проверка " + refresh + ": перегрузка — не повод менять");
+            assertEquals(CURRENT_LIST, openrouterModel());
+        }
+        TestUpdater updater = withHealth(health);
+        updater.healthy = Set.of("a/one:free", "c/three:free", "d/new-instruct:free");
+        updater.transientFail = Set.of("b/two:free");
+        assertEquals("updated", updater.refresh().get("status"), "не отвечает несколько проверок подряд — заменяем");
+        assertFalse(openrouterModel().contains("b/two:free"));
+    }
+
+    @Test
+    void answeredProbe_resetsTimeoutStreak() {
+        ModelHealth health = new ModelHealth();
+        health.recordTransientFailure("b/two:free");
+        health.recordTransientFailure("b/two:free");
+        TestUpdater updater = withHealth(health);
+        updater.healthy = Set.of("a/one:free", "b/two:free", "c/three:free");
+        updater.refresh();
+        assertEquals(1, health.recordTransientFailure("b/two:free"), "успешная проба обнуляет серию");
+    }
+
+    @Test
+    void productionFailures_evictModelEvenIfProbePasses() {
+        ModelHealth health = new ModelHealth();
+        for (int i = 0; i < ModelHealth.MIN_OUTCOMES_TO_JUDGE; i++) health.recordOutcome("b/two:free", i % 5 == 0);
+        TestUpdater updater = withHealth(health);
+        updater.healthy = Set.of("a/one:free", "b/two:free", "c/three:free", "d/new-instruct:free");
+
+        Map<String, Object> summary = updater.refresh();
+
+        assertEquals("updated", summary.get("status"));
+        assertEquals(List.of("b/two:free"), summary.get("unhealthyCurrent"), "в работе ломает 80% ответов");
+        assertNull(health.failureRate("b/two:free"), "после замены история модели очищена");
+    }
+
+    @Test
+    void blockedCandidate_isNotProbedAgain() {
+        ModelHealth health = new ModelHealth();
+        health.block("d/new-instruct:free", System.currentTimeMillis());
+        TestUpdater updater = withHealth(health);
+        updater.healthy = Set.of("a/one:free", "c/three:free", "e/other-instruct:free");
+
+        updater.refresh();
+
+        assertFalse(updater.probed.contains("d/new-instruct:free"), "403 недавно — не тратим на неё проверку");
+        assertTrue(openrouterModel().contains("e/other-instruct:free"));
+    }
+
+    @Test
+    void equalScores_fasterModelWins() {
+        ModelHealth health = new ModelHealth();
+        health.recordLatency("d/new-instruct:free", 9000);
+        health.recordLatency("e/other-instruct:free", 1500);
+        TestUpdater updater = withHealth(health);
+        updater.healthy = Set.of("a/one:free", "c/three:free", "d/new-instruct:free", "e/other-instruct:free");
+
+        updater.refresh();
+
+        assertEquals("a/one:free, c/three:free, e/other-instruct:free", openrouterModel(),
+            "при равной оценке пробы — та, что отвечает быстрее, а не с длинным контекстом");
     }
 }

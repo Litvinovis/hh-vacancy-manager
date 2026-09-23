@@ -1326,6 +1326,28 @@ public class VacancyRepository {
         return n != null ? n : 0;
     }
 
+    /**
+     * Модель, давшая вердикт. Только у вакансии, которую модель оценивала сама: клоны,
+     * получившие вердикт копированием, в статистику по моделям не идут.
+     */
+    public void setAiModel(String hhId, String person, String searchName, String model) {
+        jdbc.update("UPDATE vacancies SET ai_model=? WHERE hh_id=? AND person=? AND search_name=?",
+            model, hhId, person, searchName);
+    }
+
+    /** Сводка по моделям: сколько оценила, средний скор, доля одобренных. */
+    public record ModelScoreStats(String model, int analyzed, double avgScore, double approvedShare) {}
+
+    public List<ModelScoreStats> modelScoreStats(String sinceIso) {
+        return jdbc.query("SELECT ai_model, COUNT(*) AS n, AVG(ai_score) AS avg_score, " +
+                "AVG(CASE WHEN ai_verdict='yes' THEN 1.0 ELSE 0.0 END) AS approved " +
+                "FROM vacancies WHERE ai_model IS NOT NULL AND ai_verdict IN ('yes','no','fraud') AND updated_at >= ? " +
+                "GROUP BY ai_model",
+            (rs, i) -> new ModelScoreStats(rs.getString("ai_model"), rs.getInt("n"),
+                rs.getDouble("avg_score"), rs.getDouble("approved")),
+            sinceIso);
+    }
+
     /** Прошлое решение по карточке — для памяти прескрина (см. VacancyDiscovery.fromUrl). */
     public record PrescreenMemo(String title, String employer, String verdict, String reason, boolean hasSalary) {}
 
