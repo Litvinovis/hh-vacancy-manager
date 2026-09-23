@@ -180,6 +180,20 @@ public class VacancyPipelineService {
         }
     }
 
+    /**
+     * Длительность шага прогона в метрику pipeline_step_seconds{source,step}. Прогоны идут не
+     * через @Scheduled, а через SchedulingConfigurer, и Spring их не замеряет — сколько
+     * длится скрейп или анализ, раньше было видно только по разнице меток времени в логе.
+     */
+    private int timed(String source, String step, java.util.function.IntSupplier body) {
+        long start = System.nanoTime();
+        try {
+            return body.getAsInt();
+        } finally {
+            metrics.recordPipelineStep(source, step, System.nanoTime() - start);
+        }
+    }
+
     /** Protected only as the seam VacancyPipelineServiceTest uses to assert mutual exclusion. */
     protected PipelineResult runFullPipelineLocked(SearchJob job, boolean deferSmallAiBatches) {
         log.info("=== Пайплайн: {} · {} ===", job.personName, job.searchName);
@@ -192,21 +206,21 @@ public class VacancyPipelineService {
         boolean urlOnly = (job.queries == null || job.queries.isEmpty())
             && job.sourceUrl != null && !job.sourceUrl.isBlank();
         if (urlOnly) {
-            discovered = discovery.fromUrl(job, job.sourceUrl, VacancyDiscovery.MAX_URL_SEARCH_PAGES);
+            discovered = timed("url", "discover", () -> discovery.fromUrl(job, job.sourceUrl, VacancyDiscovery.MAX_URL_SEARCH_PAGES));
             log.info("Шаг 1 по ссылке ({} · {}): {} новых вакансий", job.personName, job.searchName, discovered);
         } else {
-            discovered = discovery.fromRss(job);
+            discovered = timed("rss", "discover", () -> discovery.fromRss(job));
             log.info("Шаг 1 ({} · {}): {} новых вакансий", job.personName, job.searchName, discovered);
         }
 
-        int scraped = scrapePending(job);
+        int scraped = timed(urlOnly ? "url" : "rss", "scrape", () -> scrapePending(job));
         log.info("Шаг 2 ({} · {}): скрейпинг обработал {} записей", job.personName, job.searchName, scraped);
 
         int analyzed;
         if (deferSmallAiBatches && shouldDeferAnalysis(job)) {
             analyzed = 0;
         } else {
-            analyzed = analyzePending(job, runtimeConfig.getMaxPerRun());
+            analyzed = timed(urlOnly ? "url" : "rss", "analyze", () -> analyzePending(job, runtimeConfig.getMaxPerRun()));
             log.info("Шаг 3 ({} · {}): {} вакансий проанализировано AI", job.personName, job.searchName, analyzed);
         }
 
@@ -279,13 +293,13 @@ public class VacancyPipelineService {
     private PipelineResult runFullPipelineFromUrlLocked(SearchJob job, String url, int maxPages) {
         log.info("=== Пайплайн по ссылке: {} · {} ({}) ===", job.personName, job.searchName, url);
 
-        int discovered = discovery.fromUrl(job, url, maxPages);
+        int discovered = timed("url", "discover", () -> discovery.fromUrl(job, url, maxPages));
         log.info("Шаг 1 по ссылке ({} · {}): {} новых вакансий", job.personName, job.searchName, discovered);
 
-        int scraped = scrapePending(job);
+        int scraped = timed("url", "scrape", () -> scrapePending(job));
         log.info("Шаг 2 ({} · {}): скрейпинг обработал {} записей", job.personName, job.searchName, scraped);
 
-        int analyzed = analyzePending(job, runtimeConfig.getMaxPerRun());
+        int analyzed = timed("url", "analyze", () -> analyzePending(job, runtimeConfig.getMaxPerRun()));
         log.info("Шаг 3 ({} · {}): {} вакансий проанализировано AI", job.personName, job.searchName, analyzed);
 
         List<Vacancy> approved = vacancyRepo.findUnnotifiedApproved(
@@ -379,13 +393,13 @@ public class VacancyPipelineService {
             return skippedResult;
         }
         try {
-            int discovered = discovery.fromTelegram(job, channels);
+            int discovered = timed("telegram", "discover", () -> discovery.fromTelegram(job, channels));
             log.info("Шаг 1 Telegram ({} · {}): {} новых кандидатов", job.personName, job.searchName, discovered);
 
-            int scraped = scrapePending(job);
+            int scraped = timed("telegram", "scrape", () -> scrapePending(job));
             log.info("Шаг 2 ({} · {}): скрейпинг обработал {} записей", job.personName, job.searchName, scraped);
 
-            int analyzed = analyzePending(job, runtimeConfig.getMaxPerRun());
+            int analyzed = timed("telegram", "analyze", () -> analyzePending(job, runtimeConfig.getMaxPerRun()));
             log.info("Шаг 3 ({} · {}): {} вакансий проанализировано AI", job.personName, job.searchName, analyzed);
 
             List<Vacancy> approved = vacancyRepo.findUnnotifiedApproved(
