@@ -157,7 +157,10 @@ jobs:
           sudo chown rover:rover /opt/hh-gui/tg-scraper/vk-token-refresh.js
           sudo cp scripts/vk-token-refresh.service scripts/vk-token-refresh.timer /etc/systemd/system/
           sudo systemctl daemon-reload
-          sudo systemctl enable --now vk-token-refresh.timer
+          sudo systemctl enable vk-token-refresh.timer
+          # restart, а не только --now: уже запущенный таймер без перезапуска держит
+          # расписание, вычисленное по старому OnCalendar.
+          sudo systemctl restart vk-token-refresh.timer
 
       - name: Deploy ops scripts (watchdogs, session backup, weekly scraper restart)
         run: |

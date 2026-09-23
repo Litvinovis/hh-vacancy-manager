@@ -93,6 +93,13 @@ public class AiMetrics {
         vkQueueDepth.set(depth);
     }
 
+    /** Длительность шага прогона пайплайна (discover/scrape/analyze) по источнику поиска. */
+    public void recordPipelineStep(String source, String step, long nanos) {
+        io.micrometer.core.instrument.Timer.builder("pipeline_step_seconds")
+            .tag("application", "hh-gui").tag("source", source).tag("step", step)
+            .register(registry).record(nanos, java.util.concurrent.TimeUnit.NANOSECONDS);
+    }
+
     /** Record a request attempt to a provider. */
     public void recordRequest(String provider) {
         registry.counter("ai_requests_total", "application", "hh-gui", "provider", provider).increment();
