@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly restart of hh-scraper (mitigates long-lived headless-Chromium disk-cache/fd leak)
+# tg-scraper deliberately excluded: it holds the persistent, logged-in
+# Telegram Web session in its Chromium profile (IndexedDB). Its own SIGTERM
+# handler is supposed to flush that safely, but there's a documented case of
+# it not responding in time and getting SIGKILLed — no guarantee the session
+# survives that. Only restart it via a real deploy, not this blind timer.
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl restart hh-scraper

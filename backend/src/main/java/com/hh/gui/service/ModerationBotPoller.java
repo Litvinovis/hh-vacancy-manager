@@ -146,11 +146,31 @@ public class ModerationBotPoller {
             }
             try {
                 poll();
+                if (consecutiveFailures > 0) {
+                    log.info("Поллер модерации снова на связи после {} неудачных опросов", consecutiveFailures);
+                    consecutiveFailures = 0;
+                }
             } catch (Exception e) {
-                log.error("Ошибка опроса поллера модерации: {}", e.getMessage(), e);
-                sleepQuietly(5000);
+                consecutiveFailures++;
+                // Сетевой сбой до Telegram длится минутами и часами, а опрос шёл каждые 5 с
+                // со стек-трейсом на каждый — 3541 ERROR за одну ночь 20.09.2026. Первый сбой
+                // пишем полностью, дальше — коротко и редко, а пауза растёт до минуты.
+                if (consecutiveFailures == 1) {
+                    log.error("Ошибка опроса поллера модерации: {}", e.getMessage(), e);
+                } else if (Integer.bitCount(consecutiveFailures) == 1) {   // 2, 4, 8, 16…
+                    log.warn("Поллер модерации: {} неудачных опросов подряд, последняя ошибка: {}", consecutiveFailures, e.getMessage());
+                }
+                sleepQuietly(failureBackoffMs(consecutiveFailures));
             }
         }
+    }
+
+    private int consecutiveFailures;
+    private static final long MAX_FAILURE_BACKOFF_MS = 60_000;
+
+    /** 5 с, 10 с, 20 с, 40 с, дальше минута. */
+    static long failureBackoffMs(int failures) {
+        return Math.min(MAX_FAILURE_BACKOFF_MS, 5000L << Math.min(failures - 1, 4));
     }
 
     /** Как часто перечитывать режим, пока поллер спит: смена режима — действие редкое и ручное. */

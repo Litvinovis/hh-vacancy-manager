@@ -105,6 +105,7 @@ public class SearchProfileFactory {
         job.subscriberFeed = search.isSubscriberFeed();
         job.publishPaceMinutes = search.getPublishPaceMinutes();
         job.telegramChannels = search.getTelegramChannels();
+        job.criteriaUpdatedAt = search.getUpdatedAt();
         return job;
     }
 }

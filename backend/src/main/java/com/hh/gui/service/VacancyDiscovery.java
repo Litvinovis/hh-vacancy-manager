@@ -170,6 +170,7 @@ public class VacancyDiscovery {
         }
         int pages = Math.min(Math.max(maxPages, 1), MAX_URL_SEARCH_PAGES);
         int saved = 0;
+        Map<String, VacancyRepository.PrescreenMemo> memory = null;   // лениво: только если найдутся новые карточки
 
         for (int page = 0; page < pages; page++) {
             ScraperClient.SearchPageResult result = scraperClient.searchByUrl(url, page);
@@ -193,8 +194,30 @@ public class VacancyDiscovery {
                 .toList();
             if (newHits.isEmpty()) continue;
 
-            Map<String, VacancyAiAnalyzer.AiResult> prescreen = aiAnalyzer.prescreenHits(newHits, job).stream()
-                .collect(Collectors.toMap(VacancyAiAnalyzer.AiResult::hhId, r -> r, (a, b) -> a));
+            if (memory == null) memory = prescreenMemory(job);
+            Map<String, VacancyAiAnalyzer.AiResult> prescreen = new HashMap<>();
+            List<ScraperClient.SearchHit> toAsk = new ArrayList<>();
+            int remembered = 0;
+            for (ScraperClient.SearchHit hit : newHits) {
+                VacancyRepository.PrescreenMemo memo = memory.get(memoKey(hit.title(), hit.employerName(),
+                    hit.salaryRawText() != null && !hit.salaryRawText().isBlank()));
+                if (memo == null) {
+                    toAsk.add(hit);
+                } else if (!"yes".equals(memo.verdict())) {
+                    prescreen.put(hit.hhId(), new VacancyAiAnalyzer.AiResult(hit.hhId(), 0, "no",
+                        stripPrescreenPrefix(memo.reason()), "", ""));
+                    remembered++;
+                } else {
+                    remembered++;   // уже одобряли — открываем без вопроса модели
+                }
+            }
+            if (remembered > 0) {
+                log.info("Прескрининг ({} · {}), страница {}: {} карточек решено по прошлым вердиктам без вызова AI",
+                    job.personName, job.searchName, page, remembered);
+                metrics.recordVacanciesDeduped(remembered);
+            }
+            aiAnalyzer.prescreenHits(toAsk, job)
+                .forEach(r -> prescreen.putIfAbsent(r.hhId(), r));
             long prescreenRejected = prescreen.values().stream().filter(r -> "no".equals(r.verdict())).count();
             metrics.recordPrescreenRejected(prescreenRejected);
             log.debug("Поиск по ссылке ({} · {}), страница {}: новых {}, из них отсеяно прескрином {}",
@@ -248,8 +271,10 @@ public class VacancyDiscovery {
         if (channels == null || channels.isEmpty()) return 0;
 
         List<Vacancy> candidates = new ArrayList<>();
+        Instant notBefore = Instant.now().minus(TELEGRAM_MAX_POST_AGE);
+        int tooOld = 0;
         for (String channel : channels) {
-            TelegramClient.ChannelResult result = telegramClient.fetchChannel(channel, 100);
+            TelegramClient.ChannelResult result = telegramClient.fetchChannel(channel, 100, notBefore);
             if (!result.ok()) {
                 log.warn("Telegram-канал @{} ({} · {}) недоступен: {}", channel, job.personName, job.searchName, result.reason());
                 int streak = consecutiveChannelFailures.merge(channel, 1, Integer::sum);
@@ -270,6 +295,11 @@ public class VacancyDiscovery {
 
             for (TelegramClient.TelegramMessage msg : result.items()) {
                 if (msg.text() == null || msg.text().isBlank()) continue;
+                Instant postedAt = parseInstantOrNull(msg.hhPublishedAt());
+                if (postedAt != null && postedAt.isBefore(notBefore)) {
+                    tooOld++;
+                    continue;
+                }
 
                 TelegramPostParser.HhLink hhLink = TelegramPostParser.hhLink(msg.text());
                 Vacancy v = new Vacancy();
@@ -281,6 +311,7 @@ public class VacancyDiscovery {
                 v.setRemote(job.isRemote());
                 v.setSourceQuery(job.searchName);
                 v.setUrl(msg.link());
+                if (postedAt != null) v.setHhPublishedAt(postedAt.toString());
 
                 if (hhLink != null) {
                     // Path A: reuse the normal hh.ru pipeline — this Telegram post was
@@ -352,6 +383,10 @@ public class VacancyDiscovery {
                 candidates.add(v);
             }
         }
+        if (tooOld > 0) {
+            log.debug("Telegram ({} · {}): пропущено {} постов старше {} дней", job.personName, job.searchName,
+                tooOld, TELEGRAM_MAX_POST_AGE.toDays());
+        }
         if (candidates.isEmpty()) return 0;
 
         List<Vacancy> filtered = filterExcluded(candidates, job.excludeWords);
@@ -382,6 +417,64 @@ public class VacancyDiscovery {
             }
         }
         return saved;
+    }
+
+    /**
+     * Прошлые решения этого поиска по названию+работодателю, принятые после последней правки
+     * его настроек. Работодатели перевыкладывают одну и ту же вакансию под новыми hh_id
+     * (23.09.2026: 532 отказа прескрина на 393 разных названия) — повторно спрашивать
+     * модель о том, что она уже решила, незачем. Карточки без работодателя в память не
+     * попадают: одно название у разных компаний — разные вакансии.
+     */
+    private Map<String, VacancyRepository.PrescreenMemo> prescreenMemory(SearchJob job) {
+        Map<String, VacancyRepository.PrescreenMemo> memory = new HashMap<>();
+        try {
+            for (VacancyRepository.PrescreenMemo m : vacancyRepo.findPrescreenMemory(job.personName, job.searchName, job.criteriaUpdatedAt)) {
+                // Отказ прескрина сохранён без зарплаты (у заглушки её нет, хотя модель видела
+                // её в карточке) — такой отказ годится для карточки и с зарплатой, и без.
+                boolean fromPrescreen = m.reason() != null && m.reason().startsWith("Прескрининг");
+                for (boolean salary : fromPrescreen ? new boolean[]{true, false} : new boolean[]{m.hasSalary()}) {
+                    String key = memoKey(m.title(), m.employer(), salary);
+                    if (key != null) memory.putIfAbsent(key, m);   // строки идут от свежих к старым
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Память прескрина ({} · {}) недоступна: {} — все карточки уйдут модели", job.personName, job.searchName, e.getMessage());
+        }
+        return memory;
+    }
+
+    /**
+     * Наличие зарплаты — часть ключа: частая причина отказа редакции «нет зарплаты», и
+     * перевыложенная уже с зарплатой вакансия должна получить свежую оценку.
+     */
+    static String memoKey(String title, String employer, boolean hasSalary) {
+        String t = DedupKeys.normalize(title);
+        String e = DedupKeys.normalize(employer);
+        if (t.isEmpty() || e.isEmpty() || (employer != null && employer.startsWith("@"))) return null;
+        return t + "|" + e + "|" + (hasSalary ? "$" : "-");
+    }
+
+    private static String stripPrescreenPrefix(String reason) {
+        if (reason == null) return "по прошлому решению";
+        return reason.startsWith("Прескрининг: ") ? reason.substring("Прескрининг: ".length()) : reason;
+    }
+
+    /**
+     * Посты старше этого не берутся. Причина не только в свежести: ретеншн удаляет строки
+     * через 30 дней после сбора, а тихий канал держит в последней сотне постов и
+     * двухмесячные — удалённый пост тут же находился снова как «новый», заново шёл в AI и
+     * мог быть опубликован второй раз. Порог заметно меньше срока хранения это исключает.
+     */
+    static final java.time.Duration TELEGRAM_MAX_POST_AGE = java.time.Duration.ofDays(14);
+
+    private static Instant parseInstantOrNull(String iso) {
+        if (iso == null || iso.isBlank()) return null;
+        try {
+            return Instant.parse(iso);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private List<ScraperClient.SearchHit> filterExcludedHits(List<ScraperClient.SearchHit> hits, List<String> excludeWords) {

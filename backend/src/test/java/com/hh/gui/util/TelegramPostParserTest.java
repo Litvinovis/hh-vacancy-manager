@@ -294,4 +294,11 @@ class TelegramPostParserTest {
         assertEquals("https://example.com/job",
             TelegramPostParser.externalUrl("Подробности тут: https://example.com/job."));
     }
+
+    @Test
+    void externalUrl_skipsAttachedImages_takesRealLink() {
+        String text = "Ассистент\nhttps://hooks.pro/media/2026/09/18/bot1/photos/Q1pI/file_4653.jpg\nАнкета: https://forms.gle/abc";
+        assertEquals("https://forms.gle/abc", TelegramPostParser.externalUrl(text));
+        assertNull(TelegramPostParser.externalUrl("Афиша https://cdn.example.com/poster.PNG"));
+    }
 }

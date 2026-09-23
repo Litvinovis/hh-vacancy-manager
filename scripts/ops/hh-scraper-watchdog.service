@@ -1,0 +1,6 @@
+[Unit]
+Description=Watchdog сайдкара скрейпа hh (notify-only)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/hh-scraper-watchdog.sh

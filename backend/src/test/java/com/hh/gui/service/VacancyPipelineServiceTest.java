@@ -1339,12 +1339,12 @@ class VacancyPipelineServiceTest {
     }
 
     private static TelegramClient.TelegramMessage tgMsg(String id, String text) {
-        return new TelegramClient.TelegramMessage(id, text, "2026-08-15T09:00:00.000Z",
+        return new TelegramClient.TelegramMessage(id, text, java.time.Instant.now().minusSeconds(3600).toString(),
             "https://t.me/testchan/" + id, "testchan", "telegram", null, java.util.Map.of());
     }
 
     private static TelegramClient.TelegramMessage tgMsg(String id, String text, Integer views, java.util.Map<String, Integer> reactions) {
-        return new TelegramClient.TelegramMessage(id, text, "2026-08-15T09:00:00.000Z",
+        return new TelegramClient.TelegramMessage(id, text, java.time.Instant.now().minusSeconds(3600).toString(),
             "https://t.me/testchan/" + id, "testchan", "telegram", views, reactions);
     }
 
@@ -1352,7 +1352,7 @@ class VacancyPipelineServiceTest {
         final java.util.Map<String, ChannelResult> byChannel;
         FakeTelegramClient(java.util.Map<String, ChannelResult> byChannel) { this.byChannel = byChannel; }
         @Override
-        public ChannelResult fetchChannel(String username, int limit) {
+        public ChannelResult fetchChannel(String username, int limit, java.time.Instant notBefore) {
             return byChannel.getOrDefault(username, new ChannelResult(true, null, List.of()));
         }
     }

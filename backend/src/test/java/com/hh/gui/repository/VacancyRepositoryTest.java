@@ -38,6 +38,45 @@ class VacancyRepositoryTest {
         jdbc.update("DELETE FROM users");
     }
 
+    // ── Очередь VK ──
+
+    @Test
+    void vkQueue_agePenaltyLetsOlderSlightlyWorseVacancyAhead_andClosedAreSkipped() {
+        long fresh90 = vkQueued("vk-1", 90, java.time.Instant.now());
+        long old85 = vkQueued("vk-2", 85, java.time.Instant.now().minus(java.time.Duration.ofDays(2)));
+        long closed = vkQueued("vk-3", 99, java.time.Instant.now());
+        jdbc.update("UPDATE vacancies SET closed_at=? WHERE id=?", java.time.Instant.now().toString(), closed);
+
+        // 85 двухдневной давности: 85 - 2*5 = 75 < 90 — свежая 90 первая, но старая не пропала
+        assertEquals(List.of(fresh90, old85), vacancyRepo.findVkQueued(10).stream().map(Vacancy::getId).toList());
+        assertEquals(2, vacancyRepo.countVkQueued(), "закрытая на hh в очередь не считается");
+    }
+
+    @Test
+    void vkQueue_expireDropsStaleAndClosed_digestCountsAsOnePost() {
+        long stale = vkQueued("vk-4", 90, java.time.Instant.now().minus(java.time.Duration.ofDays(4)));
+        long a = vkQueued("vk-5", 90, java.time.Instant.now());
+        long b = vkQueued("vk-6", 80, java.time.Instant.now());
+        long closed = vkQueued("vk-7", 80, java.time.Instant.now());
+        jdbc.update("UPDATE vacancies SET closed_at=? WHERE id=?", java.time.Instant.now().toString(), closed);
+
+        int expired = vacancyRepo.expireVkQueue(java.time.Instant.now().minus(java.time.Duration.ofDays(3)).toString());
+        assertEquals(2, expired);
+        assertEquals("expired", jdbc.queryForObject("SELECT vk_status FROM vacancies WHERE id=?", String.class, stale));
+
+        String before = java.time.Instant.now().minusSeconds(1).toString();
+        vacancyRepo.markVkSentBatch(List.of(a, b), "555");
+        assertEquals(1, vacancyRepo.countVkPublishedSince(before), "подборка — один пост, а не две публикации");
+        assertEquals(0, vacancyRepo.countVkQueued());
+    }
+
+    private long vkQueued(String hhId, int score, java.time.Instant queuedAt) {
+        Vacancy v = vacancyRepo.save(createTestVacancy(hhId, "Ассистент " + hhId, "new"));
+        jdbc.update("UPDATE vacancies SET vk_status='queued', vk_queued_at=?, ai_score=? WHERE id=?",
+            queuedAt.toString(), score, v.getId());
+        return v.getId();
+    }
+
     // ── Save and Find ──
 
     @Test

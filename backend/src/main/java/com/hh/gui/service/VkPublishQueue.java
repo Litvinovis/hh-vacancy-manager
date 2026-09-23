@@ -33,8 +33,21 @@ import java.util.List;
  * Правила выпуска, все настраиваются в RuntimeConfig:
  * <ul>
  *   <li>только внутри окна: от времени начала окна до следующего окна (последнее — до полуночи);</li>
- *   <li>не больше vkPostsPerWindow постов за окно;</li>
- *   <li>не чаще, чем раз в vkMinGapMinutes.</li>
+ *   <li>не больше vkPostsPerWindow постов за окно — статьи и опросы считаются вместе с вакансиями;</li>
+ *   <li>не чаще, чем раз в vkMinGapMinutes (после статьи — тоже).</li>
+ * </ul>
+ *
+ * Адаптивный размер поста (23.09.2026). Постов в день фиксированное число, а одобренных
+ * приходит то 10, то 100 — при одиночных постах очередь росла без предела (220 вакансий
+ * при 6 постах в день). Теперь на каждом выпуске хвост сравнивается с числом постов,
+ * оставшихся до конца дня ({@link #planPost}):
+ * <ul>
+ *   <li>хвост помещается в оставшиеся посты — одиночный пост с карточкой, как раньше;</li>
+ *   <li>не помещается — первый пост окна остаётся одиночным (лучшая вакансия, «витрина»),
+ *       остальные посты окна — подборки ровно такого размера, чтобы хвост разошёлся к
+ *       концу дня (не больше vkDigestMaxSize);</li>
+ *   <li>хвост больше, чем влезет даже в полные подборки, — все посты подборками по максимуму,
+ *       а что не успело выйти за vkQueueMaxAgeHours, снимается с очереди.</li>
  * </ul>
  * Часы инжектируются — расписание проверяется тестами без ожидания реального времени.
  */
@@ -80,16 +93,34 @@ public class VkPublishQueue {
             vacancies.size(), vacancyRepo.countVkQueued());
     }
 
+    /**
+     * После неудачного wall.post следующий выпуск не раньше чем через столько минут.
+     * Без паузы сбой VK превращался в попытку на каждом двухминутном тике.
+     */
+    static final long FAILURE_BACKOFF_MINUTES = 15;
+    /** Меньше трёх вакансий подборкой не выпускаем — это уже не подборка, а два поста в одном. */
+    static final int MIN_DIGEST_SIZE = 3;
+
+    private volatile Instant retryNotBefore = Instant.EPOCH;
+
+    /** Глубина очереди в метрику vk_queue_depth — на каждом тике, и вне окон тоже. */
+    public void refreshQueueMetric() {
+        metrics.setVkQueueDepth(vacancyRepo.countVkQueued());
+    }
+
     /** Тик планировщика: выпустить один пост, если окно открыто и лимиты позволяют. */
     public void publishDue() {
         if (!runtimeConfig.isVkEnabled()) return;
         Window window = currentWindow();
         if (window == null) return;
+        if (clock.instant().isBefore(retryNotBefore)) return;
 
-        int sentThisWindow = vacancyRepo.countVkPublishedSince(window.start.toInstant().toString());
-        if (sentThisWindow >= runtimeConfig.getVkPostsPerWindow()) return;
+        String windowStartIso = window.start.toInstant().toString();
+        int postsThisWindow = vacancyRepo.countVkPublishedSince(windowStartIso)
+            + (articles != null ? articles.countPublishedSince(windowStartIso) : 0);
+        if (postsThisWindow >= runtimeConfig.getVkPostsPerWindow()) return;
 
-        String last = vacancyRepo.lastVkPublishedAt();
+        String last = latest(vacancyRepo.lastVkPublishedAt(), articles != null ? articles.lastPublishedAt() : null);
         if (last != null) {
             Duration sinceLast = Duration.between(parseInstant(last), clock.instant());
             if (sinceLast.toMinutes() < runtimeConfig.getVkMinGapMinutes()) return;
@@ -99,9 +130,106 @@ public class VkPublishQueue {
         // дольше; занимает один пост окна, как и вакансия, чтобы лента не переполнялась.
         if (publishContentIfDue(window)) return;
 
-        List<Vacancy> next = vacancyRepo.findVkQueued(1);
+        expireStale();
+        int backlog = vacancyRepo.countVkQueued();
+        if (backlog == 0) return;
+        int size = planPost(backlog, postsThisWindow, remainingWindowsAfter(window));
+        List<Vacancy> next = vacancyRepo.findVkQueued(size);
         if (next.isEmpty()) return;
-        publishOne(next.get(0));
+        if (next.size() == 1) {
+            publishOne(next.get(0));
+        } else {
+            publishDigest(next, window, backlog);
+        }
+    }
+
+    /**
+     * Сколько вакансий выпустить этим постом: 1 — одиночный пост, больше — подборка.
+     *
+     * @param backlog         вакансий в очереди
+     * @param postsThisWindow постов, уже вышедших в текущем окне
+     * @param windowsAfter    сколько окон ещё впереди сегодня (без текущего)
+     */
+    int planPost(int backlog, int postsThisWindow, int windowsAfter) {
+        int perWindow = runtimeConfig.getVkPostsPerWindow();
+        int maxDigest = Math.min(runtimeConfig.getVkDigestMaxSize(), VkPostFormatter.MAX_DIGEST_ITEMS);
+        if (maxDigest < 2) return 1;
+
+        int postsLeft = (perWindow - postsThisWindow) + windowsAfter * perWindow;
+        if (backlog <= postsLeft) return 1;   // всё и так выйдет одиночными — подборка не нужна
+
+        // Первый пост каждого окна — «витрина» с одной вакансией и карточкой; остальные
+        // посты окна — подборки. При одном посте на окно витрин нет: иначе подборок не было бы вовсе.
+        boolean showcases = perWindow >= 2;
+        int showcasesLeft = showcases ? (postsThisWindow == 0 ? 1 : 0) + windowsAfter : 0;
+        int digestsLeft = postsLeft - showcasesLeft;
+        boolean overflow = backlog > showcasesLeft + (long) digestsLeft * maxDigest;
+        if (showcases && postsThisWindow == 0 && !overflow) return 1;
+
+        int slots = overflow ? postsLeft : digestsLeft;
+        int remaining = overflow ? backlog : backlog - showcasesLeft;
+        int size = (remaining + slots - 1) / Math.max(1, slots);
+        if (size <= 1) return 1;
+        return Math.max(MIN_DIGEST_SIZE, Math.min(maxDigest, size));
+    }
+
+    /** Сколько окон сегодня начинается после текущего. */
+    private int remainingWindowsAfter(Window window) {
+        LocalTime current = window.start.toLocalTime();
+        return (int) windowStarts().stream().filter(t -> t.isAfter(current)).count();
+    }
+
+    /** Снять с очереди то, что простояло дольше vkQueueMaxAgeHours или закрыто на hh. */
+    private void expireStale() {
+        String cutoff = clock.instant().minus(Duration.ofHours(runtimeConfig.getVkQueueMaxAgeHours())).toString();
+        int expired = vacancyRepo.expireVkQueue(cutoff);
+        if (expired > 0) {
+            log.info("Очередь VK: снято {} вакансий — простояли дольше {} ч или закрыты на hh",
+                expired, runtimeConfig.getVkQueueMaxAgeHours());
+        }
+    }
+
+    private void publishDigest(List<Vacancy> items, Window window, int backlog) {
+        String screenName = vkNotifier.screenName();
+        String text = VkPostFormatter.digestPost(items, screenName, window.start.getHour());
+        Long postId = vkNotifier.postReturningId(text, digestCardFor(items, window));
+        if (postId == null) {
+            retryNotBefore = clock.instant().plus(Duration.ofMinutes(FAILURE_BACKOFF_MINUTES));
+            log.warn("VK: подборка из {} вакансий не отправлена — вакансии остаются в очереди, повтор не раньше чем через {} мин",
+                items.size(), FAILURE_BACKOFF_MINUTES);
+            return;
+        }
+        vacancyRepo.markVkSentBatch(items.stream().map(Vacancy::getId).toList(), String.valueOf(postId));
+        metrics.recordVkPost();
+        metrics.recordVkPostSize(items.size());
+        log.info("Опубликована в VK подборка из {} вакансий (post_id={}, id={}, в очереди было {}, осталось {})",
+            items.size(), postId, items.stream().map(v -> String.valueOf(v.getId())).toList(), backlog,
+            vacancyRepo.countVkQueued());
+
+        String comment = VkPostFormatter.digestComment(items);
+        if (comment != null && !vkNotifier.comment(postId, comment)) {
+            log.warn("VK: комментарий со ссылками под подборкой {} не создан — ссылки на отклик потеряны", postId);
+        }
+    }
+
+    private String digestCardFor(List<Vacancy> items, Window window) {
+        if (!runtimeConfig.isVkCardsEnabled()) return null;
+        try {
+            int hour = window.start.getHour();
+            String kicker = hour < 12 ? "утренняя подборка" : hour < 17 ? "дневная подборка" : "вечерняя подборка";
+            byte[] png = com.hh.gui.content.CardImageRenderer.digestCard(items, kicker, communityLabel());
+            return vkNotifier.uploadWallPhoto(png, "digest-" + items.get(0).getId() + ".png");
+        } catch (Exception e) {
+            log.warn("Карточка подборки не создана: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /** Более поздняя из двух ISO-меток (любая может быть null). */
+    private static String latest(String a, String b) {
+        if (a == null) return b;
+        if (b == null) return a;
+        return parseInstant(a).isAfter(parseInstant(b)) ? a : b;
     }
 
     /** Второе окно дня (или единственное) — слот для статей и опросов. */
@@ -124,6 +252,7 @@ public class VkPublishQueue {
         }
         a.setPublishedAt(clock.instant().toString());
         if (postId == null) {
+            retryNotBefore = clock.instant().plus(Duration.ofMinutes(FAILURE_BACKOFF_MINUTES));
             a.setStatus("failed");
             articles.update(a);
             log.warn("VK: {} «{}» не опубликован(а)", a.isPoll() ? "опрос" : "статья", a.getTitle());
@@ -141,12 +270,17 @@ public class VkPublishQueue {
         String screenName = vkNotifier.screenName();
         Long postId = vkNotifier.postReturningId(VkPostFormatter.publicPost(v, screenName), cardFor(v));
         if (postId == null) {
-            vacancyRepo.markVkFailed(v.getId());
-            log.warn("VK: пост не отправлен, вакансия id={} помечена failed (вернётся в очередь при следующем enqueue)", v.getId());
+            // Раньше вакансия помечалась failed «до следующего enqueue», но enqueue зовётся
+            // только для новых id — она не возвращалась никогда. Теперь остаётся в очереди,
+            // а повтор сдвигается паузой; безнадёжную снимет срок жизни очереди.
+            retryNotBefore = clock.instant().plus(Duration.ofMinutes(FAILURE_BACKOFF_MINUTES));
+            log.warn("VK: пост не отправлен, вакансия id={} остаётся в очереди, повтор не раньше чем через {} мин",
+                v.getId(), FAILURE_BACKOFF_MINUTES);
             return;
         }
         vacancyRepo.markVkSent(v.getId(), String.valueOf(postId));
         metrics.recordVkPost();
+        metrics.recordVkPostSize(1);
         log.info("Опубликовано в VK: вакансия id={} «{}» (post_id={}, в очереди осталось {})",
             v.getId(), v.getTitle(), postId, vacancyRepo.countVkQueued());
 

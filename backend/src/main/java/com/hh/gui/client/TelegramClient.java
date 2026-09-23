@@ -66,7 +66,16 @@ public class TelegramClient {
      * take longer than a typical HTTP client default.
      */
     public ChannelResult fetchChannel(String username, int limit) {
-        ChannelResult result = fetchChannelOnce(username, limit);
+        return fetchChannel(username, limit, null);
+    }
+
+    /**
+     * @param notBefore посты старше этого момента не нужны — сайдкар перестаёт прокручивать
+     *                  историю, как только до них дошёл (null — без ограничения). Для тихого
+     *                  канала это 1–2 экрана вместо 15 прокруток ради сотни старых постов.
+     */
+    public ChannelResult fetchChannel(String username, int limit, java.time.Instant notBefore) {
+        ChannelResult result = fetchChannelOnce(username, limit, notBefore);
         for (int attempt = 1; attempt <= NOT_FOUND_RETRIES && !result.ok() && "channel_not_found".equals(result.reason()); attempt++) {
             log.debug("Telegram-канал @{}: channel_not_found, повтор {}/{}", username, attempt, NOT_FOUND_RETRIES);
             try {
@@ -75,15 +84,15 @@ public class TelegramClient {
                 Thread.currentThread().interrupt();
                 return result;
             }
-            result = fetchChannelOnce(username, limit);
+            result = fetchChannelOnce(username, limit, notBefore);
         }
         return result;
     }
 
-    private ChannelResult fetchChannelOnce(String username, int limit) {
+    private ChannelResult fetchChannelOnce(String username, int limit, java.time.Instant notBefore) {
         try {
             String url = tgScraperBaseUrl + "/channel?username=" + URLEncoder.encode(username, StandardCharsets.UTF_8)
-                + "&limit=" + limit;
+                + "&limit=" + limit + (notBefore != null ? "&since=" + notBefore.getEpochSecond() : "");
             HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
             conn.setRequestMethod("GET");
             conn.setConnectTimeout(10000);
@@ -105,7 +114,11 @@ public class TelegramClient {
             List<TelegramMessage> items = new ArrayList<>();
             for (Map<String, Object> item : rawItems) {
                 items.add(new TelegramMessage(
-                    str(item.get("id")), str(item.get("text")), str(item.get("hhPublishedAt")),
+                    str(item.get("id")), str(item.get("text")),
+                    // Сайдкар отдаёт дату как publishedAt; после переименования колонки в
+                    // hh_published_at (PR #220) здесь стали читать несуществующий ключ, и у всех
+                    // Telegram-вакансий дата публикации пропала (748 из 748 на 23.09.2026).
+                    str(item.getOrDefault("publishedAt", item.get("hhPublishedAt"))),
                     str(item.get("link")), str(item.get("channel")), str(item.get("source")),
                     views(item.get("views")), reactions(item.get("reactions"))));
             }

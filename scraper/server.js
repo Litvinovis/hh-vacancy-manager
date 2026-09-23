@@ -40,6 +40,26 @@ const PROFILE_DIR = process.env.SCRAPER_PROFILE_DIR || path.join(__dirname, 'pro
 let contextPromise = null;
 let queue = Promise.resolve();
 let lastScrapeAt = 0;
+let queueDepth = 0;
+// Counters for /health — lets the watchdog and a human see what the sidecar has actually
+// been doing (and whether it's being blocked) without grepping the journal.
+const stats = { startedAt: new Date().toISOString(), okCount: 0, failedCount: 0, blockedCount: 0, lastOkAt: null, lastFailReason: null };
+
+// Third-party analytics/ad beacons on hh.ru pages. None of them carry anything we read,
+// but each is extra requests per page, extra disk cache in the long-lived profile (which
+// grew to 1.6 GB, see deploy.yml) and extra time before the page settles. Blocking them
+// is what every ad-blocker user's browser does, so it isn't an unusual fingerprint —
+// unlike blocking first-party JS/CSS, which stays untouched (see the route below).
+// DDoS-Guard's own hosts are deliberately NOT on this list.
+const BLOCKED_THIRD_PARTY = /(^|\.)(mc\.yandex\.(ru|com)|an\.yandex\.ru|google-analytics\.com|googletagmanager\.com|doubleclick\.net|top-fwz1\.mail\.ru|counter\.yadro\.ru|ads\.adfox\.ru|mediametrics\.ru|tns-counter\.ru)$/i;
+
+function isBlockedThirdParty(rawUrl) {
+  try {
+    return BLOCKED_THIRD_PARTY.test(new URL(rawUrl).hostname);
+  } catch (_) {
+    return false;
+  }
+}
 
 /**
  * Playwright's bundled Chromium version drifts with every playwright upgrade;
@@ -75,8 +95,13 @@ async function getContext() {
       await context.route('**/*', (route) => {
         const type = route.request().resourceType();
         if (type === 'image' || type === 'media' || type === 'font') return route.abort();
+        if (isBlockedThirdParty(route.request().url())) return route.abort();
         return route.continue();
       });
+      // A browser that dies on its own (OOM kill, crash) closes the context; without this
+      // the next request would reuse the dead object and only a matching error message
+      // (see resetContextIfCrashed) would ever trigger a relaunch.
+      context.on('close', () => { contextPromise = null; });
       return context;
     })();
     contextPromise.catch(() => { contextPromise = null; }); // failed launch → retry on next call
@@ -101,6 +126,7 @@ function nextDelayMs() {
 
 /** Serialize all scrape calls through this so concurrent HTTP requests don't fire off parallel page loads. */
 function enqueue(task) {
+  queueDepth++;
   const result = queue.then(async () => {
     const elapsed = Date.now() - lastScrapeAt;
     const delay = nextDelayMs();
@@ -111,6 +137,7 @@ function enqueue(task) {
       return await task();
     } finally {
       lastScrapeAt = Date.now();
+      queueDepth--;
     }
   });
   // Keep the queue alive even if this task rejects.
@@ -367,6 +394,14 @@ async function scrapeVacancy(hhId) {
       if (/вакансия в архиве|вакансия закрыта|вакансия не найдена или скрыта/i.test(bodyText)) {
         return { ok: false, reason: 'archived' };
       }
+      // DDoS-Guard can also answer 200 with its JS challenge page. Reported as a
+      // per-vacancy "no_job_posting_data" that looked like a layout glitch, so the backend
+      // kept hammering a blocked session instead of freezing scraping like it does for a
+      // 403 challenge. Same signature check as the 403 branch above.
+      const html = await page.content().catch(() => '');
+      if (/ddos-?guard/i.test(html) && !/data-qa="vacancy-title"/.test(html)) {
+        return { ok: false, reason: 'blocked' };
+      }
       // Page loaded but didn't render the expected structure (unexpected layout,
       // or a bot-challenge page slipping through).
       return { ok: false, reason: 'no_job_posting_data' };
@@ -427,12 +462,25 @@ async function scrapeVacancy(hhId) {
   }
 }
 
+function recordOutcome(result) {
+  if (result.ok) {
+    stats.okCount++;
+    stats.lastOkAt = new Date().toISOString();
+  } else {
+    stats.failedCount++;
+    if (result.reason === 'blocked') stats.blockedCount++;
+    stats.lastFailReason = result.reason;
+  }
+}
+
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
 
   if (url.pathname === '/health') {
+    // Always 200 while the process answers — deploy.yml's smoke test relies on that.
+    // The details are for the watchdog and for a human looking at a stuck pipeline.
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ ok: true }));
+    res.end(JSON.stringify({ ...stats, ok: true, browser: contextPromise != null, queueDepth }));
     return;
   }
 
@@ -449,6 +497,7 @@ const server = http.createServer((req, res) => {
     const started = Date.now();
     enqueueScrapeCoalesced(hhId)
       .then((result) => {
+        recordOutcome(result);
         console.log(`[scrape] hhId=${hhId} ${result.ok ? 'ok' : `fail:${result.reason}`} ${Date.now() - started}ms`);
         res.writeHead(result.ok ? 200 : 502, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(result));
@@ -477,6 +526,7 @@ const server = http.createServer((req, res) => {
     const started = Date.now();
     enqueue(() => searchVacancies({ url: rawUrl, text, area, page: pageNum, schedule, salary }))
       .then((result) => {
+        recordOutcome(result);
         console.log(`[search] page=${pageNum} ${result.ok ? `ok items=${result.items.length}` : `fail:${result.reason}`} ${Date.now() - started}ms`);
         res.writeHead(result.ok ? 200 : 502, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(result));

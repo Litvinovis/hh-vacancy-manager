@@ -37,6 +37,12 @@ public class SearchJob {
     public boolean subscriberFeed;
     public Integer publishPaceMinutes;
     public List<String> telegramChannels;
+    /**
+     * Когда настройки поиска менялись последний раз (searches.updated_at). Прескрин
+     * переиспользует прошлые решения по тем же карточкам только если они приняты после
+     * этой отметки — иначе вердикт мог быть вынесен по старым критериям.
+     */
+    public String criteriaUpdatedAt;
 
     public boolean isRemote() {
         return "remote".equalsIgnoreCase(schedule) || area == 113;

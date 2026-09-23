@@ -75,6 +75,24 @@ public class AiMetrics {
         registry.counter("vk_posts_published_total", "application", "hh-gui").increment();
     }
 
+    /** Вакансий в одном посте VK: 1 — одиночный, больше — подборка. По ней видно, как часто очередь уходит подборками. */
+    public void recordVkPostSize(int vacancies) {
+        io.micrometer.core.instrument.DistributionSummary.builder("vk_post_vacancies")
+            .tag("application", "hh-gui").register(registry).record(vacancies);
+    }
+
+    private final java.util.concurrent.atomic.AtomicInteger vkQueueDepth = new java.util.concurrent.atomic.AtomicInteger();
+    private volatile boolean vkQueueGaugeRegistered;
+
+    /** Глубина очереди VK — для панели «успевает ли выпуск за одобрением». */
+    public void setVkQueueDepth(int depth) {
+        if (!vkQueueGaugeRegistered) {
+            gauge("vk_queue_depth", "Вакансий в очереди VK", vkQueueDepth, java.util.concurrent.atomic.AtomicInteger::get);
+            vkQueueGaugeRegistered = true;
+        }
+        vkQueueDepth.set(depth);
+    }
+
     /** Record a request attempt to a provider. */
     public void recordRequest(String provider) {
         registry.counter("ai_requests_total", "application", "hh-gui", "provider", provider).increment();

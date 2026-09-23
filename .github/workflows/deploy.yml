@@ -159,6 +159,18 @@ jobs:
           sudo systemctl daemon-reload
           sudo systemctl enable --now vk-token-refresh.timer
 
+      - name: Deploy ops scripts (watchdogs, session backup, weekly scraper restart)
+        run: |
+          # Раньше эти скрипты и юниты жили только на сервере — после отказа SSD 08.09.2026
+          # их восстанавливали вручную из бэкапа. Теперь источник истины — scripts/ops/.
+          sudo install -m 755 scripts/ops/hh-scraper-watchdog.sh scripts/ops/tg-scraper-watchdog.sh \
+            scripts/ops/backup-tg-session.sh /usr/local/bin/
+          sudo install -m 644 scripts/ops/*.service scripts/ops/*.timer /etc/systemd/system/
+          sudo systemctl daemon-reload
+          sudo systemctl enable --now hh-scraper-watchdog.timer tg-scraper-watchdog.timer scraper-restart.timer
+          # Копия сессий пишет на внешний диск — таймер включаем, только если он смонтирован.
+          if mountpoint -q /mnt/storage; then sudo systemctl enable --now backup-tg-session.timer; fi
+
       - name: Deploy
         run: |
           DEPLOY_DIR=/opt/hh-gui

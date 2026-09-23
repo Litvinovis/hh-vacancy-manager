@@ -1,0 +1,9 @@
+[Unit]
+Description=Копия сессии Telegram Web (tg-scraper)
+After=mnt-storage.mount
+Requires=mnt-storage.mount
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/backup-tg-session.sh
+TimeoutStartSec=10min

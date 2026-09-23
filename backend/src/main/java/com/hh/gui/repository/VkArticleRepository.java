@@ -95,6 +95,21 @@ public class VkArticleRepository {
         return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
     }
 
+    /**
+     * Опубликованные статьи и опросы с момента (ISO). Очередь VK считает их вместе с
+     * вакансиями: статья занимает пост окна и держит паузу до следующего так же, как вакансия.
+     */
+    public int countPublishedSince(String sinceIso) {
+        Integer n = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM vk_articles WHERE status='published' AND published_at >= ?", Integer.class, sinceIso);
+        return n != null ? n : 0;
+    }
+
+    public String lastPublishedAt() {
+        return jdbc.query("SELECT MAX(published_at) AS t FROM vk_articles WHERE status='published'",
+            rs -> rs.next() ? rs.getString("t") : null);
+    }
+
     public List<VkArticle> findAll(int limit) {
         return jdbc.query("SELECT * FROM vk_articles ORDER BY planned_for DESC, id DESC LIMIT ?", MAPPER, limit);
     }

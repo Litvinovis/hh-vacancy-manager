@@ -381,7 +381,7 @@ async function openChannel(page, channel) {
  * bottom, but the message list above it is already the real thing) — no
  * join/subscribe step needed to read posts.
  */
-async function scrapeChannel(channel, { limit = 50 } = {}) {
+async function scrapeChannel(channel, { limit = 50, sinceMs = null } = {}) {
   const page = await getPage();
   if (!/telegram\.org/.test(page.url())) {
     await page.goto('https://web.telegram.org/k/', { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
@@ -395,9 +395,15 @@ async function scrapeChannel(channel, { limit = 50 } = {}) {
   let messages = await collectMessages(page, channel);
   let lastCount = -1;
   let tries = 0;
+  // The backend only wants posts newer than `since` (older ones it would drop anyway —
+  // see VacancyDiscovery.TELEGRAM_MAX_POST_AGE). Once the oldest loaded post is past
+  // that point, further scrolling only loads history that gets thrown away: for a quiet
+  // channel that was up to 15 scroll rounds (~20 s of a live, logged-in session) per run.
+  const reachedSince = () => sinceMs != null && messages.length > 0
+    && messages.some((m) => Date.parse(m.publishedAt) < sinceMs);
   // Scroll the message list to the top repeatedly to load more history —
   // it's virtualized, so older posts simply aren't in the DOM until scrolled to.
-  while (messages.length < limit && messages.length !== lastCount && tries < 15) {
+  while (messages.length < limit && messages.length !== lastCount && tries < 15 && !reachedSince()) {
     lastCount = messages.length;
     await page.evaluate(() => {
       const el = document.querySelector('.bubbles-scrollable');
@@ -409,7 +415,8 @@ async function scrapeChannel(channel, { limit = 50 } = {}) {
   }
 
   messages.sort((a, b) => a.publishedAt.localeCompare(b.publishedAt));
-  return { ok: true, items: messages.slice(-limit) };
+  const fresh = sinceMs != null ? messages.filter((m) => Date.parse(m.publishedAt) >= sinceMs) : messages;
+  return { ok: true, items: fresh.slice(-limit), scrolls: tries };
 }
 
 /**
@@ -576,12 +583,16 @@ const server = http.createServer((req, res) => {
   if (url.pathname === '/channel') {
     const channel = url.searchParams.get('username');
     const limit = parseInt(url.searchParams.get('limit') || '50', 10);
+    // Unix seconds; anything unparsable is ignored rather than rejected — the old
+    // "give me the last N" behaviour is a safe fallback.
+    const sinceSec = parseInt(url.searchParams.get('since') || '', 10);
+    const sinceMs = Number.isFinite(sinceSec) && sinceSec > 0 ? sinceSec * 1000 : null;
     if (!channel) return sendJson(res, 400, { ok: false, reason: 'missing_username' });
 
     const started = Date.now();
-    enqueuePaced(() => scrapeChannel(channel, { limit }))
+    enqueuePaced(() => scrapeChannel(channel, { limit, sinceMs }))
       .then((result) => {
-        console.log(`[channel] ${channel} ${result.ok ? `ok items=${result.items.length}` : `fail:${result.reason}`} ${Date.now() - started}ms`);
+        console.log(`[channel] ${channel} ${result.ok ? `ok items=${result.items.length} scrolls=${result.scrolls}` : `fail:${result.reason}`} ${Date.now() - started}ms`);
         sendJson(res, result.ok ? 200 : 502, result);
       })
       .catch((e) => {

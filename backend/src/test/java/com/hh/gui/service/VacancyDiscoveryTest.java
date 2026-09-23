@@ -73,12 +73,12 @@ class VacancyDiscoveryTest {
     }
 
     private static TelegramClient.TelegramMessage tgMsg(String id, String text) {
-        return new TelegramClient.TelegramMessage(id, text, "2026-08-15T09:00:00.000Z",
+        return new TelegramClient.TelegramMessage(id, text, java.time.Instant.now().minusSeconds(3600).toString(),
             "https://t.me/testchan/" + id, "testchan", "telegram", null, java.util.Map.of());
     }
 
     private static TelegramClient.TelegramMessage tgMsg(String id, String text, Integer views, java.util.Map<String, Integer> reactions) {
-        return new TelegramClient.TelegramMessage(id, text, "2026-08-15T09:00:00.000Z",
+        return new TelegramClient.TelegramMessage(id, text, java.time.Instant.now().minusSeconds(3600).toString(),
             "https://t.me/testchan/" + id, "testchan", "telegram", views, reactions);
     }
 
@@ -86,7 +86,7 @@ class VacancyDiscoveryTest {
         final java.util.Map<String, ChannelResult> byChannel;
         FakeTelegramClient(java.util.Map<String, ChannelResult> byChannel) { this.byChannel = byChannel; }
         @Override
-        public ChannelResult fetchChannel(String username, int limit) {
+        public ChannelResult fetchChannel(String username, int limit, java.time.Instant notBefore) {
             return byChannel.getOrDefault(username, new ChannelResult(true, null, List.of()));
         }
     }
@@ -677,5 +677,67 @@ class VacancyDiscoveryTest {
 
         assertEquals(1, result.size());
         assertEquals("Кассир", result.get(0).getTitle());
+    }
+
+    // ── Telegram: дата поста и отсечка старых (23.09.2026) ──
+
+    @Test
+    void fromTelegram_skipsPostsOlderThanTwoWeeks_andKeepsPublicationDate() {
+        String fresh = java.time.Instant.now().minusSeconds(3600).toString();
+        String old = java.time.Instant.now().minus(java.time.Duration.ofDays(40)).toString();
+        FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(true, null, List.of(
+            new TelegramClient.TelegramMessage("tg_testchan_1", "Оператор чата\nОт 40000", fresh,
+                "https://t.me/testchan/1", "testchan", "telegram", null, java.util.Map.of()),
+            new TelegramClient.TelegramMessage("tg_testchan_2", "Ассистент\nОт 50000", old,
+                "https://t.me/testchan/2", "testchan", "telegram", null, java.util.Map.of())))));
+        FakeTgRepo repo = new FakeTgRepo(Set.of());
+
+        int saved = discovery().telegram(tg).repo(repo).build().fromTelegram(tgJob(), List.of("testchan"));
+
+        assertEquals(1, saved, "пост 40-дневной давности после ретеншна находился бы снова как новый");
+        assertEquals("tg_testchan_1", repo.saved.get(0).getHhId());
+        assertEquals(java.time.Instant.parse(fresh).toString(), repo.saved.get(0).getHhPublishedAt(),
+            "дата поста больше не теряется");
+    }
+
+    // ── память прескрина ──
+
+    @Test
+    void fromUrl_rememberedRejection_isNotSentToModelAgain() {
+        RuntimeConfig config = new RuntimeConfig();
+        ScraperClient.SearchHit known = new ScraperClient.SearchHit("301", "Менеджер по продажам", "ООО Ромашка", null, "Уфа", null,
+            "https://hh.ru/vacancy/301");
+        ScraperClient.SearchHit fresh = new ScraperClient.SearchHit("302", "Ассистент", "ООО Ромашка", null, "Уфа", null,
+            "https://hh.ru/vacancy/302");
+        FakeScraper scraper = new FakeScraper(config, new ScraperClient.SearchPageResult(true, null, List.of(known, fresh), null));
+        FakeRepo repo = new FakeRepo(Set.of()) {
+            @Override
+            public List<PrescreenMemo> findPrescreenMemory(String person, String searchName, String criteriaSince) {
+                return List.of(new PrescreenMemo("Менеджер по продажам", "ООО Ромашка", "no", "Прескрининг: холодные продажи", false));
+            }
+        };
+        List<String> asked = new ArrayList<>();
+        VacancyAiAnalyzer analyzer = new FakeAnalyzer(config) {
+            @Override
+            public List<AiResult> prescreenHits(List<ScraperClient.SearchHit> hits, SearchJob job) {
+                hits.forEach(h -> asked.add(h.hhId()));
+                return List.of();
+            }
+        };
+
+        discovery().scraper(scraper).analyzer(analyzer).repo(repo).build()
+            .fromUrl(urlJob(), "https://hh.ru/search/vacancy?text=x", 1);
+
+        assertEquals(List.of("302"), asked, "уже отсеянную карточку модели не показываем");
+        Vacancy rejected = repo.saved.stream().filter(v -> v.getHhId().equals("301")).findFirst().orElseThrow();
+        assertEquals("skipped", rejected.getScrapeStatus());
+        assertEquals("Прескрининг: холодные продажи", rejected.getAiReason(), "без двойного префикса");
+    }
+
+    @Test
+    void memoKey_needsRealEmployer_andSeparatesBySalaryPresence() {
+        assertNull(VacancyDiscovery.memoKey("Бухгалтер", null, false), "одно название у разных компаний — разные вакансии");
+        assertNull(VacancyDiscovery.memoKey("Бухгалтер", "@channel", false));
+        assertNotEquals(VacancyDiscovery.memoKey("Бухгалтер", "ООО А", true), VacancyDiscovery.memoKey("Бухгалтер", "ООО А", false));
     }
 }

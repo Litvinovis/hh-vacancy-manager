@@ -1,0 +1,6 @@
+[Unit]
+Description=tg-scraper session health watchdog (notify-only, never restarts)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/tg-scraper-watchdog.sh
