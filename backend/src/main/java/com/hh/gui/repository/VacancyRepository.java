@@ -1256,22 +1256,111 @@ public class VacancyRepository {
         }
     }
 
-    /** Следующие кандидаты на публикацию в VK: лучшие по скору, при равенстве — старшие в очереди. */
+    /**
+     * Следующие кандидаты на публикацию в VK: лучшие по скору с поправкой на возраст в
+     * очереди — минус VK_AGE_PENALTY_PER_DAY баллов за сутки ожидания. Раньше порядок был
+     * чисто по скору, и при очереди, растущей быстрее выпуска (23.09.2026: 220 в очереди,
+     * 6 постов в день), вакансия на 80 баллов не выходила никогда — её всё время обгоняли
+     * свежие 85+. Закрытые на hh (closed_at) не предлагаются вовсе.
+     */
     public List<Vacancy> findVkQueued(int limit) {
-        return jdbc.query("SELECT * FROM vacancies WHERE vk_status='queued' " +
-            "ORDER BY ai_score DESC, vk_queued_at ASC LIMIT ?", rowMapper, limit);
+        // Сортировка в Java, а не в SQL: julianday() есть только в SQLite, а тесты идут на H2.
+        // Очередь после expireVkQueue — сотни строк, а выбирают из неё несколько раз в день.
+        List<Vacancy> queued = jdbc.query("SELECT * FROM vacancies WHERE vk_status='queued' AND closed_at IS NULL",
+            rowMapper);
+        Instant now = Instant.now();
+        Comparator<Vacancy> byPriority = Comparator.comparingDouble((Vacancy v) -> vkPriority(v, now)).reversed()
+            .thenComparing(v -> v.getVkQueuedAt() == null ? "" : v.getVkQueuedAt());
+        return queued.stream().sorted(byPriority).limit(Math.max(0, limit)).toList();
     }
+
+    static double vkPriority(Vacancy v, Instant now) {
+        double score = v.getAiScore() != null ? v.getAiScore() : 0;
+        Instant queuedAt = parseInstantOr(v.getVkQueuedAt(), now);
+        double days = Math.max(0, java.time.Duration.between(queuedAt, now).toMinutes() / 1440.0);
+        return score - days * VK_AGE_PENALTY_PER_DAY;
+    }
+
+    private static Instant parseInstantOr(String iso, Instant fallback) {
+        if (iso == null || iso.isBlank()) return fallback;
+        try {
+            return Instant.parse(iso);
+        } catch (Exception e) {
+            try {
+                // формат SQLite datetime('now'): «2026-09-18 05:23:57», UTC
+                return java.time.LocalDateTime.parse(iso.replace(' ', 'T')).toInstant(java.time.ZoneOffset.UTC);
+            } catch (Exception ignored) {
+                return fallback;
+            }
+        }
+    }
+
+    /** Штраф очереди VK за сутки ожидания, баллов скора (см. findVkQueued). */
+    static final int VK_AGE_PENALTY_PER_DAY = 5;
 
     public int countVkQueued() {
-        Integer n = jdbc.queryForObject("SELECT COUNT(*) FROM vacancies WHERE vk_status='queued'", Integer.class);
+        Integer n = jdbc.queryForObject("SELECT COUNT(*) FROM vacancies WHERE vk_status='queued' AND closed_at IS NULL",
+            Integer.class);
         return n != null ? n : 0;
     }
 
-    /** Сколько ушло в VK начиная с момента (ISO) — для дневных и оконных лимитов. */
+    /**
+     * Снимает с очереди VK то, что публиковать уже поздно: стоит дольше cutoff (вакансию
+     * недельной давности на удалёнку уже разобрали) или закрыта на hh. Статус 'expired', а
+     * не удаление — чтобы enqueueForVk не поставил её обратно.
+     */
+    public int expireVkQueue(String cutoffIso) {
+        return jdbc.update("UPDATE vacancies SET vk_status='expired', updated_at=? " +
+            "WHERE vk_status='queued' AND (vk_queued_at < ? OR closed_at IS NOT NULL)",
+            Instant.now().toString(), cutoffIso);
+    }
+
+    /**
+     * Сколько ПОСТОВ ушло в VK начиная с момента (ISO) — для оконных лимитов. Считаются
+     * посты, а не вакансии: подборка — один пост на несколько вакансий с общим vk_post_id.
+     */
     public int countVkPublishedSince(String sinceIso) {
-        Integer n = jdbc.queryForObject("SELECT COUNT(*) FROM vacancies WHERE vk_status='sent' AND vk_published_at >= ?",
+        Integer n = jdbc.queryForObject("SELECT COUNT(DISTINCT vk_post_id) FROM vacancies " +
+                "WHERE vk_status='sent' AND vk_published_at >= ?",
             Integer.class, sinceIso);
         return n != null ? n : 0;
+    }
+
+    /** Прошлое решение по карточке — для памяти прескрина (см. VacancyDiscovery.fromUrl). */
+    public record PrescreenMemo(String title, String employer, String verdict, String reason, boolean hasSalary) {}
+
+    /**
+     * Решения этого поиска по карточкам, принятые не раньше criteriaSince (последней правки
+     * настроек поиска): вердикты полного анализа и отказы прескрина. Одна и та же вакансия
+     * работодателя перевыкладывается под новыми hh_id постоянно (замер 23.09.2026: 532 отказа
+     * прескрина на 393 разных названия), и каждый раз её заново отдавали модели.
+     */
+    public List<PrescreenMemo> findPrescreenMemory(String person, String searchName, String criteriaSince) {
+        // updated_at поиска и created_at вакансий записаны в разных форматах (datetime('now')
+        // против ISO с «T» и «Z») — строковое сравнение между ними врёт, поэтому граница
+        // сравнивается после разбора, в Java.
+        Instant since = parseInstantOr(criteriaSince, Instant.EPOCH);
+        List<Object[]> rows = jdbc.query("SELECT title, COALESCE(NULLIF(employer_name, ''), company) AS employer, ai_verdict, " +
+                "ai_reason, salary_from, salary_to, created_at " +
+                "FROM vacancies WHERE person=? AND search_name=? AND ai_verdict IN ('yes','no','fraud') ORDER BY created_at DESC",
+            (rs, i) -> new Object[]{new PrescreenMemo(rs.getString("title"), rs.getString("employer"),
+                rs.getString("ai_verdict"), rs.getString("ai_reason"),
+                rs.getInt("salary_from") > 0 || rs.getInt("salary_to") > 0), rs.getString("created_at")},
+            person, searchName);
+        List<PrescreenMemo> result = new ArrayList<>();
+        for (Object[] row : rows) {
+            if (!parseInstantOr((String) row[1], Instant.EPOCH).isBefore(since)) result.add((PrescreenMemo) row[0]);
+        }
+        return result;
+    }
+
+    /** Отметить вакансии подборки отправленными — один пост, общий post_id. */
+    public void markVkSentBatch(List<Long> ids, String postId) {
+        String now = Instant.now().toString();
+        for (Long id : ids) {
+            jdbc.update("UPDATE vacancies SET vk_status='sent', vk_post_id=?, vk_published_at=?, updated_at=? WHERE id=?",
+                postId, now, now, id);
+        }
     }
 
     public String lastVkPublishedAt() {

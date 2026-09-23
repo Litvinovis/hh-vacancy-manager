@@ -51,7 +51,7 @@ class ChannelEngagementTrackerTest {
     }
 
     private static TelegramClient.TelegramMessage msg(String id, Integer views, Map<String, Integer> reactions) {
-        return new TelegramClient.TelegramMessage(id, "текст", "2026-08-15T09:00:00.000Z",
+        return new TelegramClient.TelegramMessage(id, "текст", java.time.Instant.now().minusSeconds(3600).toString(),
             "https://t.me/chan/" + id, "chan", "telegram", views, reactions);
     }
 

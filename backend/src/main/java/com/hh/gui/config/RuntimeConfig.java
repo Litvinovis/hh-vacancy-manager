@@ -188,6 +188,15 @@ public class RuntimeConfig {
     private volatile int vkTopicCooldownDays = 60;
     /** Карточки-картинки к постам VK (рисуются на сервере, CardImageRenderer). */
     private volatile boolean vkCardsEnabled = true;
+    /**
+     * Подборки VK (23.09.2026). Очередь росла втрое быстрее выпуска: ~70 одобренных в сутки
+     * против 6 постов, и 220 вакансий стояли без шанса выйти. Теперь при хвосте больше, чем
+     * осталось постов на сегодня, вакансии уходят подборкой — до vkDigestMaxSize в одном
+     * посте (1 = только одиночные посты). Что простояло дольше vkQueueMaxAgeHours, снимается
+     * с очереди: недельная вакансия на удалёнку читателю уже не поможет.
+     */
+    private volatile int vkDigestMaxSize = 7;
+    private volatile int vkQueueMaxAgeHours = 72;
     // 0 = disabled (default) — same "0 means off" convention as cooldownHours below.
     // A vacancy scoring at or above this on an EDITORIAL search skips human moderation
     // entirely and publishes straight away. Off by default: ships alongside
@@ -402,6 +411,17 @@ public class RuntimeConfig {
                 "Пост с картинкой в ленте ВК обгоняет голый текст; при сбое загрузки пост уйдёт без неё.",
                 "boolean", null, null, vkCardsEnabled),
 
+            SettingDescriptor.of("vkDigestMaxSize", "Вакансий в подборке VK",
+                "Когда в очереди больше вакансий, чем осталось постов на сегодня, они уходят подборкой — " +
+                "несколько вакансий в одном посте, первый пост окна остаётся одиночным с карточкой. " +
+                "Это максимум вакансий в подборке; 1 — подборки выключены, только одиночные посты.",
+                "number", 1, 10, vkDigestMaxSize),
+
+            SettingDescriptor.of("vkQueueMaxAgeHours", "Срок очереди VK, ч",
+                "Вакансия, простоявшая в очереди VK дольше, снимается с неё без публикации — " +
+                "устаревшее в ленте только отнимает охват у свежего.",
+                "number", 12, 336, vkQueueMaxAgeHours),
+
             SettingDescriptor.of("channelMinScore", "Мин. скор для канала",
                 "Порог AI-скора для публикации в публичный канал и рассылку подписчикам. " +
                 "0 — использовать общий «Мин. скор уведомлений». Обычно выше него: в канал идёт " +
@@ -528,6 +548,8 @@ public class RuntimeConfig {
                     case "vkContentDays" -> setVkContentDays(String.valueOf(value));
                     case "vkTopicCooldownDays" -> setVkTopicCooldownDays(toInt(value, errors, key, 7, 365));
                     case "vkCardsEnabled" -> setVkCardsEnabled(toBool(value, errors, key));
+                    case "vkDigestMaxSize" -> setVkDigestMaxSize(toInt(value, errors, key, 1, 10));
+                    case "vkQueueMaxAgeHours" -> setVkQueueMaxAgeHours(toInt(value, errors, key, 12, 336));
                     case "autoApproveScoreThreshold" -> setAutoApproveScoreThreshold(toInt(value, errors, key, 0, 100));
                     case "maxApproved" -> setMaxApproved(toInt(value, errors, key, 1, 50));
                     case "cooldownHours" -> setCooldownHours(toInt(value, errors, key, 0, 72));
@@ -592,6 +614,8 @@ public class RuntimeConfig {
         m.put("vkContentDays", vkContentDays);
         m.put("vkTopicCooldownDays", vkTopicCooldownDays);
         m.put("vkCardsEnabled", vkCardsEnabled);
+        m.put("vkDigestMaxSize", vkDigestMaxSize);
+        m.put("vkQueueMaxAgeHours", vkQueueMaxAgeHours);
         m.put("autoApproveScoreThreshold", autoApproveScoreThreshold);
         m.put("maxApproved", maxApproved);
         m.put("cooldownHours", cooldownHours);
@@ -752,6 +776,10 @@ public class RuntimeConfig {
     public void setVkTopicCooldownDays(int v) { this.vkTopicCooldownDays = v; }
     public boolean isVkCardsEnabled() { return vkCardsEnabled; }
     public void setVkCardsEnabled(boolean v) { this.vkCardsEnabled = v; }
+    public int getVkDigestMaxSize() { return vkDigestMaxSize; }
+    public void setVkDigestMaxSize(int v) { this.vkDigestMaxSize = v; }
+    public int getVkQueueMaxAgeHours() { return vkQueueMaxAgeHours; }
+    public void setVkQueueMaxAgeHours(int v) { this.vkQueueMaxAgeHours = v; }
     public void setMinScore(int v) { this.minScore = v; }
 
     public int getAutoApproveScoreThreshold() { return autoApproveScoreThreshold; }

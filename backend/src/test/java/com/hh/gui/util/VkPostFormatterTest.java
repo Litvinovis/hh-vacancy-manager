@@ -140,4 +140,39 @@ class VkPostFormatterTest {
         assertEquals("#маркетплейсы", VkPostFormatter.kindTag("Менеджер Wildberries"));
         assertNull(VkPostFormatter.kindTag("Инженер-проектировщик"));
     }
+
+    @Test
+    void cleanTitle_dropsLeadingEmojiLeftovers() {
+        assertEquals("Менеджер маркетплейсов", VkPostFormatter.cleanTitle("\uFE0FМенеджер маркетплейсов"));
+        assertEquals("🔥", VkPostFormatter.cleanTitle("🔥"), "из одних символов — оставляем как есть");
+    }
+
+    @Test
+    void cleanUrl_stripsHhSearchTracking() {
+        assertEquals("https://hh.ru/vacancy/137540921",
+            VkPostFormatter.cleanUrl("https://ufa.hh.ru/vacancy/137540921?hhtmFrom=vacancy_search_list"));
+        assertEquals("https://forms.gle/x", VkPostFormatter.cleanUrl("https://forms.gle/x"));
+    }
+
+    @Test
+    void kindTag_latinKeywordsMatchWholeWordsOnly() {
+        assertEquals("#hr", VkPostFormatter.kindTag("HR-менеджер"));
+        assertNull(VkPostFormatter.kindTag("Chrome extension tester"), "«hr» внутри слова — не тег");
+    }
+
+    @Test
+    void publicPost_companyIsPlainText_notHtmlEscaped() {
+        Vacancy v = new Vacancy();
+        v.setTitle("Ассистент"); v.setCompany("Джони & Клайд"); v.setUrl("https://hh.ru/vacancy/1");
+        String post = VkPostFormatter.publicPost(v, null);
+        assertTrue(post.contains("Джони & Клайд"), post);
+        assertFalse(post.contains("&amp;"), post);
+    }
+
+    @Test
+    void digestHook_pluralizesAndNamesTimeOfDay() {
+        assertEquals("Утренняя подборка: 3 удалённые вакансии", VkPostFormatter.digestHook(3, 9));
+        assertEquals("Вечерняя подборка: 5 удалённых вакансий", VkPostFormatter.digestHook(5, 18));
+        assertEquals("Дневная подборка: 21 удалённая вакансия", VkPostFormatter.digestHook(21, 13));
+    }
 }

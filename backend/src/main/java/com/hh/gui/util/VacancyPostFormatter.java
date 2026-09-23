@@ -99,7 +99,7 @@ public final class VacancyPostFormatter {
      */
     private static String applyLine(Vacancy v, String urlEmoji, String indent) {
         String url = v.getUrl();
-        if (TelegramPostParser.isSelfLink(url)) {
+        if (TelegramPostParser.isDeadEndLink(url)) {
             TelegramPostParser.Contact contact = TelegramPostParser.contact(v.getDescription());
             if (contact != null) {
                 // A t.me link (💬) is a raw URL exactly like the plain case below —

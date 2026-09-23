@@ -105,6 +105,69 @@ public final class CardImageRenderer {
         return png(img);
     }
 
+    /**
+     * Карточка подборки: «N вакансий» крупно и первые названия списком — чтобы по картинке
+     * в ленте было видно, что внутри не одна вакансия, а выбор.
+     */
+    public static byte[] digestCard(List<Vacancy> vacancies, String kicker, String communityName) throws IOException {
+        BufferedImage img = new BufferedImage(SIZE, SIZE, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = img.createGraphics();
+        setup(g);
+        g.setPaint(new GradientPaint(0, 0, PAPER, 0, SIZE, Color.WHITE));
+        g.fillRect(0, 0, SIZE, SIZE);
+        Color accent = accentFor(null);
+        g.setColor(accent);
+        g.fillRect(0, 0, SIZE, 28);
+
+        int y = 170;
+        g.setColor(MUTED);
+        g.setFont(new Font(FONT, Font.PLAIN, 34));
+        g.drawString(kicker.toUpperCase(), 80, y);
+
+        y += 120;
+        g.setColor(INK);
+        g.setFont(new Font(FONT, Font.BOLD, 96));
+        g.drawString(String.valueOf(vacancies.size()), 80, y);
+        int numberWidth = g.getFontMetrics().stringWidth(String.valueOf(vacancies.size()));
+        g.setFont(new Font(FONT, Font.BOLD, 52));
+        g.drawString(vacanciesWord(vacancies.size()), 80 + numberWidth + 24, y);
+
+        y += 60;
+        g.setFont(new Font(FONT, Font.PLAIN, 40));
+        int shown = 0;
+        for (Vacancy v : vacancies) {
+            if (shown == DIGEST_CARD_LINES || y > SIZE - 230) break;
+            y += 70;
+            g.setColor(accent);
+            g.fillOval(80, y - 26, 16, 16);
+            g.setColor(INK);
+            // одна строка на вакансию: длинное название обрезается многоточием
+            List<String> line = wrap(safe(v.getTitle(), "Вакансия"), g.getFontMetrics(), SIZE - 200, 1);
+            if (!line.isEmpty()) g.drawString(line.get(0), 116, y);
+            shown++;
+        }
+        if (vacancies.size() > shown) {
+            y += 70;
+            g.setColor(MUTED);
+            g.drawString("и ещё " + (vacancies.size() - shown) + " — в посте", 116, y);
+        }
+
+        footer(g, communityName);
+        g.dispose();
+        return png(img);
+    }
+
+    /** Сколько названий помещается на карточке подборки, дальше — «и ещё N». */
+    private static final int DIGEST_CARD_LINES = 6;
+
+    private static String vacanciesWord(int n) {
+        int mod100 = n % 100, mod10 = n % 10;
+        if (mod100 >= 11 && mod100 <= 14) return "вакансий";
+        if (mod10 == 1) return "вакансия";
+        if (mod10 >= 2 && mod10 <= 4) return "вакансии";
+        return "вакансий";
+    }
+
     private static void setup(Graphics2D g) {
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
         g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
@@ -168,6 +231,14 @@ public final class CardImageRenderer {
             String l = lines.get(last);
             while (!l.isEmpty() && fm.stringWidth(l + "…") > width) l = l.substring(0, l.length() - 1);
             lines.set(last, l.trim() + "…");
+        }
+        // Одно слово шире строки (длинный URL, «Специалист/координатор/ассистент» без
+        // пробелов) раньше просто вылезало за край карточки — режем его по символам.
+        for (int i = 0; i < lines.size(); i++) {
+            String l = lines.get(i);
+            if (fm.stringWidth(l) <= width) continue;
+            while (l.length() > 1 && fm.stringWidth(l + "…") > width) l = l.substring(0, l.length() - 1);
+            lines.set(i, l + "…");
         }
         return lines;
     }

@@ -16,8 +16,10 @@ public final class SalaryFormatter {
     private static final DecimalFormat THOUSANDS = new DecimalFormat("#,###",
         new DecimalFormatSymbols(Locale.ROOT) {{ setGroupingSeparator(' '); }});
 
+    // Символы, а не «Рублей»/«Долларов» с большой буквы посреди фразы: «от 60 000 до 80 000 ₽»
+    // читается как принято в объявлениях и короче в посте, карточке и промпте.
     private static final Map<String, String> CURRENCY_NAMES = Map.of(
-        "RUR", "Рублей", "RUB", "Рублей", "USD", "Долларов", "EUR", "Евро", "KZT", "Тенге", "BYN", "Белорусских рублей");
+        "RUR", "₽", "RUB", "₽", "USD", "$", "EUR", "€", "KZT", "₸", "BYN", "бел. руб.");
 
     /** For AI prompts: notes when the salary is gross (pre-tax), since that affects how a floor should be judged. */
     public static String forPrompt(Vacancy v) {
@@ -60,8 +62,13 @@ public final class SalaryFormatter {
         boolean hasTo = v.getSalaryTo() != null && v.getSalaryTo() > 0;
         if (!hasFrom && !hasTo) return null;
         StringBuilder sb = new StringBuilder();
-        if (hasFrom) sb.append("от ").append(THOUSANDS.format(v.getSalaryFrom()));
-        if (hasTo) sb.append(" до ").append(THOUSANDS.format(v.getSalaryTo()));
+        if (hasFrom && hasTo && v.getSalaryFrom().equals(v.getSalaryTo())) {
+            // «от 1 500 до 1 500» — так hh и Telegram-посты передают фиксированную сумму
+            sb.append(THOUSANDS.format(v.getSalaryFrom()));
+        } else {
+            if (hasFrom) sb.append("от ").append(THOUSANDS.format(v.getSalaryFrom()));
+            if (hasTo) sb.append(hasFrom ? " до " : "до ").append(THOUSANDS.format(v.getSalaryTo()));
+        }
         String currency = v.getCurrency();
         if (currency != null && !currency.isBlank()) {
             sb.append(" ").append(CURRENCY_NAMES.getOrDefault(currency, currency));

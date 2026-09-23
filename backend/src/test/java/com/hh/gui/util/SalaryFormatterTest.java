@@ -30,7 +30,7 @@ class SalaryFormatterTest {
     void forPrompt_withRates_appendsRubEquivalent_forRange() {
         String result = SalaryFormatter.forPrompt(vacancy(2000, 3000, "USD"), new FakeRates());
 
-        assertTrue(result.contains("от 2 000 до 3 000 Долларов"), result);
+        assertTrue(result.contains("от 2 000 до 3 000 $"), result);
         assertTrue(result.contains("(≈ 185 000–277 500 ₽)"), result);
     }
 
@@ -67,7 +67,13 @@ class SalaryFormatterTest {
     void forPrompt_noArgOverload_stillWorksWithoutConversion() {
         String result = SalaryFormatter.forPrompt(vacancy(2000, 3000, "USD"));
 
-        assertTrue(result.contains("от 2 000 до 3 000 Долларов"), result);
+        assertTrue(result.contains("от 2 000 до 3 000 $"), result);
         assertFalse(result.contains("≈"));
+    }
+
+    @Test
+    void forReport_equalBounds_showSingleFigure_andOnlyUpperHasNoLeadingSpace() {
+        assertEquals("1 500 $", SalaryFormatter.forReport(vacancy(1500, 1500, "USD")));
+        assertEquals("до 50 000 ₽", SalaryFormatter.forReport(vacancy(null, 50000, "RUR")));
     }
 }

@@ -253,8 +253,29 @@ public final class TelegramPostParser {
     public static String externalUrl(String text) {
         if (text == null) return null;
         Matcher m = EXTERNAL_URL.matcher(text);
-        if (!m.find()) return null;
-        return m.group().replaceAll("[.,;:!?)\\]]+$", "");
+        while (m.find()) {
+            String url = m.group().replaceAll("[.,;:!?)\\]]+$", "");
+            if (!isMediaFile(url)) return url;
+        }
+        return null;
+    }
+
+    // Картинка или видео из поста — не место для отклика. Живой случай 23.09.2026: боты
+    // каналов-агрегаторов прикладывают афишу ссылкой (hooks.pro/media/…/file.jpg), и в
+    // очереди VK три вакансии из семи вели «откликнуться» на jpg-файл.
+    private static final Pattern MEDIA_FILE = Pattern.compile(
+        "\\.(jpe?g|png|gif|webp|heic|mp4|mov|webm)(\\?.*)?$|://[^/]*hooks\\.pro/media/", Pattern.CASE_INSENSITIVE);
+
+    static boolean isMediaFile(String url) {
+        return url != null && MEDIA_FILE.matcher(url).find();
+    }
+
+    /**
+     * Ссылка, по которой откликнуться нельзя: сам Telegram-пост или вложенная в него
+     * картинка (такие url сохранялись до 23.09.2026). Для них ищем контакт в тексте.
+     */
+    public static boolean isDeadEndLink(String url) {
+        return isSelfLink(url) || isMediaFile(url);
     }
 
     private static final Pattern TG_SELF_LINK =

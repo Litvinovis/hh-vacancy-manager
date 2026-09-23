@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly restart timer for hh-scraper/tg-scraper
+
+[Timer]
+OnCalendar=weekly
+Persistent=true
+RandomizedDelaySec=1h
+
+[Install]
+WantedBy=timers.target

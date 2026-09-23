@@ -119,6 +119,9 @@ public class SchemaMigrator implements ApplicationRunner {
         runIgnoringErrors("CREATE INDEX IF NOT EXISTS idx_uvs_vacancy_id ON user_vacancy_status(vacancy_id)");
         runIgnoringErrors("CREATE INDEX IF NOT EXISTS idx_vac_delayed_publish_at ON vacancies(delayed_publish_at)");
         runIgnoringErrors("CREATE INDEX IF NOT EXISTS idx_vac_queued_publish_at ON vacancies(queued_publish_at)");
+        // Очередь VK опрашивается каждые 2 минуты (countVkQueued/findVkQueued/lastVkPublishedAt) —
+        // без индекса это полный проход по всей таблице вакансий на каждом тике.
+        runIgnoringErrors("CREATE INDEX IF NOT EXISTS idx_vac_vk_status ON vacancies(vk_status, vk_published_at)");
         // Also declared in schema.sql (all its columns predate this migrator) — repeated
         // here so an existing database picks it up on the very boot that ships it,
         // without waiting for schema.sql's own run order. See schema.sql for the measured

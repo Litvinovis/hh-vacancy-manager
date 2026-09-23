@@ -1,0 +1,9 @@
+[Unit]
+Description=Еженедельная копия сессии Telegram Web (воскресенье 04:30, после ночного обновления)
+
+[Timer]
+OnCalendar=Sun *-*-* 04:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

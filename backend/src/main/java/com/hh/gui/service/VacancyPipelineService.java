@@ -114,6 +114,19 @@ public class VacancyPipelineService {
     }
 
     /**
+     * Сколько строк брать из БД на один шаг анализа — кратно размеру AI-пакета. При
+     * pipelineBatchSize=10 и aiBatchSize=8 выборка из 10 уходила двумя вызовами, 8 + 2, и
+     * второй платил полный набор инструкций (~1–1,5 тыс. токенов) ради двух вакансий —
+     * в логах это пакеты «8-10». Теперь берётся 8, остаток ждёт следующего шага.
+     */
+    int analysisFetchSize() {
+        int pipeline = getBatchSize();
+        int ai = runtimeConfig.getAiBatchSize();
+        if (ai <= 0 || pipeline <= ai) return pipeline;
+        return pipeline - pipeline % ai;
+    }
+
+    /**
      * One lock per (person, search) job, so the same job can never run twice at once.
      *
      * PipelineJobRunner already serializes MANUAL runs against each other, but the
@@ -222,7 +235,7 @@ public class VacancyPipelineService {
 
     private boolean shouldDeferAnalysis(SearchJob job) {
         VacancyRepository.PendingStats stats = vacancyRepo.pendingStats(job.personName, job.searchName);
-        if (stats.count() == 0 || stats.count() >= getBatchSize()) return false;
+        if (stats.count() == 0 || stats.count() >= analysisFetchSize()) return false;
         try {
             Instant oldest = Instant.parse(stats.oldestWaitingSince());
             if (oldest.plusMillis(AI_ACCUMULATE_MAX_WAIT_MS).isBefore(Instant.now())) return false;
@@ -230,7 +243,7 @@ public class VacancyPipelineService {
             return false; // unparsable timestamp — analyze rather than risk starving the row
         }
         log.info("Шаг 3 ({} · {}): отложен — копим пакет ({} из {} вакансий, старейшая ждёт < часа)",
-            job.personName, job.searchName, stats.count(), getBatchSize());
+            job.personName, job.searchName, stats.count(), analysisFetchSize());
         return true;
     }
 
@@ -767,12 +780,21 @@ public class VacancyPipelineService {
         int totalAnalyzed = 0;
         int processed = 0;
         while (processed < maxPerRun) {
-            int batchSize = Math.min(getBatchSize(), maxPerRun - processed);
+            int batchSize = Math.min(analysisFetchSize(), maxPerRun - processed);
             List<Vacancy> batch = vacancyRepo.findPending(job.personName, job.searchName, batchSize);
             if (batch.isEmpty()) break;
 
-            totalAnalyzed += analyzeBatchWithDedup(batch, job);
+            int batchAnalyzed = analyzeBatchWithDedup(batch, job);
+            totalAnalyzed += batchAnalyzed;
             processed += batch.size();
+            if (batchAnalyzed == 0) {
+                // Модель не ответила (cooldown, щит, сбой) — findPending вернёт те же строки, и
+                // цикл отправил бы тот же пакет ещё раз-другой в этом же прогоне, каждый раз со
+                // своими 4 попытками и полным промптом. Следующий прогон повторит сам.
+                log.warn("Шаг 3 ({} · {}): пакет из {} вакансий не дал результата — остальное в следующий прогон",
+                    job.personName, job.searchName, batch.size());
+                break;
+            }
         }
         return totalAnalyzed;
     }
@@ -787,7 +809,7 @@ public class VacancyPipelineService {
                     job.personName, job.searchName, batchNum);
                 break;
             }
-            List<Vacancy> batch = vacancyRepo.findPending(job.personName, job.searchName, getBatchSize());
+            List<Vacancy> batch = vacancyRepo.findPending(job.personName, job.searchName, analysisFetchSize());
             if (batch.isEmpty()) break;
 
             int batchAnalyzed = analyzeBatchWithDedup(batch, job);

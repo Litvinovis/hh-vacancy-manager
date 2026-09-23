@@ -327,6 +327,7 @@ public class PipelineScheduler implements SchedulingConfigurer {
     private void runVkQueue() {
         if (schemaNotReady()) return;
         try {
+            vkPublishQueue.refreshQueueMetric();
             vkPublishQueue.publishDue();
         } catch (Exception e) {
             log.error("Публикация из очереди VK завершилась ошибкой: {}", e.getMessage(), e);
