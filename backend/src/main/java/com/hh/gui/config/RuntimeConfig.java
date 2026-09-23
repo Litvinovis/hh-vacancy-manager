@@ -142,7 +142,13 @@ public class RuntimeConfig {
      * упирается в сайдкар и защиту hh, анализ — в квоту модели, поэтому и крутить их надо врозь.
      */
     private volatile int scrapeMaxPerRun = 30;
-    private volatile int pipelineIntervalMs = 600000; // 10 мин
+    private volatile int pipelineIntervalMs = 600000; // 10 мин — интервал RSS-цикла
+    /**
+     * Сбор по RSS (24.09.2026 выключен по умолчанию). RSS отдаёт 20 результатов без
+     * пагинации и без текста вакансии; поиски собирают по ссылке hh.ru и из Telegram.
+     * Код RSS сохранён — включается этой настройкой без деплоя.
+     */
+    private volatile boolean rssEnabled = false;
     private volatile String dailyCron = "0 0 12 * * *"; // ежедневно 12:00
     private volatile int maxRetries = 3;
     private volatile int requestDelayMs = 1500; // HH RSS задержка
@@ -309,8 +315,14 @@ public class RuntimeConfig {
                 "Слишком большое значение расходует квоту API и создаёт нагрузку на БД.",
                 "number", 1, 500, maxPerRun),
 
+            SettingDescriptor.of("rssEnabled", "Поиск по RSS",
+                "Собирать вакансии по поисковым запросам через RSS hh.ru — по расписанию «Интервал пайплайна» " +
+                "и при ручном запуске поиска. Выключено: сбор идёт только по ссылке hh.ru и из Telegram-каналов, " +
+                "запросы в поисках сохраняются, но не используются.",
+                "boolean", null, null, rssEnabled),
+
             SettingDescriptor.of("pipelineIntervalMs", "Интервал пайплайна",
-                "Интервал (в миллисекундах) между автоматическими запусками пайплайна. " +
+                "Интервал (в миллисекундах) между запусками RSS-цикла (действует, только если включён поиск по RSS). " +
                 "600000 = 10 минут, 3600000 = 1 час. " +
                 "Изменение вступает в силу при следующем запуске.",
                 "number", 60000, 86400000, pipelineIntervalMs),
@@ -527,6 +539,7 @@ public class RuntimeConfig {
                     case "maxPerRun" -> setMaxPerRun(toInt(value, errors, key, 1, 500));
                     case "scrapeMaxPerRun" -> setScrapeMaxPerRun(toInt(value, errors, key, 1, 500));
                     case "pipelineIntervalMs" -> setPipelineIntervalMs(toInt(value, errors, key, 60000, 86400000));
+                    case "rssEnabled" -> setRssEnabled(toBool(value, errors, key));
                     case "dailyCron" -> setDailyCron(toCron(value, errors, key));
                     case "maxRetries" -> setMaxRetries(toInt(value, errors, key, 1, 10));
                     case "requestDelayMs" -> setRequestDelayMs(toInt(value, errors, key, 500, 10000));
@@ -593,6 +606,7 @@ public class RuntimeConfig {
         m.put("maxPerRun", maxPerRun);
         m.put("scrapeMaxPerRun", scrapeMaxPerRun);
         m.put("pipelineIntervalMs", pipelineIntervalMs);
+        m.put("rssEnabled", rssEnabled);
         m.put("dailyCron", dailyCron);
         m.put("maxRetries", maxRetries);
         m.put("requestDelayMs", requestDelayMs);
@@ -722,6 +736,8 @@ public class RuntimeConfig {
 
     public int getPipelineIntervalMs() { return pipelineIntervalMs; }
     public void setPipelineIntervalMs(int v) { this.pipelineIntervalMs = v; }
+    public boolean isRssEnabled() { return rssEnabled; }
+    public void setRssEnabled(boolean v) { this.rssEnabled = v; }
 
     public String getDailyCron() { return dailyCron; }
     public void setDailyCron(String v) { this.dailyCron = v; }

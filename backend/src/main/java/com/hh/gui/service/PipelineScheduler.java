@@ -443,6 +443,9 @@ public class PipelineScheduler implements SchedulingConfigurer {
 
     private void runPipeline() {
         if (schemaNotReady()) return;
+        // RSS выключен настройкой (по умолчанию с 24.09.2026) — цикл молчит, без записей в лог
+        // каждые 10 минут; поиски по ссылке и Telegram идут своими триггерами.
+        if (!runtimeConfig.isRssEnabled()) return;
         if (!runtimeConfig.isPipelineEnabled()) {
             log.debug("Автозапуск пайплайна отключён в настройках");
             return;

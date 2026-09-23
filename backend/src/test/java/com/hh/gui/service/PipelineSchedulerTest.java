@@ -531,6 +531,7 @@ class PipelineSchedulerTest {
 
     @Test
     void mainPipeline_skipsUrlOnlySearches_theyRunOnTheirOwnInterval() {
+        config.setRssEnabled(true);
         SearchJob rss = job("С запросами", 1L, "оператор");
         SearchJob urlOnly = job("Только ссылка", 2L);
         profiles.jobs = List.of(rss, urlOnly);
@@ -590,7 +591,19 @@ class PipelineSchedulerTest {
     // ── изоляция ошибок ──
 
     @Test
+    void rssDisabledByDefault_cycleRunsNothing() {
+        // С 24.09.2026 RSS выключен настройкой по умолчанию: поиск с запросами в базе
+        // остаётся, но цикл его не запускает, пока rssEnabled не включат.
+        profiles.jobs = List.of(job("С запросами", 1L, "оператор"));
+
+        runAllTasks();
+
+        assertTrue(pipeline.fullRuns.isEmpty(), "RSS выключен — цикл молчит");
+    }
+
+    @Test
     void oneFailingSearch_doesNotStopTheRest() {
+        config.setRssEnabled(true);
         pipeline.failOn.add("Сломанный");
         profiles.jobs = List.of(
             job("Первый", 1L, "оператор"), job("Сломанный", 2L, "оператор"), job("Третий", 3L, "оператор"));
