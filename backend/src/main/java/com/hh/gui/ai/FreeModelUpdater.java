@@ -119,11 +119,19 @@ public class FreeModelUpdater {
 
     private final RuntimeConfig runtimeConfig;
     private final VacancyAiAnalyzer analyzer;
+    private final ModelHealth health;
     private final tools.jackson.databind.ObjectMapper mapper = new tools.jackson.databind.ObjectMapper();
 
+    /** Без истории здоровья — для тестов, которым она не нужна. */
     public FreeModelUpdater(RuntimeConfig runtimeConfig, VacancyAiAnalyzer analyzer) {
+        this(runtimeConfig, analyzer, new ModelHealth());
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public FreeModelUpdater(RuntimeConfig runtimeConfig, VacancyAiAnalyzer analyzer, ModelHealth health) {
         this.runtimeConfig = runtimeConfig;
         this.analyzer = analyzer;
+        this.health = health;
     }
 
     record FreeModel(String id, String name, String description, long contextLength) {}
@@ -207,6 +215,28 @@ public class FreeModelUpdater {
                     id, score, PROBE_MAX_SCORE);
                 score = probe.score(id);
             }
+            // Таймаут или 5xx — модель не ответила ни хорошо, ни плохо: пул перегружен. Раньше
+            // это был ноль, и 23.09.2026 живую nemotron-3-ultra выбросили после двух таймаутов.
+            // Теперь это «не знаем», пока таких проверок не наберётся несколько подряд.
+            if (score == TRANSIENT) {
+                int strikes = health.recordTransientFailure(id);
+                if (strikes < ModelHealth.TRANSIENT_STRIKES_TO_EVICT) {
+                    log.info("Обновление free-моделей: {} не ответила по времени ({} из {} подряд) — оставляем",
+                        id, strikes, ModelHealth.TRANSIENT_STRIKES_TO_EVICT);
+                    score = RATE_LIMITED;
+                } else {
+                    log.warn("Обновление free-моделей: {} не отвечает {} проверок подряд — заменяем", id, strikes);
+                    score = 0;
+                }
+            } else if (score != RATE_LIMITED) {
+                health.clearTransientFailures(id);
+            }
+            // Проба могла пройти, а модель в реальной работе ломает ответы — работа важнее пробы.
+            if (health.failsInProduction(id)) {
+                log.warn("Обновление free-моделей: {} в работе ломает {}% ответов — заменяем, несмотря на пробу",
+                    id, Math.round(health.failureRate(id) * 100));
+                score = 0;
+            }
             // A model already in the chain is kept on a rate-limited probe: we learned
             // nothing about it, and churning the chain on no information is worse.
             if (score == RATE_LIMITED || score >= PROBE_MIN_SCORE) {
@@ -250,6 +280,10 @@ public class FreeModelUpdater {
         for (String id : rankedCandidateIds(candidates)) {
             if (candidateScores.size() >= wanted) break;
             if (healthy.contains(id) || unhealthy.contains(id)) continue;
+            // Отвечавшие 403 («Blocked by Google AI Studio») раньше перепроверялись каждые
+            // 12 часов и съедали треть лимита проверок — теперь пропускаются на несколько дней.
+            if (health.isBlocked(id, System.currentTimeMillis())) continue;
+            if (health.failsInProduction(id)) continue;
             if (probe.exhausted()) {
                 log.warn("Обновление free-моделей: исчерпан лимит проверок ({})", MAX_PROBES_PER_REFRESH);
                 break;
@@ -257,12 +291,15 @@ public class FreeModelUpdater {
             int score = probe.score(id);
             if (score != RATE_LIMITED && score >= PROBE_MIN_SCORE) candidateScores.put(id, score);
         }
-        // Best measured first; context breaks ties between equally capable models.
+        // Best measured first; при равной оценке — кто быстрее отвечает (промпты здесь 3–4 тыс.
+        // токенов, длина контекста почти ничего не решает). Контекст — только если скорость
+        // ещё ни разу не измерялась.
         Map<String, Long> contextById = candidates.stream()
             .collect(java.util.stream.Collectors.toMap(FreeModel::id, FreeModel::contextLength, (a, b) -> a));
         candidateScores.entrySet().stream()
             .sorted(Comparator
                 .comparingInt((Map.Entry<String, Integer> e) -> e.getValue()).reversed()
+                .thenComparingDouble(e -> health.latencyMs(e.getKey()))
                 .thenComparing(e -> -contextById.getOrDefault(e.getKey(), 0L)))
             .limit(needed)
             .forEach(e -> {
@@ -289,6 +326,9 @@ public class FreeModelUpdater {
 
         target.setModel(String.join(", ", healthy));
         runtimeConfig.setAiProviders(providers);
+        // Исключённые начинают с чистого листа: если модель исправится, прошлые сбои не
+        // должны навсегда закрыть ей дорогу обратно.
+        current.stream().filter(m -> !healthy.contains(m)).forEach(health::resetOutcomes);
         log.warn("Обновление free-моделей: список заменён {} -> {}", current, healthy);
         summary.put("status", "updated");
         summary.put("selected", List.copyOf(healthy));
@@ -335,7 +375,9 @@ public class FreeModelUpdater {
      */
     protected int probeModel(String modelId) {
         try {
+            long started = System.nanoTime();
             String response = analyzer.callLlm(PROBE_PROMPT, PROBE_MAX_TOKENS, modelId);
+            health.recordLatency(modelId, (System.nanoTime() - started) / 1_000_000);
             Map<?, ?> parsed = mapper.readValue(response, Map.class);
             List<?> choices = (List<?>) parsed.get("choices");
             if (choices == null || choices.isEmpty()) return 0;
@@ -362,8 +404,23 @@ public class FreeModelUpdater {
                 log.info("Проверка модели {}: 429 — судить по загруженности пула нельзя, оценку сохраняем", modelId);
                 return RATE_LIMITED;
             }
+            if (e.kind() == LlmException.Kind.AUTH) {
+                health.block(modelId, System.currentTimeMillis());
+                log.info("Проверка модели {}: отказ доступа ({}) — не проверяем {} дня", modelId,
+                    e.getMessage(), ModelHealth.BLOCK_DAYS);
+                return 0;
+            }
+            if (e.kind() == LlmException.Kind.TRANSPORT
+                    || (e.kind() == LlmException.Kind.HTTP_ERROR && e.httpStatus() >= 500)) {
+                log.info("Проверка модели {}: временный сбой ({}: {})", modelId, e.kind(), e.getMessage());
+                return TRANSIENT;
+            }
             log.info("Проверка модели {}: не прошла ({}: {})", modelId, e.kind(), e.getMessage());
             return 0;
+        } catch (java.io.IOException e) {
+            // Таймаут чтения, обрыв соединения — провайдер перегружен, о модели это ничего не говорит.
+            log.info("Проверка модели {}: временный сбой ({})", modelId, e.getMessage());
+            return TRANSIENT;
         } catch (Exception e) {
             log.info("Проверка модели {}: не прошла ({})", modelId, e.getMessage());
             return 0;
@@ -372,6 +429,9 @@ public class FreeModelUpdater {
 
     /** Sentinel: пробу не удалось оценить (пул занят или запрос не дошёл), а не модель плоха. */
     static final int RATE_LIMITED = -1;
+
+    /** Sentinel: таймаут или 5xx — пул перегружен; см. учёт серий в {@link ModelHealth}. */
+    static final int TRANSIENT = -2;
 
     /**
      * Scores one probe answer. Structure carries more weight in total than the single

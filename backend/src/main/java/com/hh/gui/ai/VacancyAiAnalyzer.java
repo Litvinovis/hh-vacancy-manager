@@ -73,6 +73,13 @@ public class VacancyAiAnalyzer {
     private final AiProviderManager providerManager;
     private final AiMetrics metrics;
     private final com.hh.gui.client.CurrencyRateService currencyRates;
+    /** История моделей (исходы вызовов, скорость); в тестах — в памяти, без файла. */
+    private ModelHealth modelHealth = new ModelHealth();
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setModelHealth(ModelHealth modelHealth) {
+        this.modelHealth = modelHealth;
+    }
 
     // Rate limiter: free models need ~10-15s between requests to avoid 429
     private long lastRequestTime = 0;
@@ -434,8 +441,36 @@ public class VacancyAiAnalyzer {
         // item·6000 cap left large batches (25-30 representatives) too tight to fit six
         // full fields per item — live symptom was noveltyColor/noveltyNote silently
         // missing from most items in a batch, not just occasionally.
+        long started = System.nanoTime();
         String response = callLlm(prompt, Math.min(10000, 4000 + 220 * vacancies.size()));
-        return parseResponse(response, vacancies);
+        long elapsedMs = (System.nanoTime() - started) / 1_000_000;
+        // Какая модель ответила на самом деле: при списке моделей OpenRouter сам выбирает
+        // из трёх, и без этого сбои в работе нельзя было приписать конкретной модели.
+        String model = respondedModel(response);
+        List<AiResult> results;
+        try {
+            results = parseResponse(response, vacancies);
+        } catch (LlmException e) {
+            if (e.kind() == LlmException.Kind.BAD_RESPONSE) modelHealth.recordOutcome(model, false);
+            throw e;
+        }
+        modelHealth.recordLatency(model, elapsedMs);
+        // Ответ засчитывается, только если в нём есть все вакансии пакета: модели, которые
+        // молча пропускают часть, в работе обходятся так же дорого, как сломанный JSON.
+        java.util.Set<String> returned = new java.util.HashSet<>();
+        results.forEach(r -> returned.add(r.hhId()));
+        modelHealth.recordOutcome(model, vacancies.stream().allMatch(v -> returned.contains(v.getHhId())));
+        return model == null ? results : results.stream().map(r -> r.withModel(model)).toList();
+    }
+
+    /** Поле model из ответа chat-completions; null — не удалось разобрать. */
+    private String respondedModel(String body) {
+        try {
+            Object m = mapper.readValue(body, Map.class).get("model");
+            return m instanceof String str && !str.isBlank() ? str : null;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /** Personal search: judged against a real candidate — their city, commute, floor, background. */
@@ -1138,9 +1173,21 @@ public class VacancyAiAnalyzer {
      *                     replacing (see VacancyRepository.updateAiResult).
      */
     public record AiResult(String hhId, int score, String verdict, String reason, String noveltyColor, String noveltyNote,
-                            Integer salaryFrom, Integer salaryTo, String currency, String company, String title) {
+                            Integer salaryFrom, Integer salaryTo, String currency, String company, String title,
+                            String model) {
         public AiResult(String hhId, int score, String verdict, String reason, String noveltyColor, String noveltyNote) {
-            this(hhId, score, verdict, reason, noveltyColor, noveltyNote, null, null, null, null, null);
+            this(hhId, score, verdict, reason, noveltyColor, noveltyNote, null, null, null, null, null, null);
+        }
+
+        public AiResult(String hhId, int score, String verdict, String reason, String noveltyColor, String noveltyNote,
+                        Integer salaryFrom, Integer salaryTo, String currency, String company, String title) {
+            this(hhId, score, verdict, reason, noveltyColor, noveltyNote, salaryFrom, salaryTo, currency, company, title, null);
+        }
+
+        /** Та же оценка с пометкой, какая модель её дала (см. {@link ModelHealth}). */
+        public AiResult withModel(String model) {
+            return new AiResult(hhId, score, verdict, reason, noveltyColor, noveltyNote,
+                salaryFrom, salaryTo, currency, company, title, model);
         }
     }
 }

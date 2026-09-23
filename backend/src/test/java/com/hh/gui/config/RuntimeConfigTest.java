@@ -34,7 +34,7 @@ class RuntimeConfigTest {
         assertEquals(120000, config.getHttpReadTimeoutMs());
         assertEquals(50, config.getMinScore());
         assertEquals(10, config.getMaxApproved());
-        assertEquals(0, config.getCooldownHours());
+        assertEquals(2, config.getCooldownHours(), "по умолчанию 2 ч, а не до 06:00 следующего дня");
         assertEquals(10, config.getPipelineBatchSize());
         assertFalse(config.isNotificationsEnabled());
         assertEquals(5, config.getAiBatchSize());
@@ -141,7 +141,7 @@ class RuntimeConfigTest {
             "scrapeWindowEndHour", 6,
             "minScore", 70,
             "maxApproved", 20,
-            "cooldownHours", 2
+            "cooldownHours", 5
         );
         Map<String, String> errors = config.apply(updates);
         assertTrue(errors.isEmpty());
@@ -153,7 +153,7 @@ class RuntimeConfigTest {
         assertEquals(6, config.getScrapeWindowEndHour());
         assertEquals(70, config.getMinScore());
         assertEquals(20, config.getMaxApproved());
-        assertEquals(2, config.getCooldownHours());
+        assertEquals(5, config.getCooldownHours());
     }
 
     @Test

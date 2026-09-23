@@ -931,6 +931,7 @@ public class VacancyPipelineService {
             for (var r : results) {
                 vacancyRepo.updateAiResult(r.hhId(), job.personName, job.searchName, r.score(), r.verdict(), r.reason(),
                     r.noveltyColor(), r.noveltyNote(), r.salaryFrom(), r.salaryTo(), r.currency(), r.company(), r.title());
+                if (r.model() != null) vacancyRepo.setAiModel(r.hhId(), job.personName, job.searchName, r.model());
                 telegramMetrics.recordVerdict(TelegramPostParser.channelFromHhId(r.hhId()), r.verdict());
                 metrics.recordVerdict(r.verdict());
                 returnedIds.add(r.hhId());
