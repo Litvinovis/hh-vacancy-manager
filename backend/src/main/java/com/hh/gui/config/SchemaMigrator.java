@@ -58,6 +58,10 @@ public class SchemaMigrator implements ApplicationRunner {
         addColumnIfMissing("searches", "source_url", "TEXT DEFAULT ''");
         addColumnIfMissing("searches", "run_interval_hours", "INTEGER DEFAULT NULL");
         addColumnIfMissing("searches", "last_run_at", "TEXT DEFAULT NULL");
+        // Отдельная отметка для сбора из Telegram (24.09.2026): при общей колонке поиск со
+        // ссылкой и каналами запускал оба сбора в одну секунду, Telegram брал блокировку и
+        // ставил общую отметку — сбор по ссылке hh.ru пропускал ход раз за разом.
+        addColumnIfMissing("searches", "telegram_last_run_at", "TEXT DEFAULT NULL");
         addColumnIfMissing("searches", "chat_id", "TEXT DEFAULT NULL");
         addColumnIfMissing("searches", "public_format", "INTEGER NOT NULL DEFAULT 0");
         addColumnIfMissing("searches", "search_kind", "TEXT NOT NULL DEFAULT 'PERSONAL'");

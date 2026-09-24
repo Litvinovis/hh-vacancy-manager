@@ -579,7 +579,7 @@ public class PipelineScheduler implements SchedulingConfigurer {
             return;
         }
         for (SearchConfig search : searchRepo.findScheduledTelegramSearches()) {
-            if (!isDue(search)) continue;
+            if (!isDue(search, search.getTelegramLastRunAt())) continue;
 
             Optional<SearchJob> jobOpt = profileFactory.buildForSearchId(search.getId());
             if (jobOpt.isEmpty()) continue;
@@ -603,7 +603,7 @@ public class PipelineScheduler implements SchedulingConfigurer {
                 // pipeline for the same search (see runDueUrlSearches for the same fix and
                 // full reasoning) — retried on the next 5-minute tick instead of 3h later.
                 if (!skippedByLock) {
-                    searchRepo.updateLastRunAt(search.getId(), now);
+                    searchRepo.updateTelegramLastRunAt(search.getId(), now);
                 }
             }
         }
@@ -623,9 +623,14 @@ public class PipelineScheduler implements SchedulingConfigurer {
     }
 
     private boolean isDue(SearchConfig search) {
-        if (search.getLastRunAt() == null || search.getLastRunAt().isBlank()) return true;
+        return isDue(search, search.getLastRunAt());
+    }
+
+    /** lastRun — своя отметка у каждого источника: у ссылки last_run_at, у Telegram telegram_last_run_at. */
+    private boolean isDue(SearchConfig search, String lastRun) {
+        if (lastRun == null || lastRun.isBlank()) return true;
         try {
-            Instant last = Instant.parse(search.getLastRunAt());
+            Instant last = Instant.parse(lastRun);
             Instant due = last.plus(Duration.ofHours(search.getRunIntervalHours()));
             return !Instant.now().isBefore(due);
         } catch (Exception e) {
