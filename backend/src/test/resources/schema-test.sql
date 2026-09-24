@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS searches (
     source_url VARCHAR(1024) DEFAULT '',
     run_interval_hours INTEGER DEFAULT NULL,
     last_run_at VARCHAR(64) DEFAULT NULL,
+    telegram_last_run_at VARCHAR(64) DEFAULT NULL,
     chat_id VARCHAR(64) DEFAULT NULL,
     public_format INTEGER NOT NULL DEFAULT 0,
     delayed_chat_id VARCHAR(64) DEFAULT NULL,

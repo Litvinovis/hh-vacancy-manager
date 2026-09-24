@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS searches (
     source_url TEXT DEFAULT '',
     run_interval_hours INTEGER DEFAULT NULL,
     last_run_at TEXT DEFAULT NULL,
+    telegram_last_run_at TEXT DEFAULT NULL,
     -- chat_id: overrides app.telegram.chat-id for this search's reports (e.g. a
     -- public channel search posting separately from personal notifications).
     -- NULL = use the default chat.

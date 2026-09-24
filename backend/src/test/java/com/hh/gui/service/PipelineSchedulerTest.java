@@ -116,6 +116,9 @@ class PipelineSchedulerTest {
         public List<SearchConfig> findScheduledTelegramSearches() { return telegramSearches; }
         @Override
         public void updateLastRunAt(Long id, String at) { stamped.add(id); }
+        final List<Long> stampedTelegram = new ArrayList<>();
+        @Override
+        public void updateTelegramLastRunAt(Long id, String at) { stampedTelegram.add(id); }
     }
 
     static class FakeAnalyzer extends VacancyAiAnalyzer {
@@ -653,6 +656,7 @@ class PipelineSchedulerTest {
 
         assertEquals(List.of("Занят"), pipeline.telegramRuns, "попытка запуска всё равно происходит");
         assertTrue(searchRepo.stamped.isEmpty(), "пропуск из-за блокировки не должен откладывать следующую попытку на весь интервал");
+        assertTrue(searchRepo.stampedTelegram.isEmpty());
     }
 
     @Test
@@ -800,5 +804,37 @@ class PipelineSchedulerTest {
         runAllTasks();
 
         assertEquals(List.of("Поиск"), pipeline.urlRuns);
+    }
+
+    // ── ссылка и Telegram у одного поиска — у каждого своя отметка (24.09.2026) ──
+
+    @Test
+    void telegramRun_doesNotPostponeUrlRunOfTheSameSearch() {
+        // Живой случай: оба сбора стартовали в одну секунду, Telegram брал блокировку и
+        // ставил общую last_run_at — сбор по ссылке hh.ru пропускал ход неделю подряд.
+        profiles.jobs = List.of(job("Общая", 1L));
+        SearchConfig both = scheduled(1L, null, 6);
+        both.setTelegramLastRunAt(Instant.now().toString());   // Telegram только что отработал
+        searchRepo.urlSearches = List.of(both);
+        searchRepo.telegramSearches = List.of(both);
+
+        runAllTasks();
+
+        assertEquals(List.of("Общая"), pipeline.urlRuns, "свежий Telegram-сбор не откладывает сбор по ссылке");
+        assertTrue(pipeline.telegramRuns.isEmpty(), "а Telegram ждёт свой интервал");
+        assertEquals(List.of(1L), searchRepo.stamped, "сбор по ссылке ставит свою отметку");
+        assertTrue(searchRepo.stampedTelegram.isEmpty());
+    }
+
+    @Test
+    void telegramRun_stampsItsOwnColumn() {
+        profiles.jobs = List.of(job("Каналы", 3L));
+        searchRepo.telegramSearches = List.of(scheduled(3L, Instant.now().toString(), 6));   // ссылка свежая — не мешает
+
+        runAllTasks();
+
+        assertEquals(List.of("Каналы"), pipeline.telegramRuns);
+        assertEquals(List.of(3L), searchRepo.stampedTelegram);
+        assertTrue(searchRepo.stamped.isEmpty(), "отметку сбора по ссылке Telegram не трогает");
     }
 }

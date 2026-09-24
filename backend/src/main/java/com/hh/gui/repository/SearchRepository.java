@@ -45,6 +45,7 @@ public class SearchRepository {
         int runIntervalHours = rs.getInt("run_interval_hours");
         s.setRunIntervalHours(rs.wasNull() ? null : runIntervalHours);
         s.setLastRunAt(rs.getString("last_run_at"));
+        s.setTelegramLastRunAt(rs.getString("telegram_last_run_at"));
         s.setChatId(rs.getString("chat_id"));
         s.setPublicFormat(rs.getInt("public_format") == 1);
         s.setKind(com.hh.gui.model.SearchKind.fromDb(rs.getString("search_kind")));
@@ -161,6 +162,10 @@ public class SearchRepository {
     }
 
     /** Stamps the last automatic/manual run time for a search, used by the per-search interval scheduler. */
+    public void updateTelegramLastRunAt(Long id, String at) {
+        jdbc.update("UPDATE searches SET telegram_last_run_at=? WHERE id=?", at, id);
+    }
+
     public void updateLastRunAt(Long id, String lastRunAt) {
         jdbc.update("UPDATE searches SET last_run_at=? WHERE id=?", lastRunAt, id);
     }

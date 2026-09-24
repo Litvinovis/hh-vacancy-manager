@@ -109,6 +109,10 @@ public class SearchConfig {
     public void setRunIntervalHours(Integer runIntervalHours) { this.runIntervalHours = runIntervalHours; }
 
     public String getLastRunAt() { return lastRunAt; }
+    /** Последний сбор из Telegram-каналов — отдельно от сбора по ссылке (см. SchemaMigrator). */
+    private String telegramLastRunAt;
+    public String getTelegramLastRunAt() { return telegramLastRunAt; }
+    public void setTelegramLastRunAt(String v) { this.telegramLastRunAt = v; }
     public void setLastRunAt(String lastRunAt) { this.lastRunAt = lastRunAt; }
 
     public String getChatId() { return chatId; }
