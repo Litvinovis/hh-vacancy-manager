@@ -862,7 +862,6 @@ public class VacancyAiAnalyzer {
         }
 
         int code = conn.getResponseCode();
-        metrics.recordLatency(provider, (System.nanoTime() - startNanos) / 1_000_000);
 
         metrics.recordRequest(provider);
         if (code == 429) {
@@ -872,6 +871,10 @@ public class VacancyAiAnalyzer {
         }
 
         String body = HttpUtil.readBody(conn, code);
+        // Замер — после чтения тела, а не после getResponseCode: OpenRouter отдаёт заголовки
+        // сразу и держит соединение, пока модель генерирует, так что время до заголовков
+        // показывало ~20 мс при реальных десятках секунд (дашборд, 24.09.2026).
+        metrics.recordLatency(provider, (System.nanoTime() - startNanos) / 1_000_000);
         if (code >= 400) {
             LlmException.Kind kind = LlmException.kindForResponse(code, body, conn.getHeaderField("server"));
             if (kind == LlmException.Kind.EDGE_BLOCKED) {
