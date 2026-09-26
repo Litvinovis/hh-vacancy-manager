@@ -259,7 +259,7 @@ public final class VkPostFormatter {
             .matcher(text).find();
     }
 
-    static String kindTag(String title) {
+    public static String kindTag(String title) {
         if (title == null) return null;
         String t = title.toLowerCase(Locale.ROOT);
         String[][] rules = {

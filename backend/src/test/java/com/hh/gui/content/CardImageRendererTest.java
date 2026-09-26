@@ -59,6 +59,49 @@ class CardImageRendererTest {
     }
 
     @Test
+    void manropeIsLoadedFromResources_notSystemFallback() throws Exception {
+        try (var in = CardImageRenderer.class.getResourceAsStream("/fonts/Manrope-800.ttf")) {
+            assertTrue(in != null, "шрифт должен быть в ресурсах приложения");
+            Font f = Font.createFont(Font.TRUETYPE_FONT, in);
+            assertTrue(f.getFamily().startsWith("Manrope"), f.getFamily());
+            assertTrue(f.canDisplayUpTo("Ассистент руководителя — ёЁ ₽") == -1, "кириллица, ё и ₽ в шрифте");
+        }
+    }
+
+    @Test
+    void everyThemeAndLayout_rendersValidCard() throws Exception {
+        Vacancy v = new Vacancy();
+        v.setTitle("Бизнес-ассистент собственника с очень длинным названием вакансии для проверки переносов");
+        v.setCompany("ООО Ромашка"); v.setSalaryFrom(100000); v.setSalaryTo(120000); v.setCurrency("RUR");
+        for (CardImageRenderer.Theme t : CardImageRenderer.THEMES) {
+            for (CardImageRenderer.Layout l : CardImageRenderer.Layout.values()) {
+                byte[] png = CardImageRenderer.vacancyCard(v, "vk.com/remotevibe", t, l);
+                assertEquals(1080, ImageIO.read(new ByteArrayInputStream(png)).getWidth(), t.name() + "/" + l);
+            }
+        }
+    }
+
+    @Test
+    void themeChoice_stablePerVacancy_variesAcrossVacancies() {
+        java.util.Set<String> themes = new java.util.HashSet<>();
+        for (long id = 1; id <= 40; id++) {
+            Vacancy v = new Vacancy(); v.setId(id);
+            String first = CardImageRenderer.themeFor(CardImageRenderer.seedOf(v)).name();
+            assertEquals(first, CardImageRenderer.themeFor(CardImageRenderer.seedOf(v)).name(), "одна вакансия — одна тема");
+            themes.add(first);
+        }
+        assertTrue(themes.size() >= 6, "лента должна быть разной, тем использовано: " + themes);
+    }
+
+    @Test
+    void salary_numbersNeverSplitAcrossLines() {
+        String s = CardImageRenderer.keepNumbersTogether("от 100 000 до 120 000 ₽");
+        assertEquals("от 100\u00A0000 до 120\u00A0000\u00A0₽", s);
+        // перенос по словам не может разорвать число: split по обычным пробелам его не видит
+        assertTrue(java.util.Arrays.asList(s.split("\\s+")).contains("120\u00A0000\u00A0₽"));
+    }
+
+    @Test
     void emptyTitle_fallsBackInsteadOfCrashing() throws Exception {
         Vacancy v = new Vacancy();   // ни названия, ни зарплаты, ни компании
         assertTrue(CardImageRenderer.vacancyCard(v, "x").length > 1000);
