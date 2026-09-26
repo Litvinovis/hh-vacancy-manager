@@ -34,6 +34,10 @@ class VkPublishQueueTest {
             return new ArrayList<>(queued.subList(0, Math.min(limit, queued.size())));
         }
         @Override public int expireVkQueue(String cutoffIso) { expireCutoff = cutoffIso; return 0; }
+        final List<Long> expiredIds = new ArrayList<>();
+        @Override public int expireVkQueued(List<Long> ids) {
+            expiredIds.addAll(ids); queued.removeIf(v -> ids.contains(v.getId())); return ids.size();
+        }
         @Override public void markVkSentBatch(List<Long> ids, String postId) {
             queued.removeIf(v -> ids.contains(v.getId()));
             sentAt.add(nowIso);   // один пост на всю подборку
@@ -92,6 +96,26 @@ class VkPublishQueueTest {
     private static VkPublishQueue queue(FakeRepo repo, FakeVk vk, RuntimeConfig config, Clock clock) {
         repo.nowIso = clock.instant().toString();
         return new VkPublishQueue(repo, vk, config, new AiMetrics(new SimpleMeterRegistry(), config), clock);
+    }
+
+    @Test
+    void vacancyWithoutApplyTarget_isExpiredNotPublished() {
+        // Пост 1796 (24.09): в подборке 7 вакансий, в комментарии со ссылками — только 4 номера:
+        // у трёх не было ни ссылки, ни контакта. Такие снимаются с очереди, а не публикуются.
+        FakeRepo repo = new FakeRepo();
+        Vacancy imageOnly = vacancy(2, "Монтажёр Reels");
+        imageOnly.setHhId("tg_onlinevakansii_2");
+        imageOnly.setUrl("https://hooks.pro/media/2026/09/09/bot1/photos/HX7q/file_4562.jpg");
+        imageOnly.setDescription("Монтаж роликов, оплата сдельная.");
+        repo.queued.add(imageOnly);
+        repo.queued.add(vacancy(1, "Ассистент руководителя"));
+        FakeVk vk = new FakeVk();
+
+        queue(repo, vk, config(), moscow("2026-09-21T09:05:00")).publishDue();
+
+        assertEquals(List.of(2L), repo.expiredIds, "без отклика — снята с очереди");
+        assertEquals(1, vk.posts.size());
+        assertTrue(vk.posts.get(0).startsWith("Ассистент руководителя — "), vk.posts.get(0));
     }
 
     @Test

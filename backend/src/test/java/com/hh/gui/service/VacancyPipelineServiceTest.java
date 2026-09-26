@@ -632,6 +632,25 @@ class VacancyPipelineServiceTest {
     }
 
     @Test
+    void checkVacancyFreshness_badHhId_isPerVacancy_doesNotStopPass() {
+        // bad_hh_id — ошибка конкретной записи. Как «общая» ошибка сайта она обрывала проход
+        // на первой же записи, и остальные вакансии не проверялись никогда.
+        RuntimeConfig config = new RuntimeConfig();
+        FakeFreshnessRepo repo = new FakeFreshnessRepo();
+        repo.due = List.of(pendingVacancy("11", null), pendingVacancy("12", null));
+        FreshnessScraper scraper = new FreshnessScraper(config);
+        scraper.byId.put("11", failResult("bad_hh_id"));
+        scraper.byId.put("12", failResult("archived"));
+        VacancyPipelineService svc = service().scraper(scraper).analyzer(new FakeAnalyzer(config)).repo(repo).config(config).build();
+
+        VacancyPipelineService.FreshnessResult r = svc.checkVacancyFreshness(5);
+
+        assertEquals(1, r.inconclusive, "bad_hh_id — неясный результат по одной записи");
+        assertEquals(1, r.closed, "проход дошёл до следующей вакансии");
+        assertEquals(List.of(11L), repo.checked, "запись со штампом ждёт полный интервал, а не блокирует очередь");
+    }
+
+    @Test
     void checkVacancyFreshness_noScrapeQueueGate_alwaysRuns() {
         // Регрессия (замерено на проде 29.08.2026): гейт по размеру очереди скрейпинга
         // дважды превращался в вечное голодание — 1001 вакансия ждала первого скрейпинга,

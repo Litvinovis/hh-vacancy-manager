@@ -437,7 +437,9 @@ public class VacancyPipelineService {
     // clusters of genuinely dead, months-old postings that tripped this backstop 7 times in
     // one morning for no real reason. A true rate limit still shows up on fresh postings,
     // which this catches at full sensitivity.
-    private static final Set<String> PER_VACANCY_FAILURE_REASONS = Set.of("not_found", "no_job_posting_data", "http_403", "archived");
+    // bad_hh_id — неверный идентификатор конкретной записи, а не блокировка сайта:
+    // будучи «общей» ошибкой, он останавливал актуализацию целиком.
+    private static final Set<String> PER_VACANCY_FAILURE_REASONS = Set.of("not_found", "no_job_posting_data", "http_403", "archived", "bad_hh_id");
     private static final String LEGACY_SOURCE = "hh-legacy";
     // CONSECUTIVE 403s, not a per-run total. It used to be a flat 8 anywhere in the run,
     // which was a sane anomaly threshold back when a run was 30 rows — but roughly one

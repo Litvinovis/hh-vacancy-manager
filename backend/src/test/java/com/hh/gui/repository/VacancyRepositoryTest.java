@@ -700,6 +700,44 @@ class VacancyRepositoryTest {
     }
 
     @Test
+    void findDueFreshnessCheck_skipsTelegramRows() {
+        // Регрессия (прод, 25.09 18:47 UTC): одобренная вакансия из Telegram (hh_id tg_канал_N)
+        // вставала первой в очередь, скрейпер отвечал bad_hh_id, и проход обрывался каждые
+        // 10 минут — 341 одобренная вакансия ни разу не перепроверялась на закрытие.
+        String old = java.time.Instant.now().minusSeconds(10 * 24 * 3600).toString();
+        saveApproved("tg_onlinevakansii_10461", old, null);
+        Long hh = saveApproved("fr-hh", old, null);
+
+        List<Vacancy> due = vacancyRepo.findDueFreshnessCheck(7, 10);
+
+        assertEquals(List.of(hh), due.stream().map(Vacancy::getId).toList(),
+            "на hh.ru проверяются только вакансии с hh.ru");
+    }
+
+    @Test
+    void findPending_returnsInArrivalOrder_notBySourcePublishDate() {
+        // Регрессия (прод, 26.09): сортировка по hh_published_at DESC пропускала вперёд свежие
+        // вакансии с hh, а у репостов из Telegram дата исходного поста старая — 33 из них ждали
+        // AI до 19 часов при пачке 24 за прогон.
+        Vacancy tgOld = createTestVacancy("tg_chan_1", "Из Telegram", "new");
+        tgOld.setScrapeStatus("ok");
+        tgOld.setHhPublishedAt("2026-09-13T12:00:11Z");
+        tgOld.setCreatedAt("2026-09-25T10:00:00Z");
+        Long tgId = vacancyRepo.save(tgOld).getId();
+
+        Vacancy hhNew = createTestVacancy("pend-hh", "С hh", "new");
+        hhNew.setScrapeStatus("ok");
+        hhNew.setHhPublishedAt("2026-09-26T08:00:00Z");
+        hhNew.setCreatedAt("2026-09-26T08:05:00Z");
+        vacancyRepo.save(hhNew);
+
+        List<Vacancy> batch = vacancyRepo.findPending("test-person", "test-search", 1);
+
+        assertEquals(List.of(tgId), batch.stream().map(Vacancy::getId).toList(),
+            "первой анализируется поступившая раньше, как бы давно ни был опубликован исходник");
+    }
+
+    @Test
     void markClosed_hidesFromListsCountsAndReports() {
         String old = java.time.Instant.now().minusSeconds(10 * 24 * 3600).toString();
         Long id = saveApproved("fr-closed", old, null);

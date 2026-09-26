@@ -88,6 +88,13 @@ public class VkPublishQueue {
     /** Ставит вакансии в очередь VK. Вызывается там, где раньше был немедленный кросс-пост. */
     public void enqueue(List<Vacancy> vacancies) {
         if (vacancies.isEmpty()) return;
+        List<Vacancy> reachable = vacancies.stream().filter(VkPostFormatter::hasApplyTarget).toList();
+        if (reachable.size() < vacancies.size()) {
+            log.info("VK: {} вакансий без ссылки и контакта для отклика — в очередь не ставим",
+                vacancies.size() - reachable.size());
+        }
+        if (reachable.isEmpty()) return;
+        vacancies = reachable;
         vacancyRepo.enqueueForVk(vacancies.stream().map(Vacancy::getId).toList());
         log.info("В очередь VK поставлено {} вакансий (в очереди всего {})",
             vacancies.size(), vacancyRepo.countVkQueued());
@@ -135,6 +142,15 @@ public class VkPublishQueue {
         if (backlog == 0) return;
         int size = planPost(backlog, postsThisWindow, remainingWindowsAfter(window));
         List<Vacancy> next = vacancyRepo.findVkQueued(size);
+        // Попавшие в очередь до фильтра в enqueue вакансии без отклика снимаем здесь же,
+        // а не публикуем с пустым номером в комментарии.
+        List<Long> unreachable = next.stream().filter(v -> !VkPostFormatter.hasApplyTarget(v)).map(Vacancy::getId).toList();
+        if (!unreachable.isEmpty()) {
+            vacancyRepo.expireVkQueued(unreachable);
+            log.info("Очередь VK: снято {} вакансий без ссылки и контакта для отклика", unreachable.size());
+            // Перечитываем: иначе пост с одной «неоткликаемой» вакансией не выходил в этом окне вовсе
+            next = vacancyRepo.findVkQueued(size).stream().filter(VkPostFormatter::hasApplyTarget).toList();
+        }
         if (next.isEmpty()) return;
         if (next.size() == 1) {
             publishOne(next.get(0));
