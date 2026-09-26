@@ -144,7 +144,7 @@ public final class VkPostFormatter {
             List<String> details = new ArrayList<>();
             if (VacancyPostFormatter.hasRealCompany(v)) details.add(v.getCompany().trim());
             if (f.reason() != null && !f.reason().isBlank()) {
-                details.add(VacancyPostFormatter.truncate(VacancyPostFormatter.capitalize(f.reason().trim()), DIGEST_REASON_CHARS));
+                details.add(truncateAtWord(VacancyPostFormatter.capitalize(f.reason().trim()), DIGEST_REASON_CHARS));
             }
             if (!details.isEmpty()) sb.append("   ").append(String.join(" · ", details)).append("\n");
             sb.append("\n");
@@ -152,6 +152,18 @@ public final class VkPostFormatter {
         sb.append("Как откликнуться — в первом комментарии, по номеру вакансии 👇\n\n");
         sb.append(String.join(" ", digestHashtags(items, communityScreenName)));
         return sb.toString();
+    }
+
+    /**
+     * Обрезка по границе слова: посимвольная давала в ленте «известный работо…» и «Вилка 60–10…».
+     * Слово длиннее лимита (без пробелов) режется как раньше.
+     */
+    static String truncateAtWord(String s, int maxChars) {
+        if (s == null || s.length() <= maxChars) return s;
+        String window = s.substring(0, maxChars);
+        int space = window.lastIndexOf(' ');
+        String cut = space > maxChars / 2 ? window.substring(0, space) : window;
+        return cut.replaceAll("[\\s,;:·–—-]+$", "") + "…";
     }
 
     /** «Вечерняя подборка: 6 удалённых вакансий» — число в хуке само по себе цепляет в ленте. */
@@ -172,6 +184,14 @@ public final class VkPostFormatter {
             any = true;
         }
         return any ? sb.toString().trim() : null;
+    }
+
+    /**
+     * Есть ли куда откликнуться. Без ссылки и контакта вакансия в VK бесполезна: в подборке
+     * её номер пропадал из комментария (пост 1796: в комментарии 4 номера из 7).
+     */
+    public static boolean hasApplyTarget(Vacancy v) {
+        return applyTarget(v) != null;
     }
 
     /** Ссылка на отклик или контакт из текста Telegram-поста; null — откликаться некуда. */

@@ -849,6 +849,10 @@ public class VacancyRepository {
             "SELECT * FROM vacancies WHERE ai_verdict='yes' AND closed_at IS NULL " +
             "AND (status IS NULL OR status != 'rejected') AND scrape_status='ok' " +
             "AND COALESCE(last_checked_at, created_at) < ? " +
+            // Вакансии из Telegram (hh_id вида tg_канал_N) не живут на hh.ru — скрейпер отвечает
+            // bad_hh_id. Раньше такая запись вставала первой в очередь и останавливала весь проход
+            // каждые 10 минут: с 25.09 18:47 UTC актуализация не проверила ни одной вакансии.
+            "AND hh_id NOT LIKE 'tg!_%' ESCAPE '!' " +
             "ORDER BY CASE WHEN valid_through != '' AND valid_through < ? THEN 0 ELSE 1 END, " +
             "COALESCE(last_checked_at, created_at) ASC LIMIT ?",
             rowMapper, threshold, today, limit);
@@ -908,7 +912,10 @@ public class VacancyRepository {
     public List<Vacancy> findPending(String person, String searchName, int limit) {
         return jdbc.query(
             "SELECT * FROM vacancies WHERE ai_verdict = 'pending' AND scrape_status = 'ok' " +
-            "AND person=? AND search_name=? ORDER BY hh_published_at DESC LIMIT ?",
+            // В порядке поступления: сортировка по дате публикации исходника пропускала вперёд
+            // свежие вакансии с hh, а у репостов из Telegram эта дата старая — они ждали AI
+            // сутками (26.09: 33 из Telegram до 19 ч при пачке 24 за прогон).
+            "AND person=? AND search_name=? ORDER BY created_at ASC, id ASC LIMIT ?",
             rowMapper, person, searchName, limit);
     }
 
@@ -1309,6 +1316,17 @@ public class VacancyRepository {
      * недельной давности на удалёнку уже разобрали) или закрыта на hh. Статус 'expired', а
      * не удаление — чтобы enqueueForVk не поставил её обратно.
      */
+    /** Снимает с очереди VK конкретные вакансии (например, без ссылки и контакта для отклика). */
+    public int expireVkQueued(List<Long> ids) {
+        if (ids == null || ids.isEmpty()) return 0;
+        String now = Instant.now().toString();
+        int n = 0;
+        for (Long id : ids) {
+            n += jdbc.update("UPDATE vacancies SET vk_status='expired', updated_at=? WHERE id=? AND vk_status='queued'", now, id);
+        }
+        return n;
+    }
+
     public int expireVkQueue(String cutoffIso) {
         return jdbc.update("UPDATE vacancies SET vk_status='expired', updated_at=? " +
             "WHERE vk_status='queued' AND (vk_queued_at < ? OR closed_at IS NOT NULL)",

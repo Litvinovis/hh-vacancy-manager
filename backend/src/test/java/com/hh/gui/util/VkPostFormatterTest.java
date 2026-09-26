@@ -31,6 +31,33 @@ class VkPostFormatterTest {
         return v;
     }
 
+    private Vacancy telegramImageOnly() {
+        Vacancy v = new Vacancy();
+        v.setHhId("tg_onlinevakansii_1");
+        v.setTitle("Монтажёр Reels");
+        v.setAiReason("монтировать ролики");
+        v.setUrl("https://hooks.pro/media/2026/09/09/bot1/photos/HX7q/file_4562.jpg");
+        v.setDescription("Монтаж роликов, оплата сдельная. Подробности позже.");
+        return v;
+    }
+
+    @Test
+    void hasApplyTarget_hhLinkYes_imageWithoutContactNo() {
+        assertTrue(VkPostFormatter.hasApplyTarget(hhLinked()));
+        assertFalse(VkPostFormatter.hasApplyTarget(telegramImageOnly()),
+            "картинка из поста и ни одного контакта — откликнуться некуда");
+    }
+
+    @Test
+    void truncateAtWord_cutsOnSpaceNotMidWord() {
+        String cut = VkPostFormatter.truncateAtWord("Понятные задачи UGC-креатора для beauty-брендов, есть зарплата и условия, известный работодатель", 90);
+        assertTrue(cut.endsWith("…"), cut);
+        assertFalse(cut.contains("работо…"), "не рвём слово: " + cut);
+        assertTrue(cut.length() <= 91, cut);
+        assertFalse(cut.matches(".*[,\\s]…$"), "без висящей запятой перед многоточием: " + cut);
+        assertEquals("коротко", VkPostFormatter.truncateAtWord("коротко", 90));
+    }
+
     @Test
     void publicPost_containsCoreFields_sharedWithTelegramFormatter() {
         String post = VkPostFormatter.publicPost(hhLinked());
