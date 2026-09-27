@@ -31,6 +31,8 @@ const { chromium } = require('playwright');
 const PORT = parseInt(process.env.TG_SCRAPER_PORT || '8096', 10);
 const HOST = process.env.TG_SCRAPER_HOST || '127.0.0.1';
 const NAV_TIMEOUT_MS = parseInt(process.env.TG_SCRAPE_TIMEOUT_MS || '30000', 10);
+// Сколько ждать строку канала в выдаче поиска Telegram Web.
+const SEARCH_WAIT_MS = 8000;
 const PROFILE_DIR = process.env.TG_SCRAPER_PROFILE_DIR || path.join(__dirname, 'profile-data');
 
 let contextPromise = null;
@@ -363,16 +365,22 @@ async function openChannel(page, channel) {
   await searchBox.click({ force: true });
   await searchBox.fill('');
   await searchBox.fill(`@${channel}`);
-  await page.waitForTimeout(2000);
 
-  const rows = await page.$$('a.chatlist-chat');
-  for (const row of rows) {
-    const subtitle = await row.$eval('.row-subtitle', (el) => el.textContent).catch(() => '');
-    if (subtitle && subtitle.toLowerCase().startsWith(`@${channel.toLowerCase()},`)) {
-      await row.click({ force: true });
-      return true;
+  // Ждём нужную строку в выдаче, а не фиксированные 2 с: первый поиск после простоя
+  // (обход каналов раз в час) не успевал отрисоваться — 20 из ~420 чтений за 20–27.09
+  // падали с channel_not_found и проходили только на повторе из hh-gui.
+  const deadline = Date.now() + SEARCH_WAIT_MS;
+  do {
+    await page.waitForTimeout(500);
+    const rows = await page.$$('a.chatlist-chat');
+    for (const row of rows) {
+      const subtitle = await row.$eval('.row-subtitle', (el) => el.textContent).catch(() => '');
+      if (subtitle && subtitle.toLowerCase().startsWith(`@${channel.toLowerCase()},`)) {
+        await row.click({ force: true });
+        return true;
+      }
     }
-  }
+  } while (Date.now() < deadline);
   return false;
 }
 
