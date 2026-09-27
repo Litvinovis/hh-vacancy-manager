@@ -53,8 +53,9 @@ public final class VkPostFormatter {
         if (f.reason() != null && !f.reason().isBlank()) {
             sb.append("Что делать: ").append(VacancyPostFormatter.capitalize(f.reason())).append("\n");
         }
-        if (v.getNoveltyNote() != null && !v.getNoveltyNote().isBlank()) {
-            sb.append("Почему интересно: ").append(VacancyPostFormatter.capitalize(v.getNoveltyNote())).append("\n");
+        String noveltyNote = AiText.clean(v.getNoveltyNote());
+        if (noveltyNote != null && !noveltyNote.isBlank()) {
+            sb.append("Почему интересно: ").append(VacancyPostFormatter.capitalize(noveltyNote)).append("\n");
         }
         sb.append("\n");
         String hint = applyHint(v);

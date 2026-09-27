@@ -36,6 +36,7 @@ class VkNotifierTest {
     private volatile int emptyPhotoUploads;
     private final java.util.List<Long> sleeps = new java.util.ArrayList<>();
     private final java.util.concurrent.atomic.AtomicInteger uploadServerRequests = new java.util.concurrent.atomic.AtomicInteger();
+    private final AtomicReference<String> lastPollsCreateBody = new AtomicReference<>();
     @TempDir Path dir;
 
     @BeforeEach
@@ -83,6 +84,15 @@ class VkNotifierTest {
         server.createContext("/method/photos.saveWallPhoto", ex -> {
             lastSaveWallPhotoBody.set(new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
             byte[] body = "{\"response\":[{\"owner_id\":-123456789,\"id\":42}]}".getBytes(StandardCharsets.UTF_8);
+            ex.sendResponseHeaders(200, body.length);
+            ex.getResponseBody().write(body);
+            ex.close();
+        });
+        server.createContext("/method/polls.create", ex -> {
+            lastPollsCreateBody.set(new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            byte[] body = (lastPollsCreateBody.get().contains("access_token=GOODTOKEN")
+                ? "{\"error\":{\"error_code\":27,\"error_msg\":\"Group authorization failed\"}}"
+                : "{\"response\":{\"id\":77,\"owner_id\":-123456789}}").getBytes(StandardCharsets.UTF_8);
             ex.sendResponseHeaders(200, body.length);
             ex.getResponseBody().write(body);
             ex.close();
@@ -241,5 +251,26 @@ class VkNotifierTest {
         assertNull(notifier.uploadWallPhoto(new byte[]{1, 2, 3}, "card.png"));
         assertEquals(4, uploads.get(), "четыре попытки — и хватит, пост уйдёт текстом");
         assertNull(lastSaveWallPhotoBody.get(), "с пустым photo в saveWallPhoto ходить бессмысленно");
+    }
+
+    // ── опросы ──
+
+    @Test
+    void postPoll_createsPollWithUserTokenAndPostsItAsCommunity() {
+        // Живой случай 26.09.2026: polls.create с групповым токеном — error 27.
+        ReflectionTestUtils.setField(notifier, "photoUploadToken", "STATIC_USER_TOKEN");
+
+        assertEquals(123L, notifier.postPoll("текст", "Вопрос?", java.util.List.of("да", "нет")));
+        assertTrue(lastPollsCreateBody.get().contains("access_token=STATIC_USER_TOKEN"), lastPollsCreateBody.get());
+        assertTrue(lastPollsCreateBody.get().contains("owner_id=-123456789"), lastPollsCreateBody.get());
+        assertTrue(lastRequestBody.get().contains("access_token=GOODTOKEN"), "на стену ставит сообщество");
+        assertTrue(lastRequestBody.get().contains("poll-123456789_77"), lastRequestBody.get());
+    }
+
+    @Test
+    void postPoll_noUserToken_returnsNullWithoutCallingVk() {
+        assertNull(notifier.postPoll("текст", "Вопрос?", java.util.List.of("да", "нет")));
+        assertNull(lastPollsCreateBody.get(), "групповым токеном polls.create всё равно не работает");
+        assertNull(lastRequestBody.get());
     }
 }

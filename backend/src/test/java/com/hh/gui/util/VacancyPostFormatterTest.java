@@ -184,4 +184,29 @@ class VacancyPostFormatterTest {
         v.setTitle("Оператор ".repeat(40));
         assertTrue(VacancyPostFormatter.publicPost(v).contains("…"));
     }
+
+    // ── мусор от модели и пост без отклика ──
+
+    @Test
+    void publicPost_dropsGarbledAiLines_keepsTheRest() {
+        Vacancy v = hhLinked();
+        v.setAiReason("анализ и数字-управление");
+        v.setNoveltyColor("yellow");
+        v.setNoveltyNote("Rutинные задачи");
+
+        String post = VacancyPostFormatter.publicPost(v);
+
+        assertFalse(post.contains("💡"), post);
+        assertFalse(post.contains("🟡"), post);
+        assertTrue(post.contains("Менеджер по закупкам"), post);
+        assertTrue(post.contains("Откликнуться"), post);
+    }
+
+    @Test
+    void hasApplyLine_selfLinkWithoutContact_isFalse() {
+        // Пост 1320, 26.09.2026: Telegram-вакансия без ссылки и без почты ушла в канал
+        assertFalse(VacancyPostFormatter.hasApplyLine(telegramSelfLinked("Ищем motion-дизайнера, пишите.")));
+        assertTrue(VacancyPostFormatter.hasApplyLine(telegramSelfLinked("Отклик: hr@studio.ru")));
+        assertTrue(VacancyPostFormatter.hasApplyLine(hhLinked()));
+    }
 }

@@ -1142,6 +1142,24 @@ public class VacancyPipelineService {
                 log.info("Фильтр качества (нет ни компании, ни зарплаты) ({} · {}): {} вакансий отброшено из {}",
                     job.personName, job.searchName, droppedIds.size(), beforeQualityFilter.size());
             }
+            // Пост без ссылки и контакта читателю бесполезен (канал, 26.09.2026: Telegram-вакансия,
+            // у которой в исходном посте не было ни ссылки, ни почты). В ВК такие отсекает
+            // VkPublishQueue; здесь — до канала, помечая notified по той же причине, что выше.
+            List<Vacancy> beforeApplyFilter = approved;
+            List<Vacancy> afterApplyFilter = beforeApplyFilter.stream()
+                .filter(VacancyPostFormatter::hasApplyLine)
+                .toList();
+            approved = afterApplyFilter;
+            if (afterApplyFilter.size() < beforeApplyFilter.size()) {
+                List<Long> droppedIds = beforeApplyFilter.stream()
+                    .filter(v -> !afterApplyFilter.contains(v))
+                    .map(Vacancy::getId)
+                    .toList();
+                vacancyRepo.markNotified(droppedIds);
+                metrics.recordDropped("no_apply", droppedIds.size());
+                log.info("Нет ссылки для отклика ({} · {}): {} вакансий отброшено из {}",
+                    job.personName, job.searchName, droppedIds.size(), beforeApplyFilter.size());
+            }
         }
 
         if (primaryWillSend) {

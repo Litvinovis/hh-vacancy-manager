@@ -114,7 +114,14 @@ public class VkNotifier {
             log.error("Не удалось сериализовать варианты опроса: {}", e.getMessage());
             return null;
         }
-        Map<?, ?> created = call("polls.create", p);
+        // polls.create недоступен групповому токену (error 27, лог 26.09) — опрос создаёт
+        // админ пользовательским токеном с owner_id сообщества, а на стену его ставит группа.
+        String pollToken = userToken();
+        if (pollToken == null) {
+            log.warn("Опрос VK не создан: нет пользовательского токена (VK ID или VK_PHOTO_UPLOAD_TOKEN)");
+            return null;
+        }
+        Map<?, ?> created = callWithToken("polls.create", p, pollToken);
         if (created == null) return null;
         Map<?, ?> poll = (Map<?, ?>) created.get("response");
         Object pollId = poll.get("id");

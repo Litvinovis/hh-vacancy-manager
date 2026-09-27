@@ -52,11 +52,14 @@ public class ChannelPublisher {
     private static final int REFERENCE_QUEUE_BATCHES = 5;
     private static final long MIN_PACE_MINUTES = 3;
     private static final long MAX_PACE_MINUTES = 60;
-    // Public channel posts only go out 07:00–23:00 local (server timezone) — anything
-    // that would land overnight is pushed to 07:00 the next morning instead, so the
-    // queue quietly accumulates overnight rather than posting into an empty-audience window.
-    private static final int PUBLISH_WINDOW_START_HOUR = 7;
-    private static final int PUBLISH_WINDOW_END_HOUR = 23;
+    // Public channel posts only go out 08:00–22:00 по Москве — anything that would land
+    // overnight is pushed to 08:00 the next morning instead, so the queue quietly
+    // accumulates overnight rather than posting into an empty-audience window.
+    // Считалось по поясу сервера (Екатеринбург, +2 к Москве): окно фактически было
+    // 05:00–21:00 МСК, и за 24–26.09 больше половины вакансий ушло в канал до 9 утра.
+    static final ZoneId PUBLISH_ZONE = ZoneId.of("Europe/Moscow");
+    private static final int PUBLISH_WINDOW_START_HOUR = 8;
+    private static final int PUBLISH_WINDOW_END_HOUR = 22;
 
     private final VacancyRepository vacancyRepo;
     private final SearchRepository searchRepo;
@@ -133,7 +136,7 @@ public class ChannelPublisher {
      * are grouped into PUBLISH_BATCH_SIZE-sized batches sharing one due time; each next
      * batch's time is the previous one plus a pace that itself depends on how deep the
      * queue already is (see {@link #dynamicPaceMinutes}) — and any time landing outside
-     * the 07:00–23:00 publish window gets pushed to the next morning (see
+     * the 08:00–22:00 publish window gets pushed to the next morning (see
      * {@link #pushPastNightWindow}).
      */
     void enqueue(List<Vacancy> approved, SearchJob job) {
@@ -191,16 +194,16 @@ public class ChannelPublisher {
     }
 
     static boolean isOutsidePublishWindow(Instant instant) {
-        int hour = instant.atZone(ZoneId.systemDefault()).getHour();
+        int hour = instant.atZone(PUBLISH_ZONE).getHour();
         return hour >= PUBLISH_WINDOW_END_HOUR || hour < PUBLISH_WINDOW_START_HOUR;
     }
 
     /** Rolls a candidate publish time forward to PUBLISH_WINDOW_START_HOUR the same or
-     *  next local day if it falls outside the 07:00–23:00 window — the queue accumulates
+     *  next local day if it falls outside the 08:00–22:00 window — the queue accumulates
      *  overnight instead of posting into an empty-audience window. */
     static Instant pushPastNightWindow(Instant candidate) {
         if (!isOutsidePublishWindow(candidate)) return candidate;
-        ZonedDateTime zdt = candidate.atZone(ZoneId.systemDefault());
+        ZonedDateTime zdt = candidate.atZone(PUBLISH_ZONE);
         ZonedDateTime morning = zdt.withHour(PUBLISH_WINDOW_START_HOUR).withMinute(0).withSecond(0).withNano(0);
         if (zdt.getHour() >= PUBLISH_WINDOW_END_HOUR) morning = morning.plusDays(1);
         return morning.toInstant();
@@ -210,7 +213,7 @@ public class ChannelPublisher {
      * Fired on the queued-publish scheduler tick (see PipelineScheduler). Sends up to
      * PUBLISH_BATCH_SIZE due posts per search per tick as ONE combined message (see
      * {@link #enqueue} for why batches at all) — a backlog beyond that stays queued and
-     * is picked up by the following ticks. Skips entirely outside the 07:00–23:00 window.
+     * is picked up by the following ticks. Skips entirely outside the 08:00–22:00 window.
      */
     public void publishDueQueued(int limit) {
         if (!runtimeConfig.isChannelNotificationsEnabled()) return;
@@ -220,7 +223,7 @@ public class ChannelPublisher {
 
     /** Split out from {@link #publishDueQueued} so tests can exercise the batching/sending
      *  logic without it being at the mercy of the real wall-clock publish window — a test
-     *  run outside 07:00–23:00 local would otherwise silently no-op regardless of what
+     *  run outside 08:00–22:00 local would otherwise silently no-op regardless of what
      *  it's actually asserting. */
     void doPublishDueQueued(int limit) {
         List<Vacancy> due = vacancyRepo.findDueQueuedPublications(Instant.now().toString(), limit);
