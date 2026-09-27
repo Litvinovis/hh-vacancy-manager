@@ -1031,6 +1031,16 @@ public class VacancyAiAnalyzer {
             Object noveltyNoteVal = item.get("noveltyNote");
             String noveltyNote = noveltyNoteVal instanceof String s ? s : "";
 
+            // Мусор от модели (иероглифы, слово из двух алфавитов) в базу не пишем — см. AiText.
+            String cleanReason = com.hh.gui.util.AiText.clean(reason);
+            String cleanNote = com.hh.gui.util.AiText.clean(noveltyNote);
+            if (cleanReason == null || cleanNote == null) {
+                log.warn("AI вернул испорченный текст для вакансии {}, поле очищено: reason='{}' noveltyNote='{}'",
+                    id, reason, noveltyNote);
+            }
+            reason = cleanReason == null ? "" : cleanReason;
+            noveltyNote = cleanNote == null ? "" : cleanNote;
+
             if (!VALID_VERDICTS.contains(verdict)) {
                 log.warn("AI вернул неожиданный verdict '{}' для вакансии {}, приводим к 'no'", verdict, id);
                 verdict = "no";

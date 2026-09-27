@@ -42,7 +42,7 @@ public final class VacancyPostFormatter {
             truncate(v.getTitle(), MAX_TITLE_CHARS),
             hasRealCompany ? escapeHtml(v.getCompany()) : "компания не указана",
             SalaryFormatter.forReport(v),
-            truncate(v.getAiReason(), MAX_REASON_CHARS));
+            truncate(AiText.clean(v.getAiReason()), MAX_REASON_CHARS));
     }
 
     // A leading "@" means employer() (see TelegramPostParser) never found a real
@@ -65,8 +65,9 @@ public final class VacancyPostFormatter {
             sb.append(String.format("💡 %s\n", escapeHtml(f.reason())));
         }
         String noveltyEmoji = v.getNoveltyColor() != null ? NOVELTY_EMOJI.get(v.getNoveltyColor()) : null;
-        if (noveltyEmoji != null && v.getNoveltyNote() != null && !v.getNoveltyNote().isBlank()) {
-            sb.append(String.format("%s %s\n", noveltyEmoji, escapeHtml(capitalize(v.getNoveltyNote()))));
+        String noveltyNote = AiText.clean(v.getNoveltyNote());
+        if (noveltyEmoji != null && noveltyNote != null && !noveltyNote.isBlank()) {
+            sb.append(String.format("%s %s\n", noveltyEmoji, escapeHtml(capitalize(noveltyNote))));
         }
         sb.append(applyLine(v, "👉", ""));
         return sb.toString();
@@ -97,6 +98,11 @@ public final class VacancyPostFormatter {
      * @param urlEmoji marker used when the destination is a plain URL; a contact brings its own.
      * @param indent   leading whitespace, since the personal digest indents its detail lines.
      */
+    /** Есть ли читателю канала куда откликнуться — ссылка или контакт, а не ссылка на сам пост. */
+    public static boolean hasApplyLine(Vacancy v) {
+        return !applyLine(v, "", "").isEmpty();
+    }
+
     private static String applyLine(Vacancy v, String urlEmoji, String indent) {
         String url = v.getUrl();
         if (TelegramPostParser.isDeadEndLink(url)) {

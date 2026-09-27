@@ -443,8 +443,11 @@ public final class CardImageRenderer {
         if (!joined.equals(text.trim().replaceAll("\\s+", " ")) && !lines.isEmpty()) {
             int last = lines.size() - 1;
             String l = lines.get(last);
+            // Режем по словам, а не по буквам, и не оставляем висящий предлог или разделитель:
+            // на стене 26.09 были «Куратор в…», «Project Manager в…», «по работе с…».
+            while (l.contains(" ") && fm.stringWidth(l + "…") > width) l = l.substring(0, l.lastIndexOf(' '));
             while (!l.isEmpty() && fm.stringWidth(l + "…") > width) l = l.substring(0, l.length() - 1);
-            lines.set(last, l.trim() + "…");
+            lines.set(last, dropDanglingTail(l) + "…");
         }
         // Одно слово шире строки (длинный URL, «Специалист/координатор/ассистент» без
         // пробелов) раньше просто вылезало за край карточки — режем его по символам.
@@ -455,6 +458,26 @@ public final class CardImageRenderer {
             lines.set(i, l + "…");
         }
         return lines;
+    }
+
+    /** Служебные слова, на которых обрывать название нельзя — без продолжения они читаются как ошибка. */
+    private static final java.util.Set<String> DANGLING_WORDS = java.util.Set.of(
+        "в", "во", "на", "с", "со", "к", "ко", "по", "о", "об", "от", "до", "из", "за", "для", "у", "при",
+        "без", "над", "под", "про", "через", "и", "а", "но", "или", "либо", "в/на");
+
+    /** Убирает хвостовые предлоги, союзы и разделители («/», «|», «-», «,»), пока остаётся хоть одно слово. */
+    static String dropDanglingTail(String line) {
+        String l = line.trim();
+        while (true) {
+            String stripped = l.replaceAll("[\\s/|,;:(\\-–—]+$", "");
+            int space = stripped.lastIndexOf(' ');
+            String lastWord = space < 0 ? stripped : stripped.substring(space + 1);
+            if (space > 0 && DANGLING_WORDS.contains(lastWord.toLowerCase(java.util.Locale.ROOT))) {
+                l = stripped.substring(0, space);
+            } else {
+                return stripped.isEmpty() ? l : stripped;
+            }
+        }
     }
 
     private static Color rgb(int hex) { return new Color(hex); }

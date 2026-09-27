@@ -185,31 +185,43 @@ class ChannelPublisherTest {
             "не должен уходить выше MAX_PACE_MINUTES независимо от базового темпа");
     }
 
-    // ── ночное окно ──
+    // ── ночное окно (по Москве, не по поясу сервера) ──
+
+    private static final java.time.ZoneId MSK = java.time.ZoneId.of("Europe/Moscow");
+
+    private static ZonedDateTime mskToday(int hour, int minute) {
+        return ZonedDateTime.now(MSK).withHour(hour).withMinute(minute).withSecond(0).withNano(0);
+    }
 
     @Test
     void pushPastNightWindow_daytimeInstant_unchanged() {
-        Instant daytime = ZonedDateTime.now().withHour(14).withMinute(0).withSecond(0).withNano(0).toInstant();
+        Instant daytime = mskToday(14, 0).toInstant();
         assertEquals(daytime, ChannelPublisher.pushPastNightWindow(daytime));
     }
 
     @Test
     void pushPastNightWindow_earlyMorningInstant_pushedToWindowStartSameDay() {
-        Instant earlyMorning = ZonedDateTime.now().withHour(3).withMinute(30).withSecond(0).withNano(0).toInstant();
-        Instant result = ChannelPublisher.pushPastNightWindow(earlyMorning);
-        ZonedDateTime zdt = result.atZone(java.time.ZoneId.systemDefault());
-        assertEquals(7, zdt.getHour());
+        Instant earlyMorning = mskToday(3, 30).toInstant();
+        ZonedDateTime zdt = ChannelPublisher.pushPastNightWindow(earlyMorning).atZone(MSK);
+        assertEquals(8, zdt.getHour());
         assertEquals(0, zdt.getMinute());
-        assertEquals(earlyMorning.atZone(java.time.ZoneId.systemDefault()).toLocalDate(), zdt.toLocalDate());
+        assertEquals(earlyMorning.atZone(MSK).toLocalDate(), zdt.toLocalDate());
+    }
+
+    @Test
+    void pushPastNightWindow_fiveAmMoscow_isNight_evenThoughServerClockSaysSeven() {
+        // Живой случай 24–26.09.2026: сервер в Екатеринбурге, окно считалось по его поясу,
+        // и в 05:00 МСК (07:00 на сервере) канал уже публиковал.
+        assertTrue(ChannelPublisher.isOutsidePublishWindow(mskToday(5, 0).toInstant()));
+        assertFalse(ChannelPublisher.isOutsidePublishWindow(mskToday(21, 30).toInstant()));
     }
 
     @Test
     void pushPastNightWindow_lateEveningInstant_pushedToWindowStartNextDay() {
-        Instant lateEvening = ZonedDateTime.now().withHour(23).withMinute(30).withSecond(0).withNano(0).toInstant();
-        Instant result = ChannelPublisher.pushPastNightWindow(lateEvening);
-        ZonedDateTime zdt = result.atZone(java.time.ZoneId.systemDefault());
-        assertEquals(7, zdt.getHour());
-        assertEquals(lateEvening.atZone(java.time.ZoneId.systemDefault()).toLocalDate().plusDays(1), zdt.toLocalDate());
+        Instant lateEvening = mskToday(22, 30).toInstant();
+        ZonedDateTime zdt = ChannelPublisher.pushPastNightWindow(lateEvening).atZone(MSK);
+        assertEquals(8, zdt.getHour());
+        assertEquals(lateEvening.atZone(MSK).toLocalDate().plusDays(1), zdt.toLocalDate());
     }
 
     // ── постановка в очередь ──
@@ -240,8 +252,8 @@ class ChannelPublisherTest {
         // future-dated batch is essential: enqueue falls back to Instant.now() whenever the
         // tail isn't already in the future, which would mask the bug entirely.
         FakeQueueRepo repo = new FakeQueueRepo();
-        ZonedDateTime midWindow = ZonedDateTime.now().withHour(14).withMinute(0).withSecond(0).withNano(0);
-        if (!midWindow.isAfter(ZonedDateTime.now())) midWindow = midWindow.plusDays(1);
+        ZonedDateTime midWindow = ZonedDateTime.now(MSK).withHour(14).withMinute(0).withSecond(0).withNano(0);
+        if (!midWindow.isAfter(ZonedDateTime.now(MSK))) midWindow = midWindow.plusDays(1);
         String existingTail = midWindow.toInstant().toString();
         repo.enqueuedIds.addAll(List.of(101L, 102L, 103L, 104L, 105L));
         for (int i = 0; i < 5; i++) repo.enqueuedPublishAts.add(existingTail);

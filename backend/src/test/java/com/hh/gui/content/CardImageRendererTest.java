@@ -106,4 +106,26 @@ class CardImageRendererTest {
         Vacancy v = new Vacancy();   // ни названия, ни зарплаты, ни компании
         assertTrue(CardImageRenderer.vacancyCard(v, "x").length > 1000);
     }
+
+    @Test
+    void dropDanglingTail_removesTrailingPrepositionsAndSeparators() {
+        // Стена 26.09.2026: «Куратор в…», «Project Manager в…», «по работе с…»
+        assertEquals("Наставник UGC-креаторов / Куратор", CardImageRenderer.dropDanglingTail("Наставник UGC-креаторов / Куратор в"));
+        assertEquals("Помощник менеджера по работе", CardImageRenderer.dropDanglingTail("Помощник менеджера по работе с"));
+        assertEquals("Проджект менеджер", CardImageRenderer.dropDanglingTail("Проджект менеджер /"));
+        assertEquals("Менеджер Wildberries", CardImageRenderer.dropDanglingTail("Менеджер Wildberries"));
+    }
+
+    @Test
+    void wrap_oneLine_cutsAtWordNotMidWord() {
+        List<String> line = CardImageRenderer.wrap("Бизнес-ассистент для предпринимателей и блогеров-миллионников",
+            metrics(), 900, 1);
+        assertEquals(1, line.size());
+        String l = line.get(0);
+        assertTrue(l.endsWith("…"), l);
+        String body = l.substring(0, l.length() - 1);
+        assertTrue("Бизнес-ассистент для предпринимателей и блогеров-миллионников".startsWith(body), l);
+        String lastWord = body.substring(body.lastIndexOf(' ') + 1);
+        assertTrue(List.of("Бизнес-ассистент", "предпринимателей", "блогеров-миллионников").contains(lastWord), l);
+    }
 }
