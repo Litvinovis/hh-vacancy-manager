@@ -86,6 +86,11 @@ public class TelegramClient {
             }
             result = fetchChannelOnce(username, limit, notBefore);
         }
+        // Предупреждаем только об итоговой неудаче: промах, который прошёл на повторе,
+        // ничего не потерял, а в логе выглядел как сломанный канал.
+        if (!result.ok() && !result.reason().startsWith("client_error")) {
+            log.warn("Чтение Telegram-канала @{} не удалось: {}", username, result.reason());
+        }
         return result;
     }
 
@@ -105,7 +110,7 @@ public class TelegramClient {
             Map<String, Object> json = mapper.readValue(body, Map.class);
             if (!Boolean.TRUE.equals(json.get("ok"))) {
                 String reason = String.valueOf(json.getOrDefault("reason", "unknown"));
-                log.warn("Чтение Telegram-канала @{} не удалось: {}", username, reason);
+                log.debug("Telegram-канал @{}: попытка не удалась: {}", username, reason);
                 return ChannelResult.failure(reason);
             }
 
