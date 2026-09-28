@@ -48,10 +48,20 @@ public class VacancyService {
                                                Integer minScore, String search, String tag,
                                                Boolean remote, String person, String searchName, Long userId,
                                                String sort, int page, int perPage, Long viewerId) {
+        return list(status, district, minSalary, minScore, search, tag, remote, person, searchName, userId,
+            null, sort, page, perPage, viewerId);
+    }
+
+    /** @param verdict вердикт модели: yes / no / fraud / pending; null — любой. */
+    public PageResponse<VacancyWithTags> list(String status, String district, Integer minSalary,
+                                               Integer minScore, String search, String tag,
+                                               Boolean remote, String person, String searchName, Long userId,
+                                               String verdict, String sort, int page, int perPage, Long viewerId) {
         int offset = (page - 1) * perPage;
         List<Vacancy> vacancies = vacancyRepo.findAll(status, district, minSalary, minScore,
-            search, tag, remote, person, searchName, userId, sort, offset, perPage);
-        int total = vacancyRepo.countAll(status, district, minSalary, minScore, search, tag, remote, person, searchName, userId);
+            search, tag, remote, person, searchName, userId, verdict, sort, offset, perPage);
+        int total = vacancyRepo.countAll(status, district, minSalary, minScore, search, tag, remote, person, searchName,
+            userId, verdict);
 
         Map<Long, UserVacancyStatus> overlays = viewerId != null
             ? userVacancyStatusRepo.findByUserAndVacancyIds(viewerId, vacancies.stream().map(Vacancy::getId).toList())

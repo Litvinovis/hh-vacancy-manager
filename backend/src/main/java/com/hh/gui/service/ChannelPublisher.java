@@ -209,6 +209,29 @@ public class ChannelPublisher {
         return morning.toInstant();
     }
 
+    public enum ManualResult { QUEUED, NOT_FOUND, ALREADY_PUBLISHED, NO_CHANNEL, NO_APPLY_LINK }
+
+    /**
+     * Кнопка «В очередь на публикацию» в веб-интерфейсе: исправление ошибки модели вручную.
+     * Порог канала и оценка не проверяются — решение за владельцем; проверяется только то,
+     * без чего пост бесполезен: есть канал у поиска и есть куда откликнуться.
+     */
+    public ManualResult queueManually(Long vacancyId) {
+        Optional<Vacancy> found = vacancyRepo.findById(vacancyId);
+        if (found.isEmpty()) return ManualResult.NOT_FOUND;
+        Vacancy v = found.get();
+        if (v.getChannelPublishedAt() != null && !v.getChannelPublishedAt().isBlank()) return ManualResult.ALREADY_PUBLISHED;
+        Optional<SearchConfig> search = v.getSearchId() == null ? Optional.empty() : searchRepo.findById(v.getSearchId());
+        if (search.isEmpty() || !search.get().isPublicFormat()
+            || search.get().getChatId() == null || search.get().getChatId().isBlank()) {
+            return ManualResult.NO_CHANNEL;
+        }
+        if (!VacancyPostFormatter.hasApplyLine(v)) return ManualResult.NO_APPLY_LINK;
+        if (!vacancyRepo.queueManualPublication(vacancyId, Instant.now().toString())) return ManualResult.ALREADY_PUBLISHED;
+        log.info("Вакансия id={} «{}» (скор {}) вручную поставлена в очередь канала", v.getId(), v.getTitle(), v.getAiScore());
+        return ManualResult.QUEUED;
+    }
+
     /**
      * Fired on the queued-publish scheduler tick (see PipelineScheduler). Sends up to
      * PUBLISH_BATCH_SIZE due posts per search per tick as ONE combined message (see

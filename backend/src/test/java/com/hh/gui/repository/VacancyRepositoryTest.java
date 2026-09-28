@@ -795,6 +795,37 @@ class VacancyRepositoryTest {
         assertEquals(0, deleted);
     }
 
+    // ── веб-интерфейс: вердикт модели и ручная публикация ──
+
+    @Test
+    void findAll_byVerdict_pendingIncludesNull() {
+        saveWithStatus("1", "rejected");   // verdict no
+        saveFraud("2");
+        saveWithStatus("3", "new");        // pending
+        jdbc.update("UPDATE vacancies SET ai_verdict=NULL WHERE hh_id='3'");
+
+        assertEquals(1, vacancyRepo.findAll(null, null, null, null, null, null, null, null, null, null, "no", "score_desc", 0, 100).size());
+        assertEquals(1, vacancyRepo.findAll(null, null, null, null, null, null, null, null, null, null, "pending", "score_desc", 0, 100).size());
+        assertEquals(1, vacancyRepo.countAll(null, null, null, null, null, null, null, null, null, null, "fraud"));
+    }
+
+    @Test
+    void queueManualPublication_approvesAndQueuesNow_butNotAlreadyPublished() {
+        Vacancy low = saveWithStatus("1", "rejected");
+        jdbc.update("UPDATE vacancies SET notified=1, ai_score=40 WHERE id=?", low.getId());
+        Vacancy published = saveWithStatus("2", "new");
+        vacancyRepo.markPublishedToChannel(published.getId(), "99");
+
+        assertTrue(vacancyRepo.queueManualPublication(low.getId(), "2026-09-28T10:00:00Z"));
+        assertFalse(vacancyRepo.queueManualPublication(published.getId(), "2026-09-28T10:00:00Z"));
+
+        Vacancy after = vacancyRepo.findById(low.getId()).orElseThrow();
+        assertEquals("yes", after.getAiVerdict());
+        assertEquals(40, after.getAiScore(), "оценку модели не переписываем — видно, что решение ручное");
+        assertEquals("2026-09-28T10:00:00Z", after.getQueuedPublishAt());
+        assertEquals(1, vacancyRepo.findDueQueuedPublications("2026-09-28T10:01:00Z", 10).size());
+    }
+
     private Vacancy createTestVacancy(String hhId, String title, String status) {
         Vacancy v = new Vacancy();
         v.setHhId(hhId);

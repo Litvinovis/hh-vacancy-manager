@@ -286,6 +286,12 @@ a { color: inherit; }
 .act-rej { background: var(--surface2); color: var(--ink2); }
 .act-fra { background: var(--crit-soft); color: var(--crit); }
 .act-lnk { background: var(--accent-soft); color: var(--accent); }
+.act-pub { background: var(--accent-soft); color: var(--accent); margin-top: 10px; }
+/* Разбор ИИ и публикация в карточке вакансии */
+.d-ai { background: var(--surface2); border-radius: 12px; padding: 12px 14px; margin-bottom: 18px; font-size: 12.5px; }
+.d-ai-row { display: flex; gap: 10px; padding: 3px 0; }
+.d-ai-row .k { flex: 0 0 96px; color: var(--ink2); }
+.d-ai-row .v { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .act:hover { filter: brightness(0.96); }
 :root[data-theme="dark"] .act:hover { filter: brightness(1.15); }
 

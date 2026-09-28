@@ -27,6 +27,17 @@ public class VacancyController {
         this.vacancyService = vacancyService;
     }
 
+    /** Поля разбора ИИ и публикации — общие для списка и карточки. */
+    private static void putAiAndPublication(Map<String, Object> m, Vacancy v) {
+        m.put("aiModel", v.getAiModel() != null ? v.getAiModel() : "");
+        m.put("noveltyColor", v.getNoveltyColor() != null ? v.getNoveltyColor() : "");
+        m.put("noveltyNote", v.getNoveltyNote() != null ? v.getNoveltyNote() : "");
+        m.put("channelPublishedAt", v.getChannelPublishedAt() != null ? v.getChannelPublishedAt() : "");
+        m.put("vkStatus", v.getVkStatus() != null ? v.getVkStatus() : "");
+        m.put("vkPublishedAt", v.getVkPublishedAt() != null ? v.getVkPublishedAt() : "");
+        m.put("vkPostId", v.getVkPostId() != null ? v.getVkPostId() : "");
+    }
+
     @GetMapping("/vacancies")
     public Map<String, Object> listVacancies(
             @RequestParam(name = "status", required = false) String status,
@@ -38,6 +49,7 @@ public class VacancyController {
             @RequestParam(name = "remote", required = false) Boolean remote,
             @RequestParam(name = "person", required = false) String person,
             @RequestParam(name = "searchName", required = false) String searchName,
+            @RequestParam(name = "verdict", required = false) String verdict,
             @RequestParam(name = "sort", defaultValue = "score_desc") String sort,
             @RequestParam(name = "page", defaultValue = "1") int page,
             @RequestParam(name = "perPage", defaultValue = "30") int perPage,
@@ -51,7 +63,7 @@ public class VacancyController {
         Long scopedUserId = currentUser.isAdmin() ? null : currentUser.getId();
         PageResponse<VacancyWithTags> resp = vacancyService.list(
             status, district, minSalary, minScore, search, tag, remote, person, searchName, scopedUserId,
-            sort, page, perPage, currentUser.getId());
+            verdict, sort, page, perPage, currentUser.getId());
 
         List<VacancyWithTags> items = resp.getItems();
 
@@ -89,6 +101,7 @@ public class VacancyController {
             vm.put("notified", v.isNotified());
             vm.put("hhPublishedAt", v.getHhPublishedAt() != null ? v.getHhPublishedAt() : "");
             vm.put("tags", vwt.getTags());
+            putAiAndPublication(vm, v);
             return vm;
         }).toList());
         return result;
@@ -135,6 +148,7 @@ public class VacancyController {
         response.put("isRemote", v.isRemote());
         response.put("hhPublishedAt", v.getHhPublishedAt() != null ? v.getHhPublishedAt() : "");
         response.put("tags", d.getTags());
+        putAiAndPublication(response, v);
         response.put("history", d.getHistory().stream().map(h -> {
             Map<String, Object> hm = new java.util.LinkedHashMap<>();
             hm.put("id", h.getId());
@@ -180,6 +194,27 @@ public class VacancyController {
         if (!ownsVacancy(id, currentUser)) return ResponseEntity.notFound().build();
         vacancyService.addTag(id, tag.trim());
         return ResponseEntity.ok(Map.of("status", "ok"));
+    }
+
+    /** Ручная публикация (исправление оценки модели); null в тестах, где бина нет. */
+    @Autowired(required = false)
+    private com.hh.gui.service.ChannelPublisher channelPublisher;
+
+    /**
+     * «В очередь на публикацию»: вакансия уходит в канал ближайшей пачкой независимо от
+     * оценки модели, дальше — в VK вместе с остальными. Только админ: канал общий.
+     */
+    @PostMapping("/vacancies/{id}/publish")
+    public ResponseEntity<?> publishManually(@PathVariable Long id, @RequestAttribute("currentUser") User currentUser) {
+        if (!currentUser.isAdmin()) return forbidden();
+        if (channelPublisher == null) return ResponseEntity.status(503).body(Map.of("error", "публикация недоступна"));
+        return switch (channelPublisher.queueManually(id)) {
+            case QUEUED -> ResponseEntity.ok(Map.of("status", "queued", "id", id));
+            case NOT_FOUND -> ResponseEntity.notFound().build();
+            case ALREADY_PUBLISHED -> ResponseEntity.status(409).body(Map.of("error", "уже опубликована или закрыта"));
+            case NO_CHANNEL -> ResponseEntity.unprocessableEntity().body(Map.of("error", "у поиска этой вакансии нет публичного канала"));
+            case NO_APPLY_LINK -> ResponseEntity.unprocessableEntity().body(Map.of("error", "нет ссылки или контакта для отклика — читателю некуда откликнуться"));
+        };
     }
 
     @PostMapping("/vacancies/{id}/reset-score")

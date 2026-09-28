@@ -58,6 +58,7 @@ public class VacancyRepository {
             v.setAiReason(rs.getString("ai_reason"));
             v.setNoveltyColor(rs.getString("novelty_color"));
             v.setNoveltyNote(rs.getString("novelty_note"));
+            v.setAiModel(columnOrNull(rs, "ai_model"));
             v.setModerationStatus(rs.getString("moderation_status"));
             v.setClickToken(rs.getString("click_token"));
             v.setDescription(rs.getString("description"));
@@ -96,6 +97,15 @@ public class VacancyRepository {
                                   Integer minScore, String search, String tag,
                                   Boolean remote, String person, String searchName, Long userId,
                                   String sort, int offset, int limit) {
+        return findAll(status, district, minSalary, minScore, search, tag, remote, person, searchName, userId,
+            null, sort, offset, limit);
+    }
+
+    /** @param verdict вердикт модели: yes / no / fraud / pending; null — любой. */
+    public List<Vacancy> findAll(String status, String district, Integer minSalary,
+                                  Integer minScore, String search, String tag,
+                                  Boolean remote, String person, String searchName, Long userId,
+                                  String verdict, String sort, int offset, int limit) {
         StringBuilder sql = new StringBuilder("SELECT v.* FROM vacancies v");
         List<Object> params = new ArrayList<>();
 
@@ -136,6 +146,7 @@ public class VacancyRepository {
             conditions.add("v.ai_score >= ?");
             params.add(minScore);
         }
+        addVerdictCondition(verdict, conditions, params);
         if (search != null && !search.isEmpty()) {
             conditions.add("(v.title LIKE ? OR v.company LIKE ? OR v.address LIKE ?)");
             String s = "%" + search + "%";
@@ -184,6 +195,12 @@ public class VacancyRepository {
     public int countAll(String status, String district, Integer minSalary,
                          Integer minScore, String search, String tag, Boolean remote,
                          String person, String searchName, Long userId) {
+        return countAll(status, district, minSalary, minScore, search, tag, remote, person, searchName, userId, null);
+    }
+
+    public int countAll(String status, String district, Integer minSalary,
+                         Integer minScore, String search, String tag, Boolean remote,
+                         String person, String searchName, Long userId, String verdict) {
         StringBuilder sql = new StringBuilder("SELECT COUNT(*) FROM vacancies v");
         List<Object> params = new ArrayList<>();
 
@@ -223,6 +240,7 @@ public class VacancyRepository {
             conditions.add("v.ai_score >= ?");
             params.add(minScore);
         }
+        addVerdictCondition(verdict, conditions, params);
         if (search != null && !search.isEmpty()) {
             conditions.add("(v.title LIKE ? OR v.company LIKE ? OR v.address LIKE ?)");
             String s = "%" + search + "%";
@@ -654,6 +672,19 @@ public class VacancyRepository {
      * reasoning as scheduleDelayedPublish, a re-run can't push an already-queued
      * item's due time forward.
      */
+    /**
+     * Ручная публикация из веб-интерфейса: владелец не согласен с оценкой модели. Вердикт
+     * становится yes, notified сбрасывается (его ставят отсеянным порогом канала), а время
+     * публикации — «сейчас», чтобы вакансия ушла ближайшей пачкой, а не в хвост очереди.
+     * Уже опубликованные и закрытые не трогает. Возвращает true, если строка обновлена.
+     */
+    public boolean queueManualPublication(Long id, String nowIso) {
+        return jdbc.update(
+            "UPDATE vacancies SET ai_verdict='yes', notified=0, queued_publish_at=?, updated_at=? " +
+            "WHERE id=? AND channel_published_at IS NULL AND closed_at IS NULL",
+            nowIso, nowIso, id) > 0;
+    }
+
     public void enqueuePublish(List<Long> ids, List<String> publishAts) {
         for (int i = 0; i < ids.size(); i++) {
             jdbc.update(
@@ -1541,5 +1572,25 @@ public class VacancyRepository {
         String sql = "SELECT search_name, COUNT(*) as cnt FROM vacancies WHERE "
             + String.join(" AND ", conditions) + " GROUP BY search_name ORDER BY search_name";
         return jdbc.queryForList(sql, params.toArray());
+    }
+
+    /** Фильтр по вердикту модели; «pending» — ещё не оценена (NULL тоже сюда). */
+    private static void addVerdictCondition(String verdict, List<String> conditions, List<Object> params) {
+        if (verdict == null || verdict.isBlank()) return;
+        if ("pending".equals(verdict)) {
+            conditions.add("(v.ai_verdict IS NULL OR v.ai_verdict = 'pending')");
+        } else {
+            conditions.add("v.ai_verdict = ?");
+            params.add(verdict);
+        }
+    }
+
+    /** ai_model добавлен миграцией (24.09.2026) — в старых схемах тестов колонки может не быть. */
+    private static String columnOrNull(java.sql.ResultSet rs, String column) {
+        try {
+            return rs.getString(column);
+        } catch (java.sql.SQLException e) {
+            return null;
+        }
     }
 }

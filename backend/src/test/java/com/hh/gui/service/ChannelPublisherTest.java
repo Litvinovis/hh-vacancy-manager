@@ -507,4 +507,55 @@ class ChannelPublisherTest {
         assertEquals(1, notifier.sentMessages.size(), "Telegram по-прежнему получает один комбинированный пост");
         assertEquals(2, vk.posted.size(), "VK получает по одному посту на вакансию");
     }
+
+    // ── ручная публикация из веб-интерфейса ──
+
+    private static class FakeManualRepo extends VacancyRepository {
+        Vacancy stored; final List<Long> queued = new ArrayList<>();
+        FakeManualRepo(Vacancy v) { super(null); stored = v; }
+        @Override public Optional<Vacancy> findById(Long id) { return Optional.ofNullable(stored).filter(v -> v.getId().equals(id)); }
+        @Override public boolean queueManualPublication(Long id, String nowIso) { queued.add(id); return true; }
+    }
+
+    private static Vacancy manualCandidate() {
+        Vacancy v = new Vacancy();
+        v.setId(7L); v.setSearchId(SEARCH_ID); v.setTitle("Ассистент"); v.setAiScore(40);
+        v.setUrl("https://hh.ru/vacancy/7");
+        return v;
+    }
+
+    private static FakeSearchRepo publicSearch() {
+        FakeSearchRepo r = searchRepoWithChat("-100999");
+        r.byId.get(SEARCH_ID).setPublicFormat(true);
+        return r;
+    }
+
+    @Test
+    void queueManually_lowScore_isQueuedAnyway() {
+        FakeManualRepo repo = new FakeManualRepo(manualCandidate());
+        ChannelPublisher p = publisher().repo(repo).searchRepo(publicSearch()).build();
+
+        assertEquals(ChannelPublisher.ManualResult.QUEUED, p.queueManually(7L));
+        assertEquals(List.of(7L), repo.queued);
+    }
+
+    @Test
+    void queueManually_refusesWhatCannotBePublished() {
+        Vacancy published = manualCandidate(); published.setChannelPublishedAt("2026-09-27T10:00:00Z");
+        assertEquals(ChannelPublisher.ManualResult.ALREADY_PUBLISHED,
+            publisher().repo(new FakeManualRepo(published)).searchRepo(publicSearch()).build().queueManually(7L));
+
+        assertEquals(ChannelPublisher.ManualResult.NO_CHANNEL,
+            publisher().repo(new FakeManualRepo(manualCandidate())).searchRepo(searchRepoWithChat("-100999")).build().queueManually(7L),
+            "личный поиск без публичного формата — не канал");
+
+        Vacancy noContact = manualCandidate(); noContact.setUrl("https://t.me/freelancce/1"); noContact.setDescription("пишите в лс");
+        FakeManualRepo repo = new FakeManualRepo(noContact);
+        assertEquals(ChannelPublisher.ManualResult.NO_APPLY_LINK,
+            publisher().repo(repo).searchRepo(publicSearch()).build().queueManually(7L));
+        assertTrue(repo.queued.isEmpty());
+
+        assertEquals(ChannelPublisher.ManualResult.NOT_FOUND,
+            publisher().repo(new FakeManualRepo(manualCandidate())).searchRepo(publicSearch()).build().queueManually(8L));
+    }
 }
