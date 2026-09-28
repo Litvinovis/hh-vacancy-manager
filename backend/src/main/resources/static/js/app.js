@@ -245,6 +245,9 @@ function buildListParams() {
   const minScore = document.getElementById('score-filter')?.value;
   if (minScore) params.set('minScore', minScore);
 
+  const verdict = document.getElementById('verdict-filter')?.value;
+  if (verdict) params.set('verdict', verdict);
+
   // Имя параметра на бэкенде — 'remote' (см. VacancyController.listVacancies);
   // с 'isRemote' фильтр «Удалёнка/Офис» молча игнорировался.
   const remote = document.getElementById('remote-filter')?.value;
@@ -283,7 +286,7 @@ async function loadVacancies(page = 1) {
 // ссылкой на подборку» и восстановление после перезагрузки/повторного входа.
 const URL_FILTER_INPUTS = {
   person: 'person-filter', searchName: 'search-name-filter', district: 'district-filter',
-  tag: 'tag-filter', minSalary: 'salary-filter', minScore: 'score-filter',
+  tag: 'tag-filter', minSalary: 'salary-filter', minScore: 'score-filter', verdict: 'verdict-filter',
   remote: 'remote-filter', sort: 'sort-filter', search: 'search-input',
 };
 
@@ -348,6 +351,8 @@ function activeFilterList() {
   if (salary) list.push({ key: 'salary-filter', label: `от ${fmtN(parseInt(salary, 10))} ₽` });
   const score = document.getElementById('score-filter')?.value;
   if (score) list.push({ key: 'score-filter', label: `скор ≥ ${score}` });
+  const verdict = document.getElementById('verdict-filter')?.value;
+  if (verdict) list.push({ key: 'verdict-filter', label: VERDICT_LABELS[verdict] || verdict });
   const hasSalaryOnly = document.getElementById('has-salary-filter')?.checked;
   if (hasSalaryOnly && !salary) list.push({ key: 'has-salary-filter', label: 'только с ЗП' });
   const remote = document.getElementById('remote-filter')?.value;
@@ -378,7 +383,7 @@ function clearFilter(key) {
 
 function clearAllFilters() {
   ['person-filter', 'search-name-filter', 'district-filter', 'tag-filter',
-   'salary-filter', 'score-filter', 'remote-filter', 'search-input'].forEach(id => {
+   'salary-filter', 'score-filter', 'verdict-filter', 'remote-filter', 'search-input'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.value = '';
   });
@@ -442,6 +447,7 @@ function renderList(vacancies) {
         </div>
         <div class="v-footer">
           ${statusChip}
+          ${publicationChips(v)}
           ${(v.person || v.searchName) ? `<span class="chp">👤 ${escHtml(v.person)} · ${escHtml(v.searchName)}</span>` : ''}
           ${tags}
         </div>
@@ -551,6 +557,7 @@ function renderDetail(v) {
 
     ${heroSection}
     ${reasonSection}
+    ${aiDetailsSection(v)}
 
     <div class="dacts">
       <button class="act act-fav" onclick="setStatus(${v.id}, 'favorite')">⭐ Избранное</button>
@@ -607,6 +614,62 @@ function closeDetail() {
   currentVacancy = null;
   document.getElementById('detail-panel').classList.add('hidden');
   document.querySelectorAll('.vacancy').forEach(el => el.classList.remove('selected'));
+}
+
+// ═══════ РАЗБОР ИИ И ПУБЛИКАЦИЯ ═══════
+const VERDICT_LABELS = { yes: '✅ ИИ: подходит', no: '❌ ИИ: не подходит', fraud: '🚫 ИИ: обман', pending: '⏳ Не оценена' };
+const NOVELTY_EMOJI = { green: '🟢', yellow: '🟡', red: '🔴' };
+const VK_STATUS_LABELS = { queued: 'в очереди', sent: 'опубликована', expired: 'снята из очереди', failed: 'ошибка' };
+
+function fmtDateTime(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return isNaN(d) ? iso : d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
+/** Значки в списке: куда вакансия уже ушла. */
+function publicationChips(v) {
+  let out = '';
+  if (v.channelPublishedAt) out += `<span class="chp" title="Опубликована в Telegram ${escHtml(fmtDateTime(v.channelPublishedAt))}">📢 TG</span>`;
+  if (v.vkStatus === 'sent') out += `<span class="chp" title="Опубликована в VK ${escHtml(fmtDateTime(v.vkPublishedAt))}">VK</span>`;
+  else if (v.vkStatus === 'queued') out += `<span class="chp" title="Ждёт окна публикации VK">VK ⏳</span>`;
+  return out;
+}
+
+/** Блок в карточке: вердикт, модель, «насколько интересна работа», публикация и ручная публикация. */
+function aiDetailsSection(v) {
+  const rows = [];
+  if (v.aiVerdict && v.aiVerdict !== 'pending') rows.push(['Вердикт', VERDICT_LABELS[v.aiVerdict] || v.aiVerdict]);
+  if (v.aiModel) rows.push(['Модель', escHtml(v.aiModel)]);
+  if (v.noveltyColor && v.noveltyNote) rows.push(['Интересность', `${NOVELTY_EMOJI[v.noveltyColor] || ''} ${escHtml(v.noveltyNote)}`]);
+  rows.push(['Telegram', v.channelPublishedAt ? `📢 опубликована ${escHtml(fmtDateTime(v.channelPublishedAt))}` : 'не публиковалась']);
+  const vk = v.vkStatus ? (VK_STATUS_LABELS[v.vkStatus] || v.vkStatus) : 'не публиковалась';
+  rows.push(['VK', v.vkStatus === 'sent' && v.vkPublishedAt ? `${vk} ${escHtml(fmtDateTime(v.vkPublishedAt))}` : vk]);
+
+  // Исправление ошибки модели: админ сам отправляет вакансию в канал, минуя оценку и порог
+  const canPublish = currentUser?.role === 'admin' && !v.channelPublishedAt && v.status !== 'closed';
+  const button = canPublish
+    ? `<button class="act act-pub" onclick="publishVacancy(${v.id})" title="Уйдёт ближайшей пачкой в Telegram, затем в VK — независимо от оценки ИИ">📢 В очередь на публикацию</button>`
+    : '';
+  return `
+    <div class="d-ai">
+      ${rows.map(([k, val]) => `<div class="d-ai-row"><span class="k">${k}</span><span class="v">${val}</span></div>`).join('')}
+      ${button}
+    </div>`;
+}
+
+async function publishVacancy(id) {
+  if (!confirm('Опубликовать вакансию в канале ближайшей пачкой, несмотря на оценку ИИ?')) return;
+  try {
+    const res = await fetch(API_BASE + '/vacancies/' + id + '/publish', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || `${res.status}`);
+    toast('✓ В очереди — уйдёт в канал ближайшей пачкой', 'ok');
+    loadVacancies(currentPage);
+    openDetail(id);
+  } catch (e) {
+    toast('✗ ' + e.message, 'err');
+  }
 }
 
 // ═══════ ACTIONS ═══════

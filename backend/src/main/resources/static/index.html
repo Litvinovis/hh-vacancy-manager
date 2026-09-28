@@ -145,6 +145,13 @@
         <div class="filter-div"></div>
         <input type="number" class="filter-num filter-sel" id="salary-filter" placeholder="от, ₽" min="0" step="5000">
         <input type="number" class="filter-num filter-sel" id="score-filter" placeholder="скор ≥" min="0" max="100" step="5">
+        <select class="filter-sel" id="verdict-filter" title="Вердикт модели">
+          <option value="">Любой вердикт</option>
+          <option value="yes">✅ ИИ: подходит</option>
+          <option value="no">❌ ИИ: не подходит</option>
+          <option value="fraud">🚫 ИИ: обман</option>
+          <option value="pending">⏳ Не оценена</option>
+        </select>
         <label class="filter-check">
           <input type="checkbox" id="has-salary-filter" class="filter-sel">
           Только с ЗП

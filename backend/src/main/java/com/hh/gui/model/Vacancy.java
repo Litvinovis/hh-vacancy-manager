@@ -121,6 +121,11 @@ public class Vacancy {
     public String getAiReason() { return aiReason; }
     public void setAiReason(String aiReason) { this.aiReason = aiReason; }
 
+    /** Какая модель поставила оценку (ai_model) — для разбора в веб-интерфейсе. */
+    private String aiModel;
+    public String getAiModel() { return aiModel; }
+    public void setAiModel(String aiModel) { this.aiModel = aiModel; }
+
     public String getNoveltyColor() { return noveltyColor; }
     public void setNoveltyColor(String noveltyColor) { this.noveltyColor = noveltyColor; }
 
