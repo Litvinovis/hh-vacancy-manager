@@ -110,6 +110,22 @@ public class VkPublishQueue {
 
     private volatile Instant retryNotBefore = Instant.EPOCH;
 
+    /** Дубль статей в Telegram; null в тестах и пока бин не внедрён. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.hh.gui.content.TelegramArticleMirror telegramMirror;
+
+    void setTelegramMirror(com.hh.gui.content.TelegramArticleMirror mirror) { this.telegramMirror = mirror; }
+
+    private void mirrorToTelegram(VkArticle a) {
+        if (telegramMirror == null) return;
+        try {
+            telegramMirror.mirror(a);
+        } catch (Exception e) {
+            // Пост в VK уже вышел — сбой дубля не должен ломать очередь VK
+            log.warn("Статья «{}» не продублирована в Telegram: {}", a.getTitle(), e.getMessage());
+        }
+    }
+
     /** Глубина очереди в метрику vk_queue_depth — на каждом тике, и вне окон тоже. */
     public void refreshQueueMetric() {
         metrics.setVkQueueDepth(vacancyRepo.countVkQueued());
@@ -292,6 +308,7 @@ public class VkPublishQueue {
         articles.update(a);
         metrics.recordVkPost();
         log.info("Опубликован в VK обзор «{}» (post_id={})", a.getTitle(), postId);
+        mirrorToTelegram(a);
         return true;
     }
 
@@ -326,6 +343,7 @@ public class VkPublishQueue {
         articles.update(a);
         metrics.recordVkPost();
         log.info("Опубликован(а) в VK {} «{}» (post_id={})", a.isPoll() ? "опрос" : "статья", a.getTitle(), postId);
+        mirrorToTelegram(a);
         return true;
     }
 
