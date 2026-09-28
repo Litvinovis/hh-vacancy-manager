@@ -329,9 +329,15 @@ class VkPublishQueueTest {
         SeoArticles arts = new SeoArticles(); arts.seo = generatedSeo();
         repo.nowIso = clock.instant().toString();
 
-        new VkPublishQueue(repo, vk, config, new AiMetrics(new SimpleMeterRegistry(), config), clock, arts).publishDue();
+        VkPublishQueue q = new VkPublishQueue(repo, vk, config, new AiMetrics(new SimpleMeterRegistry(), config), clock, arts);
+        List<com.hh.gui.model.VkArticle> mirrored = new ArrayList<>();
+        q.setTelegramMirror(new com.hh.gui.content.TelegramArticleMirror(null, null, config) {
+            @Override public void mirror(com.hh.gui.model.VkArticle a) { mirrored.add(a); }
+        });
+        q.publishDue();
 
         assertEquals(List.of("Текст обзора"), vk.posts);
+        assertEquals(1, mirrored.size(), "вышедший в VK обзор дублируется в Telegram");
         assertEquals("published", arts.seo.getStatus());
         assertEquals(1, repo.queued.size(), "вакансии обзор не трогает — они ждут своего окна");
     }

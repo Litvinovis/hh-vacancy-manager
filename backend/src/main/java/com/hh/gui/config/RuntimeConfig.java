@@ -196,6 +196,8 @@ public class RuntimeConfig {
     private volatile int vkSeoArticlesPerWeek = 3;
     private volatile String vkSeoDays = "MON,WED,FRI";
     private volatile String vkSeoTime = "14:45";
+    // Статьи и обзоры, вышедшие в VK, дублируются в Telegram-канал без хэштегов (TelegramArticleMirror)
+    private volatile boolean tgArticlesEnabled = true;
     private volatile int vkTopicCooldownDays = 60;
     /** Карточки-картинки к постам VK (рисуются на сервере, CardImageRenderer). */
     private volatile boolean vkCardsEnabled = true;
@@ -434,6 +436,11 @@ public class RuntimeConfig {
                 "Время выхода обзора (ЧЧ:ММ по часовому поясу VK) — лучше между окнами подборок.",
                 "text", null, null, vkSeoTime),
 
+            SettingDescriptor.of("tgArticlesEnabled", "Статьи в Telegram",
+                "Дублировать статьи и обзоры из VK в Telegram-канал — без хэштегов и призыва вступить в VK. " +
+                "Опросы остаются только в VK.",
+                "boolean", null, null, tgArticlesEnabled),
+
             SettingDescriptor.of("vkTopicCooldownDays", "Антиповтор тем, дней",
                 "Тема не берётся в план повторно, пока не пройдёт столько дней с прошлой публикации.",
                 "number", 7, 365, vkTopicCooldownDays),
@@ -580,6 +587,7 @@ public class RuntimeConfig {
                     case "vkContentDays" -> setVkContentDays(String.valueOf(value));
                     case "vkSeoArticlesPerWeek" -> setVkSeoArticlesPerWeek(toInt(value, errors, key, 0, 7));
                     case "vkSeoDays" -> setVkSeoDays(String.valueOf(value));
+                    case "tgArticlesEnabled" -> setTgArticlesEnabled(toBool(value, errors, key));
                     case "vkSeoTime" -> {
                         String t = String.valueOf(value).trim();
                         try {
@@ -659,6 +667,7 @@ public class RuntimeConfig {
         m.put("vkSeoArticlesPerWeek", vkSeoArticlesPerWeek);
         m.put("vkSeoDays", vkSeoDays);
         m.put("vkSeoTime", vkSeoTime);
+        m.put("tgArticlesEnabled", tgArticlesEnabled);
         m.put("vkTopicCooldownDays", vkTopicCooldownDays);
         m.put("vkCardsEnabled", vkCardsEnabled);
         m.put("vkDigestMaxSize", vkDigestMaxSize);
@@ -827,6 +836,8 @@ public class RuntimeConfig {
     public void setVkSeoDays(String v) { this.vkSeoDays = v; }
     public String getVkSeoTime() { return vkSeoTime; }
     public void setVkSeoTime(String v) { this.vkSeoTime = v; }
+    public boolean isTgArticlesEnabled() { return tgArticlesEnabled; }
+    public void setTgArticlesEnabled(boolean v) { this.tgArticlesEnabled = v; }
     public int getVkTopicCooldownDays() { return vkTopicCooldownDays; }
     public void setVkTopicCooldownDays(int v) { this.vkTopicCooldownDays = v; }
     public boolean isVkCardsEnabled() { return vkCardsEnabled; }

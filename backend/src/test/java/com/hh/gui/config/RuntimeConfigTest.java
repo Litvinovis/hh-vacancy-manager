@@ -83,7 +83,7 @@ class RuntimeConfigTest {
         assertTrue(m.containsKey("vkQueueMaxAgeHours"));
         assertTrue(m.containsKey("rssEnabled"));
         assertTrue(m.containsKey("vkSeoTime"));
-        assertEquals(44, m.size());
+        assertEquals(45, m.size());
     }
 
     // ═══════ Descriptors ═══════
@@ -91,7 +91,7 @@ class RuntimeConfigTest {
     @Test
     void descriptorsCoversAllKeys() {
         List<RuntimeConfig.SettingDescriptor> descs = config.getDescriptors();
-        assertEquals(43, descs.size());
+        assertEquals(44, descs.size());
         Set<String> keys = new HashSet<>();
         for (var d : descs) {
             assertNotNull(d.key);
