@@ -99,8 +99,10 @@ public class VkIdTokenService {
         this.registry = registry;
         this.telegramNotifier = telegramNotifier;
         if (registry != null) {
+            // Через current(), а не поле: до первого обращения поле пустое, и после каждого
+            // рестарта метрика минуту показывала «токен истёк» (-1/0) при живом токене в файле.
             registry.gauge("vk_id_token_expires_in_seconds", this, s -> {
-                TokenSet t = s.tokens;
+                TokenSet t = s.configured() ? s.current() : null;
                 return t == null ? -1 : Math.max(0, t.remaining(s.clock));
             });
         }

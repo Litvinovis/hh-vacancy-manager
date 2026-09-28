@@ -77,6 +77,13 @@ class VkIdTokenServiceTest {
     }
 
     @Test
+    void expiryGauge_readsTokenFileBeforeFirstUse() throws Exception {
+        // После рестарта метрика минуту показывала «истёк», пока токеном никто не воспользовался
+        service(tokenFile(NOW.getEpochSecond() + 3600), NOW);
+        assertEquals(3600.0, registry.get("vk_id_token_expires_in_seconds").gauge().value(), 1.0);
+    }
+
+    @Test
     void notConfigured_returnsEmptyAndNeverCallsVk() throws Exception {
         VkIdTokenService s = new VkIdTokenService("", tokenFile(NOW.getEpochSecond() + 3600), authUrl,
             Clock.fixed(NOW, ZoneOffset.UTC), registry, null);
