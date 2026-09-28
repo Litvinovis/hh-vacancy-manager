@@ -193,7 +193,7 @@ public class ChannelPublisher {
         return Math.max(MIN_PACE_MINUTES, Math.min(MAX_PACE_MINUTES, dynamic));
     }
 
-    static boolean isOutsidePublishWindow(Instant instant) {
+    public static boolean isOutsidePublishWindow(Instant instant) {
         int hour = instant.atZone(PUBLISH_ZONE).getHour();
         return hour >= PUBLISH_WINDOW_END_HOUR || hour < PUBLISH_WINDOW_START_HOUR;
     }

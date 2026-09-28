@@ -309,6 +309,7 @@ CREATE TABLE IF NOT EXISTS vk_articles (
     generated_at TEXT DEFAULT NULL,
     published_at TEXT DEFAULT NULL,
     vk_post_id TEXT DEFAULT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    tg_status TEXT DEFAULT NULL                 -- дубль в Telegram: pending | sent
 );
 CREATE INDEX IF NOT EXISTS idx_vk_articles_topic ON vk_articles(topic_key, published_at);

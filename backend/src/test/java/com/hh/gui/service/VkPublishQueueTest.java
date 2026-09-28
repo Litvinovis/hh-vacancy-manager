@@ -331,7 +331,7 @@ class VkPublishQueueTest {
 
         VkPublishQueue q = new VkPublishQueue(repo, vk, config, new AiMetrics(new SimpleMeterRegistry(), config), clock, arts);
         List<com.hh.gui.model.VkArticle> mirrored = new ArrayList<>();
-        q.setTelegramMirror(new com.hh.gui.content.TelegramArticleMirror(null, null, config) {
+        q.setTelegramMirror(new com.hh.gui.content.TelegramArticleMirror(null, null, config, null) {
             @Override public void mirror(com.hh.gui.model.VkArticle a) { mirrored.add(a); }
         });
         q.publishDue();
