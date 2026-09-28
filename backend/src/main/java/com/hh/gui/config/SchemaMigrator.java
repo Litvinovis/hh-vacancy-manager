@@ -121,6 +121,8 @@ public class SchemaMigrator implements ApplicationRunner {
             "status TEXT NOT NULL DEFAULT 'planned', planned_for TEXT NOT NULL, generated_at TEXT DEFAULT NULL, " +
             "published_at TEXT DEFAULT NULL, vk_post_id TEXT DEFAULT NULL, created_at TEXT NOT NULL)");
         runIgnoringErrors("CREATE INDEX IF NOT EXISTS idx_vk_articles_topic ON vk_articles(topic_key, published_at)");
+        // Дубль статьи в Telegram: pending — ждёт отправки (в т.ч. после сбоя связи), sent — ушла
+        addColumnIfMissing("vk_articles", "tg_status", "TEXT DEFAULT NULL");
         runIgnoringErrors("CREATE INDEX IF NOT EXISTS idx_searches_is_global ON searches(is_global)");
         runIgnoringErrors("CREATE INDEX IF NOT EXISTS idx_uvs_user_id ON user_vacancy_status(user_id)");
         runIgnoringErrors("CREATE INDEX IF NOT EXISTS idx_uvs_vacancy_id ON user_vacancy_status(vacancy_id)");

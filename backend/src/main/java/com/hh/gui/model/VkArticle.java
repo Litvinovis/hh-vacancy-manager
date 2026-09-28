@@ -14,6 +14,10 @@ public class VkArticle {
     private String publishedAt;
     private String vkPostId;
     private String createdAt;
+    /** Дубль в Telegram: null — не нужен, pending — ждёт отправки, sent — отправлен. */
+    private String tgStatus;
+    public String getTgStatus() { return tgStatus; }
+    public void setTgStatus(String tgStatus) { this.tgStatus = tgStatus; }
 
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }

@@ -4,6 +4,7 @@ import com.hh.gui.config.RuntimeConfig;
 import com.hh.gui.model.SearchConfig;
 import com.hh.gui.model.VkArticle;
 import com.hh.gui.repository.SearchRepository;
+import com.hh.gui.repository.VkArticleRepository;
 import com.hh.gui.service.TelegramNotifier;
 import com.hh.gui.util.VacancyPostFormatter;
 import org.slf4j.Logger;
@@ -25,29 +26,69 @@ public class TelegramArticleMirror {
 
     private static final Logger log = LoggerFactory.getLogger(TelegramArticleMirror.class);
 
+    /** Сколько после выхода в VK статья ещё ждёт отправки в Telegram — дальше она уже не новость. */
+    static final java.time.Duration RETRY_HORIZON = java.time.Duration.ofHours(48);
+
     private final TelegramNotifier telegram;
     private final SearchRepository searches;
     private final RuntimeConfig config;
+    private final VkArticleRepository articles;
+    /** Текущее время для проверки окна канала; в тестах подменяется. */
+    java.util.function.Supplier<java.time.Instant> now = java.time.Instant::now;
 
-    public TelegramArticleMirror(TelegramNotifier telegram, SearchRepository searches, RuntimeConfig config) {
+    public TelegramArticleMirror(TelegramNotifier telegram, SearchRepository searches, RuntimeConfig config,
+                                 VkArticleRepository articles) {
         this.telegram = telegram;
         this.searches = searches;
         this.config = config;
+        this.articles = articles;
     }
 
-    /** Отправить статью в каналы публичных поисков; сбой только логируется — пост в VK уже вышел. */
+    /**
+     * Статья вышла в VK — отправить её и в Telegram. Сначала она помечается pending: если
+     * связи с Telegram нет (28.09.2026 обрыв на 4 часа, обзор так и не дошёл) или сейчас
+     * ночь вне окна канала, её дошлёт {@link #retryPending()}.
+     */
     public void mirror(VkArticle a) {
         if (!config.isTgArticlesEnabled() || a.isPoll() || a.getBody() == null || a.getBody().isBlank()) return;
+        if (adapt(a.getBody()).isBlank()) return;
+        a.setTgStatus("pending");
+        articles.setTgStatus(a.getId(), "pending");
+        trySend(a);
+    }
+
+    /** Дослать статьи, которые не ушли в Telegram: раз в 5 минут, только в окне канала. */
+    @org.springframework.scheduling.annotation.Scheduled(initialDelayString = "PT2M", fixedDelayString = "PT5M")
+    public void retryPending() {
+        if (!config.isTgArticlesEnabled()) return;
+        for (VkArticle a : articles.findTgPending(now.get().minus(RETRY_HORIZON).toString())) {
+            if (!trySend(a)) return;   // связи всё ещё нет — остальные подождут следующего тика
+        }
+    }
+
+    /**
+     * Отправляет в каналы публичных поисков; true — ушла во все и помечена sent. Каналов на
+     * деле один; если бы часть отправок прошла, повтор задублировал бы её в прошедших — это
+     * лучше, чем потерять статью в тех, что не прошли.
+     */
+    boolean trySend(VkArticle a) {
+        if (com.hh.gui.service.ChannelPublisher.isOutsidePublishWindow(now.get())) return false;
         String message = adapt(a.getBody());
-        if (message.isBlank()) return;
+        boolean allSent = true;
         for (String chatId : channelChatIds()) {
             String id = telegram.sendViaChannelBotReturningId(message, chatId);
             if (id != null) {
                 log.info("Статья «{}» продублирована в Telegram {} (message_id={})", a.getTitle(), chatId, id.isEmpty() ? "?" : id);
             } else {
-                log.warn("Статья «{}» не ушла в Telegram {}", a.getTitle(), chatId);
+                log.warn("Статья «{}» не ушла в Telegram {} — повторим, когда связь вернётся", a.getTitle(), chatId);
+                allSent = false;
             }
         }
+        if (allSent) {
+            a.setTgStatus("sent");
+            articles.setTgStatus(a.getId(), "sent");
+        }
+        return allSent;
     }
 
     /** Текст для Telegram (HTML): без хэштегов и призыва в VK, первая строка — заголовок. */

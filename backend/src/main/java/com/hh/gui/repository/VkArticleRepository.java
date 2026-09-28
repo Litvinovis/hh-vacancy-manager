@@ -34,6 +34,11 @@ public class VkArticleRepository {
         a.setPublishedAt(rs.getString("published_at"));
         a.setVkPostId(rs.getString("vk_post_id"));
         a.setCreatedAt(rs.getString("created_at"));
+        try {
+            a.setTgStatus(rs.getString("tg_status"));
+        } catch (java.sql.SQLException e) {
+            // колонку добавляет SchemaMigrator; до миграции её нет
+        }
         return a;
     };
 
@@ -135,6 +140,16 @@ public class VkArticleRepository {
         jdbc.query("SELECT vk_post_id, kind FROM vk_articles WHERE status='published' AND vk_post_id IS NOT NULL",
             rs -> { kinds.put(rs.getString("vk_post_id"), rs.getString("kind")); });
         return kinds;
+    }
+
+    public void setTgStatus(Long id, String tgStatus) {
+        jdbc.update("UPDATE vk_articles SET tg_status=? WHERE id=?", tgStatus, id);
+    }
+
+    /** Статьи, вышедшие в VK после момента, но так и не дошедшие до Telegram. */
+    public List<VkArticle> findTgPending(String publishedSinceIso) {
+        return jdbc.query("SELECT * FROM vk_articles WHERE status='published' AND tg_status='pending' " +
+            "AND published_at >= ? ORDER BY published_at", MAPPER, publishedSinceIso);
     }
 
     public List<VkArticle> findAll(int limit) {
