@@ -24,6 +24,8 @@ class ArticleGeneratorTest {
         FakeVacancies() { super(null); }
         @Override public List<String> recentFraudReasons(int limit) { return List.of("оплата обучения перед стартом", "работа под чужими аккаунтами"); }
         @Override public Map<String, Integer> topTitlesSince(String s, int l) { return Map.of("Ассистент", 12); }
+        List<com.hh.gui.model.Vacancy> approved = new ArrayList<>();
+        @Override public List<com.hh.gui.model.Vacancy> approvedSince(String s, int l) { return approved; }
     }
     private static class FakeArticles extends VkArticleRepository {
         final List<VkArticle> toGenerate = new ArrayList<>(); final List<VkArticle> updated = new ArrayList<>();
@@ -76,5 +78,64 @@ class ArticleGeneratorTest {
         new ArticleGenerator(arts, new FakeVacancies(), ai).generateDue("2026-09-22");
         assertTrue(!ai.lastPrompt.contains("ФАКТЫ ИЗ НАШЕЙ БАЗЫ"));
         assertTrue(ai.lastPrompt.contains("ровно два хэштега"));
+    }
+
+    // ── обзоры по профессиям ──
+
+    private static com.hh.gui.model.Vacancy vacancy(String title, String company, int salary, String reason) {
+        com.hh.gui.model.Vacancy v = new com.hh.gui.model.Vacancy();
+        v.setTitle(title); v.setCompany(company); v.setSalaryFrom(salary); v.setCurrency("RUR"); v.setAiReason(reason);
+        return v;
+    }
+
+    private static VkArticle plannedSeo(String key) {
+        VkArticle a = new VkArticle(); a.setId(7L); a.setTopicKey(key); a.setKind(SeoTopics.KIND); a.setPlannedFor("2026-09-28");
+        a.setTitle(SeoTopics.byKey(key).headline());
+        return a;
+    }
+
+    @Test
+    void seo_promptHasHeadlineKeywordsAndFacts_postEndsWithCallToActionAndTags() {
+        FakeAnalyzer ai = new FakeAnalyzer(); FakeArticles arts = new FakeArticles(); FakeVacancies vac = new FakeVacancies();
+        for (int i = 0; i < 5; i++) vac.approved.add(vacancy("Ассистент руководителя " + i, "Ромашка", 60000 + i * 10000, "ведение календаря"));
+        vac.approved.add(vacancy("Бухгалтер", "Счёт", 90000, "первичка"));   // не ассистент — в факты не идёт
+        vac.approved.add(vacancy("Личный помощник", "Медведева Кристина Валерьевна", 50000, "переписка и звонки"));
+        arts.toGenerate.add(plannedSeo("seo_assistant"));
+
+        assertEquals(1, new ArticleGenerator(arts, vac, ai).generateDue("2026-09-28"));
+
+        assertTrue(ai.lastPrompt.contains(SeoTopics.byKey("seo_assistant").headline()), ai.lastPrompt);
+        assertTrue(ai.lastPrompt.contains("удаленная работа ассистентом"), ai.lastPrompt);
+        assertTrue(ai.lastPrompt.contains("вакансий по этой профессии: 6"), ai.lastPrompt);
+        assertTrue(ai.lastPrompt.contains("медиана"), ai.lastPrompt);
+        assertTrue(!ai.lastPrompt.contains("Бухгалтер"), "чужая профессия в факты не попадает");
+        assertTrue(!ai.lastPrompt.contains("Медведева"), "ФИО частного работодателя в промпт не несём");
+
+        String body = arts.updated.get(0).getBody();
+        assertTrue(body.contains(ArticleGenerator.SEO_CALL_TO_ACTION), body);
+        assertTrue(body.endsWith("#удаленнаяработа #работанадому #ассистент"), body);
+        assertTrue(!body.contains("#удалённаяработа"), "хэштеги модели срезаны, чтобы не было дублей: " + body);
+    }
+
+    @Test
+    void seo_tooFewVacancies_markedFailedWithoutCallingModel() {
+        FakeAnalyzer ai = new FakeAnalyzer(); FakeArticles arts = new FakeArticles(); FakeVacancies vac = new FakeVacancies();
+        vac.approved.add(vacancy("Бухгалтер", "Счёт", 90000, "первичка"));
+        arts.toGenerate.add(plannedSeo("seo_accountant"));
+
+        assertEquals(0, new ArticleGenerator(arts, vac, ai).generateDue("2026-09-28"));
+        assertEquals("failed", arts.updated.get(0).getStatus());
+        assertEquals(null, ai.lastPrompt);
+    }
+
+    @Test
+    void seo_garbledModelText_notSaved_retriedLater() {
+        FakeAnalyzer ai = new FakeAnalyzer(); ai.reply = "Аналитика и数字-управление " + "х".repeat(400);
+        FakeArticles arts = new FakeArticles(); FakeVacancies vac = new FakeVacancies();
+        for (int i = 0; i < 5; i++) vac.approved.add(vacancy("Менеджер Wildberries", "Бренд", 80000, "реклама"));
+        arts.toGenerate.add(plannedSeo("seo_marketplace"));
+
+        assertEquals(0, new ArticleGenerator(arts, vac, ai).generateDue("2026-09-28"));
+        assertTrue(arts.updated.isEmpty());
     }
 }

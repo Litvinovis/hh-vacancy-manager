@@ -191,6 +191,11 @@ public class RuntimeConfig {
     private volatile int vkArticlesPerWeek = 2;
     private volatile int vkPollsPerWeek = 1;
     private volatile String vkContentDays = "TUE,THU,SAT";
+    // Обзоры по профессиям под поиск ВК (SeoTopics) — отдельный поток: свои дни и время
+    // вне окон подборок, чтобы не занимать место постов с вакансиями.
+    private volatile int vkSeoArticlesPerWeek = 3;
+    private volatile String vkSeoDays = "MON,WED,FRI";
+    private volatile String vkSeoTime = "14:45";
     private volatile int vkTopicCooldownDays = 60;
     /** Карточки-картинки к постам VK (рисуются на сервере, CardImageRenderer). */
     private volatile boolean vkCardsEnabled = true;
@@ -416,6 +421,19 @@ public class RuntimeConfig {
                 "Дни недели для статей и опросов через запятую (MON..SUN), например TUE,THU,SAT.",
                 "text", null, null, vkContentDays),
 
+            SettingDescriptor.of("vkSeoArticlesPerWeek", "Обзоров VK в неделю",
+                "Статьи под поиск ВК: «удалённая работа ассистентом» и т.п. на свежих вакансиях из базы, " +
+                "с призывом вступить в сообщество. Выходят в своё время и не занимают окна подборок.",
+                "number", 0, 7, vkSeoArticlesPerWeek),
+
+            SettingDescriptor.of("vkSeoDays", "Дни обзоров VK",
+                "Дни недели для обзоров по профессиям через запятую (MON..SUN).",
+                "text", null, null, vkSeoDays),
+
+            SettingDescriptor.of("vkSeoTime", "Время обзоров VK",
+                "Время выхода обзора (ЧЧ:ММ по часовому поясу VK) — лучше между окнами подборок.",
+                "text", null, null, vkSeoTime),
+
             SettingDescriptor.of("vkTopicCooldownDays", "Антиповтор тем, дней",
                 "Тема не берётся в план повторно, пока не пройдёт столько дней с прошлой публикации.",
                 "number", 7, 365, vkTopicCooldownDays),
@@ -560,6 +578,17 @@ public class RuntimeConfig {
                     case "vkArticlesPerWeek" -> setVkArticlesPerWeek(toInt(value, errors, key, 0, 7));
                     case "vkPollsPerWeek" -> setVkPollsPerWeek(toInt(value, errors, key, 0, 7));
                     case "vkContentDays" -> setVkContentDays(String.valueOf(value));
+                    case "vkSeoArticlesPerWeek" -> setVkSeoArticlesPerWeek(toInt(value, errors, key, 0, 7));
+                    case "vkSeoDays" -> setVkSeoDays(String.valueOf(value));
+                    case "vkSeoTime" -> {
+                        String t = String.valueOf(value).trim();
+                        try {
+                            java.time.LocalTime.parse(t);
+                            setVkSeoTime(t);
+                        } catch (Exception e) {
+                            errors.put(key, "время в формате ЧЧ:ММ");
+                        }
+                    }
                     case "vkTopicCooldownDays" -> setVkTopicCooldownDays(toInt(value, errors, key, 7, 365));
                     case "vkCardsEnabled" -> setVkCardsEnabled(toBool(value, errors, key));
                     case "vkDigestMaxSize" -> setVkDigestMaxSize(toInt(value, errors, key, 1, 10));
@@ -627,6 +656,9 @@ public class RuntimeConfig {
         m.put("vkArticlesPerWeek", vkArticlesPerWeek);
         m.put("vkPollsPerWeek", vkPollsPerWeek);
         m.put("vkContentDays", vkContentDays);
+        m.put("vkSeoArticlesPerWeek", vkSeoArticlesPerWeek);
+        m.put("vkSeoDays", vkSeoDays);
+        m.put("vkSeoTime", vkSeoTime);
         m.put("vkTopicCooldownDays", vkTopicCooldownDays);
         m.put("vkCardsEnabled", vkCardsEnabled);
         m.put("vkDigestMaxSize", vkDigestMaxSize);
@@ -789,6 +821,12 @@ public class RuntimeConfig {
     public void setVkPollsPerWeek(int v) { this.vkPollsPerWeek = v; }
     public String getVkContentDays() { return vkContentDays; }
     public void setVkContentDays(String v) { this.vkContentDays = v; }
+    public int getVkSeoArticlesPerWeek() { return vkSeoArticlesPerWeek; }
+    public void setVkSeoArticlesPerWeek(int v) { this.vkSeoArticlesPerWeek = v; }
+    public String getVkSeoDays() { return vkSeoDays; }
+    public void setVkSeoDays(String v) { this.vkSeoDays = v; }
+    public String getVkSeoTime() { return vkSeoTime; }
+    public void setVkSeoTime(String v) { this.vkSeoTime = v; }
     public int getVkTopicCooldownDays() { return vkTopicCooldownDays; }
     public void setVkTopicCooldownDays(int v) { this.vkTopicCooldownDays = v; }
     public boolean isVkCardsEnabled() { return vkCardsEnabled; }

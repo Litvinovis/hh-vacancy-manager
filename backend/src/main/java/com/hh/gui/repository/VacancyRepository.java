@@ -1205,6 +1205,12 @@ public class VacancyRepository {
         return out;
     }
 
+    /** Одобренные моделью вакансии после даты — материал для обзоров по профессиям (SeoTopics). */
+    public List<Vacancy> approvedSince(String sinceIso, int limit) {
+        return jdbc.query("SELECT * FROM vacancies WHERE ai_verdict='yes' AND created_at >= ? " +
+            "ORDER BY created_at DESC LIMIT ?", rowMapper, sinceIso, limit);
+    }
+
     /**
      * Медиана зарплаты «от» по грубым типам работ (по ключевым словам названия) среди
      * вакансий с указанной зарплатой в рублях. Медиана, а не среднее: одна вакансия с

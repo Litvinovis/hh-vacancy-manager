@@ -118,9 +118,11 @@ public class VkPublishQueue {
     /** Тик планировщика: выпустить один пост, если окно открыто и лимиты позволяют. */
     public void publishDue() {
         if (!runtimeConfig.isVkEnabled()) return;
+        if (clock.instant().isBefore(retryNotBefore)) return;
+        // Обзор по профессии выходит в своё время вне окон и место подборки не занимает
+        if (publishSeoIfDue()) return;
         Window window = currentWindow();
         if (window == null) return;
-        if (clock.instant().isBefore(retryNotBefore)) return;
 
         String windowStartIso = window.start.toInstant().toString();
         int postsThisWindow = vacancyRepo.countVkPublishedSince(windowStartIso)
@@ -248,6 +250,51 @@ public class VkPublishQueue {
         return parseInstant(a).isAfter(parseInstant(b)) ? a : b;
     }
 
+    /** Сколько после vkSeoTime ещё можно выпустить обзор: опоздание больше — ждём следующего дня. */
+    static final Duration SEO_SLOT_LENGTH = Duration.ofHours(3);
+
+    /**
+     * Обзор по профессии (kind='seo'): в vkSeoTime по часовому поясу VK, не ближе vkMinGapMinutes
+     * к прошлому посту. В счётчик окна не попадает — окна подборок считаются от своего начала,
+     * а vkSeoTime стоит между ними.
+     */
+    private boolean publishSeoIfDue() {
+        if (articles == null) return false;
+        ZoneId zone = ZoneId.of(runtimeConfig.getVkTimezone());
+        ZonedDateTime now = clock.instant().atZone(zone);
+        LocalTime slot;
+        try {
+            slot = LocalTime.parse(runtimeConfig.getVkSeoTime());
+        } catch (Exception e) {
+            return false;
+        }
+        ZonedDateTime slotStart = now.toLocalDate().atTime(slot).atZone(zone);
+        if (now.isBefore(slotStart) || !now.isBefore(slotStart.plus(SEO_SLOT_LENGTH))) return false;
+
+        var due = articles.nextSeoToPublish(now.toLocalDate().toString());
+        if (due.isEmpty()) return false;
+        String last = latest(vacancyRepo.lastVkPublishedAt(), articles.lastPublishedAt());
+        if (last != null && Duration.between(parseInstant(last), clock.instant()).toMinutes() < runtimeConfig.getVkMinGapMinutes()) {
+            return false;
+        }
+        VkArticle a = due.get();
+        Long postId = vkNotifier.postReturningId(a.getBody(), cardFor(a));
+        a.setPublishedAt(clock.instant().toString());
+        if (postId == null) {
+            retryNotBefore = clock.instant().plus(Duration.ofMinutes(FAILURE_BACKOFF_MINUTES));
+            a.setStatus("failed");
+            articles.update(a);
+            log.warn("VK: обзор «{}» не опубликован", a.getTitle());
+            return true;
+        }
+        a.setStatus("published");
+        a.setVkPostId(String.valueOf(postId));
+        articles.update(a);
+        metrics.recordVkPost();
+        log.info("Опубликован в VK обзор «{}» (post_id={})", a.getTitle(), postId);
+        return true;
+    }
+
     /** Второе окно дня (или единственное) — слот для статей и опросов. */
     private boolean publishContentIfDue(Window window) {
         if (articles == null) return false;
@@ -327,7 +374,8 @@ public class VkPublishQueue {
         if (!runtimeConfig.isVkCardsEnabled()) return null;
         try {
             byte[] png = com.hh.gui.content.CardImageRenderer.articleCard(
-                a.getTitle(), a.isPoll() ? "опрос" : "разбор", communityLabel());
+                a.getTitle(), a.isPoll() ? "опрос" : com.hh.gui.content.SeoTopics.KIND.equals(a.getKind()) ? "обзор вакансий" : "разбор",
+                communityLabel());
             return vkNotifier.uploadWallPhoto(png, (a.isPoll() ? "poll-" : "article-") + a.getId() + ".png");
         } catch (Exception e) {
             log.warn("Карточка для статьи id={} не создана: {}", a.getId(), e.getMessage());

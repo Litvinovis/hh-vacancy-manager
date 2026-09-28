@@ -299,6 +299,77 @@ class VkPublishQueueTest {
         assertTrue(vk.posts.isEmpty(), "статья вышла 2 минуты назад — пауза между постами касается и её");
     }
 
+    // ── обзоры по профессиям: своё время, окно подборок не занимают ──
+
+    private static class SeoArticles extends com.hh.gui.repository.VkArticleRepository {
+        com.hh.gui.model.VkArticle seo; String last; final List<com.hh.gui.model.VkArticle> updated = new ArrayList<>();
+        SeoArticles() { super(null); }
+        @Override public int countPublishedSince(String sinceIso) { return 0; }
+        @Override public String lastPublishedAt() { return last; }
+        @Override public java.util.Optional<com.hh.gui.model.VkArticle> nextToPublish(String upToDate) { return java.util.Optional.empty(); }
+        @Override public java.util.Optional<com.hh.gui.model.VkArticle> nextSeoToPublish(String upToDate) {
+            return seo != null && "generated".equals(seo.getStatus()) ? java.util.Optional.of(seo) : java.util.Optional.empty();
+        }
+        @Override public void update(com.hh.gui.model.VkArticle a) { updated.add(a); }
+    }
+
+    private static com.hh.gui.model.VkArticle generatedSeo() {
+        com.hh.gui.model.VkArticle a = new com.hh.gui.model.VkArticle();
+        a.setId(9L); a.setKind(com.hh.gui.content.SeoTopics.KIND); a.setTopicKey("seo_assistant");
+        a.setTitle("Удалённая работа ассистентом"); a.setBody("Текст обзора"); a.setStatus("generated"); a.setPlannedFor("2026-09-21");
+        return a;
+    }
+
+    @Test
+    void seoArticle_publishedInItsSlotOutsideWindows() {
+        FakeRepo repo = new FakeRepo(); repo.queued.add(vacancy(1, "Ассистент"));
+        FakeVk vk = new FakeVk();
+        RuntimeConfig config = config();   // окна 09:00, 12:30, 18:30; обзор в 14:45
+        Clock clock = moscow("2026-09-21T14:50:00");
+        SeoArticles arts = new SeoArticles(); arts.seo = generatedSeo();
+        repo.nowIso = clock.instant().toString();
+
+        new VkPublishQueue(repo, vk, config, new AiMetrics(new SimpleMeterRegistry(), config), clock, arts).publishDue();
+
+        assertEquals(List.of("Текст обзора"), vk.posts);
+        assertEquals("published", arts.seo.getStatus());
+        assertEquals(1, repo.queued.size(), "вакансии обзор не трогает — они ждут своего окна");
+    }
+
+    @Test
+    void seoArticle_notBeforeItsTime_andNotTooLate() {
+        FakeVk vk = new FakeVk();
+        RuntimeConfig config = config();
+        for (String t : new String[]{"2026-09-21T14:30:00", "2026-09-21T17:50:00"}) {
+            Clock clock = moscow(t);
+            SeoArticles arts = new SeoArticles(); arts.seo = generatedSeo();
+            FakeRepo repo = new FakeRepo(); repo.nowIso = clock.instant().toString();
+            new VkPublishQueue(repo, vk, config, new AiMetrics(new SimpleMeterRegistry(), config), clock, arts).publishDue();
+            assertEquals("generated", arts.seo.getStatus(), t);
+        }
+        assertTrue(vk.posts.isEmpty());
+    }
+
+    @Test
+    void seoArticle_doesNotConsumeDigestWindowPost() {
+        // Окно 12:30 ещё открыто в 14:50 и лимит 2 поста; обзор вышел — подборка всё равно выходит следующим тиком
+        FakeRepo repo = new FakeRepo(); repo.queued.add(vacancy(1, "Ассистент"));
+        FakeVk vk = new FakeVk();
+        RuntimeConfig config = config();
+        SeoArticles arts = new SeoArticles(); arts.seo = generatedSeo();
+        Clock first = moscow("2026-09-21T14:50:00");
+        repo.nowIso = first.instant().toString();
+        new VkPublishQueue(repo, vk, config, new AiMetrics(new SimpleMeterRegistry(), config), first, arts).publishDue();
+        arts.last = first.instant().toString();
+
+        Clock later = moscow("2026-09-21T15:05:00");
+        repo.nowIso = later.instant().toString();
+        new VkPublishQueue(repo, vk, config, new AiMetrics(new SimpleMeterRegistry(), config), later, arts).publishDue();
+
+        assertEquals(2, vk.posts.size(), "после обзора вакансия вышла в своём окне: " + vk.posts);
+        assertTrue(repo.queued.isEmpty());
+    }
+
     @Test
     void planPost_scalesDigestToWhatIsLeftOfTheDay() {
         RuntimeConfig config = config();   // 3 окна по 2 поста, подборка до 7

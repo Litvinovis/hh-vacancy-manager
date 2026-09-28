@@ -148,7 +148,7 @@ class VkPostFormatterTest {
         v.setTitle("Ассистент руководителя");
         String post = VkPostFormatter.publicPost(v, "remotevibe");
         String last = post.substring(post.lastIndexOf('\n') + 1);
-        assertEquals("#удалённаяработа #ассистент #вакансии@remotevibe", last);
+        assertEquals("#удаленнаяработа #ассистент #вакансии@remotevibe", last);
         assertEquals(3, last.split(" ").length, "в ВК больше трёх хэштегов не работают");
     }
 
@@ -157,7 +157,7 @@ class VkPostFormatterTest {
         Vacancy v = hhLinked();
         v.setTitle("Космонавт");
         String post = VkPostFormatter.publicPost(v, null);
-        assertTrue(post.endsWith("#удалённаяработа"), post);
+        assertTrue(post.endsWith("#удаленнаяработа"), post);
     }
 
     @Test
