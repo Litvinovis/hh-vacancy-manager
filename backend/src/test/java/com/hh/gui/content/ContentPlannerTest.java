@@ -28,6 +28,8 @@ class ContentPlannerTest {
         @Override public VkArticle save(VkArticle a) { saved.add(a); return a; }
         @Override public Set<String> topicsUsedSince(String sinceDate) { return new HashSet<>(usedRecently); }
         @Override public int countPlannedFrom(String fromDate) { return alreadyPlanned; }
+        int seoPlanned = 0;
+        @Override public int countSeoPlannedFrom(String fromDate) { return seoPlanned; }
     }
 
     private static Clock at(String isoLocalMoscow) {
@@ -108,5 +110,34 @@ class ContentPlannerTest {
         for (ContentTopics.Topic t : ContentTopics.ALL) {
             assertTrue(keys.add(t.key()), "дублирующийся ключ темы: " + t.key());
         }
+    }
+
+    // ── обзоры по профессиям ──
+
+    @Test
+    void seoWeek_plannedOnOwnDays_asSeoKind_skippingRecentTopics() {
+        FakeArticles repo = new FakeArticles();
+        repo.usedRecently.add("seo_assistant");
+        RuntimeConfig c = config(2, 1, "TUE,THU,SAT");
+        c.setVkSeoArticlesPerWeek(3); c.setVkSeoDays("MON,WED,FRI");
+
+        assertEquals(3, new ContentPlanner(repo, c, at("2026-09-28T08:00:00")).planSeoWeek());
+
+        assertEquals(List.of("seo_marketplace", "seo_support", "seo_smm"),
+            repo.saved.stream().map(VkArticle::getTopicKey).toList());
+        assertTrue(repo.saved.stream().allMatch(a -> SeoTopics.KIND.equals(a.getKind())));
+        assertEquals(List.of("2026-09-28", "2026-09-30", "2026-10-02"),
+            repo.saved.stream().map(VkArticle::getPlannedFor).toList(), "пн, ср, пт");
+    }
+
+    @Test
+    void seoWeek_alreadyPlanned_doesNothing_andDoesNotBlockRegularPlan() {
+        FakeArticles repo = new FakeArticles();
+        repo.seoPlanned = 3;
+        RuntimeConfig c = config(2, 1, "TUE,THU,SAT");
+        ContentPlanner planner = new ContentPlanner(repo, c, at("2026-09-28T08:00:00"));
+
+        assertEquals(0, planner.planSeoWeek());
+        assertEquals(3, planner.planCurrentWeek(), "обычный план строится независимо от обзоров");
     }
 }

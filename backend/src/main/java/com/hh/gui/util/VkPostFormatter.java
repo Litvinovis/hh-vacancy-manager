@@ -18,7 +18,7 @@ import java.util.Locale;
  *       полностью» видна только она, и именно по ней решают, раскрывать ли пост.</li>
  *   <li>Ссылки на отклик в тексте нет — она уходит в первый комментарий
  *       ({@link #applyComment}): внешняя ссылка в посте режет охват.</li>
- *   <li>Ровно 2–3 хэштега: общий, по типу работы и сообщественный #вакансии@имя —
+ *   <li>Ровно 2–3 хэштега: общий (без «ё», как ищут), по типу работы и сообщественный #вакансии@имя —
  *       по нему ищут внутри сообщества. Больше трёх в ВК не работают, больше десяти —
  *       выкидывают из поиска.</li>
  *   <li>Эмодзи — минимум: перегруз эмодзи и одинаковый шаблон умная лента считает
@@ -209,7 +209,8 @@ public final class VkPostFormatter {
     /** Для подборки — общий тег, самый частый тег типа работы (если есть) и сообщественный. */
     static List<String> digestHashtags(List<Vacancy> vacancies, String communityScreenName) {
         List<String> tags = new ArrayList<>();
-        tags.add("#удалённаяработа");
+        // Без «ё»: в поиске пишут «удаленная», а не «удалённая»
+        tags.add("#удаленнаяработа");
         java.util.Map<String, Integer> kinds = new java.util.LinkedHashMap<>();
         for (Vacancy v : vacancies) {
             String kind = kindTag(v.getTitle());
@@ -232,10 +233,11 @@ public final class VkPostFormatter {
         return many;
     }
 
-    /** #удалённаяработа + тег по типу работы (если распознан) + #вакансии@сообщество. */
+    /** #удаленнаяработа + тег по типу работы (если распознан) + #вакансии@сообщество. */
     static List<String> hashtags(Vacancy v, String communityScreenName) {
         List<String> tags = new ArrayList<>();
-        tags.add("#удалённаяработа");
+        // Без «ё»: в поиске пишут «удаленная», а не «удалённая»
+        tags.add("#удаленнаяработа");
         String kind = kindTag(v.getTitle());
         if (kind != null) tags.add(kind);
         if (communityScreenName != null && !communityScreenName.isBlank()) {

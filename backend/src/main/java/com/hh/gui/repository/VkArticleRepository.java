@@ -77,7 +77,16 @@ public class VkArticleRepository {
 
     /** Есть ли уже план на неделю, начинающуюся с даты (защита от двойного планирования). */
     public int countPlannedFrom(String fromDate) {
-        Integer n = jdbc.queryForObject("SELECT COUNT(*) FROM vk_articles WHERE planned_for >= ?", Integer.class, fromDate);
+        // Обзоры (kind='seo') планируются своим потоком — их план не должен отменять обычный
+        Integer n = jdbc.queryForObject("SELECT COUNT(*) FROM vk_articles WHERE planned_for >= ? AND kind <> 'seo'",
+            Integer.class, fromDate);
+        return n != null ? n : 0;
+    }
+
+    /** Есть ли уже план обзоров (kind='seo') на неделю, начинающуюся с даты. */
+    public int countSeoPlannedFrom(String fromDate) {
+        Integer n = jdbc.queryForObject("SELECT COUNT(*) FROM vk_articles WHERE planned_for >= ? AND kind = 'seo'",
+            Integer.class, fromDate);
         return n != null ? n : 0;
     }
 
@@ -90,7 +99,17 @@ public class VkArticleRepository {
     /** Готовые к публикации на дату и раньше (просроченные — тоже, порядок по дате). */
     public Optional<VkArticle> nextToPublish(String upToDate) {
         List<VkArticle> rows = jdbc.query(
-            "SELECT * FROM vk_articles WHERE status='generated' AND planned_for <= ? ORDER BY planned_for LIMIT 1",
+            "SELECT * FROM vk_articles WHERE status='generated' AND planned_for <= ? AND kind <> 'seo' " +
+            "ORDER BY planned_for LIMIT 1",
+            MAPPER, upToDate);
+        return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
+    }
+
+    /** Готовый обзор на дату и раньше — выходит в своё время, не в окне подборок. */
+    public Optional<VkArticle> nextSeoToPublish(String upToDate) {
+        List<VkArticle> rows = jdbc.query(
+            "SELECT * FROM vk_articles WHERE status='generated' AND planned_for <= ? AND kind = 'seo' " +
+            "ORDER BY planned_for LIMIT 1",
             MAPPER, upToDate);
         return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
     }

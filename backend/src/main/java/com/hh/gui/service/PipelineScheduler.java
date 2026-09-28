@@ -345,6 +345,7 @@ public class PipelineScheduler implements SchedulingConfigurer {
         if (schemaNotReady() || !runtimeConfig.isVkEnabled()) return;
         try {
             contentPlanner.planCurrentWeek();
+            contentPlanner.planSeoWeek();
             String today = java.time.LocalDate.now(java.time.ZoneId.of(runtimeConfig.getVkTimezone())).toString();
             articleGenerator.generateDue(today);
         } catch (Exception e) {

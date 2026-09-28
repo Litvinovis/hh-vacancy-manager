@@ -97,6 +97,44 @@ public class ContentPlanner {
         return created;
     }
 
+    /**
+     * Обзоры по профессиям (SeoTopics) — отдельный поток со своими днями, идемпотентно так же:
+     * есть план обзоров на неделю — ничего не делает. Антиповтор короче, чем у обычных статей:
+     * обзор каждый раз пишется по свежим вакансиям, и профессий в каталоге всего девять.
+     */
+    public int planSeoWeek() {
+        int want = config.getVkSeoArticlesPerWeek();
+        if (want <= 0) return 0;
+        ZoneId zone = zone();
+        LocalDate today = LocalDate.now(clock.withZone(zone));
+        LocalDate monday = today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
+        if (articles.countSeoPlannedFrom(monday.toString()) > 0) return 0;
+
+        List<LocalDate> days = daysOf(config.getVkSeoDays(), monday, today);
+        if (days.isEmpty()) return 0;
+        Set<String> used = articles.topicsUsedSince(today.minusDays(SEO_COOLDOWN_DAYS).toString());
+
+        List<SeoTopics.Topic> picked = new ArrayList<>();
+        for (SeoTopics.Topic t : SeoTopics.ALL) {
+            if (picked.size() >= Math.min(want, days.size())) break;
+            if (!used.contains(t.key())) picked.add(t);
+        }
+        for (int i = 0; i < picked.size(); i++) {
+            VkArticle a = new VkArticle();
+            a.setTopicKey(picked.get(i).key());
+            a.setKind(SeoTopics.KIND);
+            a.setTitle(picked.get(i).headline());
+            a.setPollOptions("");
+            a.setStatus("planned");
+            a.setPlannedFor(days.get(i).toString());
+            articles.save(a);
+        }
+        log.info("План обзоров VK на неделю с {}: {}", monday, picked.stream().map(SeoTopics.Topic::key).toList());
+        return picked.size();
+    }
+
+    static final int SEO_COOLDOWN_DAYS = 21;
+
     /** Темы нужного вида, не бывшие в cooldown; dataBacked=true — только на данных. */
     private List<ContentTopics.Topic> pick(Set<String> used, int count, String kind, boolean dataBackedOnly) {
         List<ContentTopics.Topic> out = new ArrayList<>();
@@ -118,8 +156,11 @@ public class ContentPlanner {
 
     /** Дни публикации на этой неделе, не раньше сегодняшнего. Принимает MON..SUN и полные имена. */
     List<LocalDate> contentDays(LocalDate monday, LocalDate today) {
+        return daysOf(config.getVkContentDays(), monday, today);
+    }
+
+    List<LocalDate> daysOf(String raw, LocalDate monday, LocalDate today) {
         List<LocalDate> out = new ArrayList<>();
-        String raw = config.getVkContentDays();
         if (raw == null) return out;
         for (String part : raw.split(",")) {
             String key = part.trim().toUpperCase(Locale.ROOT);
