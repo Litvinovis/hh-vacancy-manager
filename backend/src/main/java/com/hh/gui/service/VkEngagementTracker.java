@@ -66,6 +66,12 @@ public class VkEngagementTracker {
     private final VacancyRepository vacancyRepo;
     private final VkArticleRepository articleRepo;
     private final AtomicInteger members = new AtomicInteger(-1);
+    private final MeterRegistry registry;
+    /**
+     * Гауга участников регистрируется после первого ответа VK: до него значения нет, а NaN
+     * после каждого рестарта портил delta() за неделю на дашборде (28.09.2026).
+     */
+    private volatile boolean membersRegistered;
     private final MultiGauge posts;
     private final MultiGauge engagement;
     private final tools.jackson.databind.ObjectMapper mapper = new tools.jackson.databind.ObjectMapper();
@@ -73,8 +79,7 @@ public class VkEngagementTracker {
     public VkEngagementTracker(VacancyRepository vacancyRepo, VkArticleRepository articleRepo, MeterRegistry registry) {
         this.vacancyRepo = vacancyRepo;
         this.articleRepo = articleRepo;
-        Gauge.builder("vk_community_members", members, a -> a.get() < 0 ? Double.NaN : a.get())
-            .tag("application", "hh-gui").description("Участников сообщества VK").register(registry);
+        this.registry = registry;
         this.posts = MultiGauge.builder("vk_posts_recent").tag("application", "hh-gui")
             .description("Постов сообщества VK за 7 дней по типу").register(registry);
         this.engagement = MultiGauge.builder("vk_posts_engagement").tag("application", "hh-gui")
@@ -95,7 +100,10 @@ public class VkEngagementTracker {
             Object r = resp.get("response");
             Object groups = r instanceof Map<?, ?> m ? m.get("groups") : r;
             Map<?, ?> g = (Map<?, ?>) ((List<?>) groups).get(0);
-            if (g.get("members_count") instanceof Number n) members.set(n.intValue());
+            if (g.get("members_count") instanceof Number n) {
+                members.set(n.intValue());
+                registerMembersGauge();
+            }
         } catch (Exception e) {
             log.warn("VK: число участников не получено: {}", e.getMessage());
         }
@@ -177,5 +185,12 @@ public class VkEngagementTracker {
             throw new IllegalStateException(method + ": " + (parsed.containsKey("error") ? parsed.get("error") : "HTTP " + code));
         }
         return parsed;
+    }
+
+    private synchronized void registerMembersGauge() {
+        if (membersRegistered) return;
+        Gauge.builder("vk_community_members", members, AtomicInteger::get)
+            .tag("application", "hh-gui").description("Участников сообщества VK").register(registry);
+        membersRegistered = true;
     }
 }
