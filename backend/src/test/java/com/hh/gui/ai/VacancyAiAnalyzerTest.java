@@ -681,6 +681,62 @@ class VacancyAiAnalyzerTest {
             "неюзабельный ответ обязан привести к переходу на резервного провайдера, а не к отказу");
     }
 
+    /** Первый ответ — битый JSON, дальше нормальный; запоминает, какой цепочкой шёл каждый вызов. */
+    private static class BrokenThenGoodAnalyzer extends VacancyAiAnalyzer {
+        final List<String> chains = new java.util.ArrayList<>();
+        BrokenThenGoodAnalyzer(RuntimeConfig config, AiProviderManager pm, AiMetrics metrics) {
+            super(config, pm, metrics, new com.hh.gui.client.CurrencyRateService());
+        }
+        @Override
+        String callLlm(String prompt, int maxTokens) throws Exception {
+            return answer("настроенная");
+        }
+        @Override
+        String callLlmWithChain(String prompt, int maxTokens, String chain) throws Exception {
+            return answer(chain);
+        }
+        private String answer(String chain) {
+            chains.add(chain);
+            if (chains.size() == 1) {
+                throw new LlmException(LlmException.Kind.BAD_RESPONSE, 200, "AI вернул некорректный JSON");
+            }
+            return "{\"model\":\"b\",\"choices\":[{\"message\":{\"content\":\"[{\\\"id\\\":\\\"1\\\",\\\"score\\\":80,"
+                + "\\\"verdict\\\":\\\"yes\\\",\\\"reason\\\":\\\"подходит\\\"}]\"}}]}";
+        }
+    }
+
+    @Test
+    void badResponse_retryStartsFromNextModelInChain() throws Exception {
+        // OpenRouter переходит к следующей модели только на ошибке HTTP, а битый JSON приходит
+        // с кодом 200: повтор уходил той же модели (живые случаи 21.09 и 02.10.2026).
+        RuntimeConfig config = new RuntimeConfig();
+        config.setAiProviders(List.of(new AiProviderConfig("openrouter", "http://localhost/p", "k", "a, b, c")));
+        config.setMaxRetries(2);
+        config.setAiRequestDelayMs(0);
+        AiProviderManager pm = new AiProviderManager(config, new AiMetrics(new SimpleMeterRegistry(), config));
+        BrokenThenGoodAnalyzer a = new BrokenThenGoodAnalyzer(config, pm, new AiMetrics(new SimpleMeterRegistry(), config));
+        setFieldQuietly(a, "batchSizeDefault", 5);
+
+        List<VacancyAiAnalyzer.AiResult> results = a.analyzeBatch(oneVacancy(), testJob());
+
+        assertEquals(List.of("настроенная", "b, c, a"), a.chains);
+        assertEquals("yes", results.get(0).verdict());
+    }
+
+    @Test
+    void rotatedChain_singleModelOrFullCircle_isNull() {
+        RuntimeConfig config = configWith(1);
+        AiProviderManager pm = new AiProviderManager(config, new AiMetrics(new SimpleMeterRegistry(), config));
+        VacancyAiAnalyzer a = new VacancyAiAnalyzer(config, pm, new AiMetrics(new SimpleMeterRegistry(), config),
+            new com.hh.gui.client.CurrencyRateService());
+        assertNull(a.rotatedChain(1), "одна модель — переставлять нечего");
+
+        config.getAiProviders().get(0).setModel("a, b, c");
+        assertNull(a.rotatedChain(0));
+        assertEquals("c, a, b", a.rotatedChain(2));
+        assertNull(a.rotatedChain(3), "полный круг — снова настроенный порядок");
+    }
+
     @Test
     void unusableResponse_withNoFallback_doesNotEnterCooldown() {
         // Обратная сторона: cooldown означает «не спрашивать никого часами». Это верно

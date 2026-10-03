@@ -244,17 +244,21 @@ public class VacancyAiAnalyzer {
      * budget thinking out loud — with the old cap of min(3000, 200+60×N) (2000 tokens
      * for a 30-card batch) the response got cut off mid-reasoning, before any JSON,
      * on every batch. The generous cap is headroom, not extra spend (max_tokens only
-     * bounds generation), and the retry usually lands on a different model.
+     * bounds generation). После негодного ответа повтор начинается со следующей модели
+     * цепочки — см. {@link #rotatedChain}.
      */
     protected List<AiResult> prescreenBatchWithRetry(List<ScraperClient.SearchHit> batch, SearchJob job) throws Exception {
         String prompt = buildPrescreenPrompt(batch, job);
         int maxTokens = Math.min(6000, 3000 + 60 * batch.size());
+        int badResponses = 0;
         for (int attempt = 1; ; attempt++) {
             waitForRateLimit();
             try {
-                return parsePrescreenResponse(callLlm(prompt, maxTokens));
+                String chain = rotatedChain(badResponses);
+                return parsePrescreenResponse(chain == null ? callLlm(prompt, maxTokens) : callLlmWithChain(prompt, maxTokens, chain));
             } catch (Exception e) {
                 LlmException.Kind kind = e instanceof LlmException le ? le.kind() : LlmException.Kind.TRANSPORT;
+                if (kind == LlmException.Kind.BAD_RESPONSE) badResponses++;
                 metrics.recordAnalysisFailure(providerManager.getCurrentProviderName(), kind.name(), "prescreen");
                 if (attempt >= 2) throw e;
                 log.warn("Прескрининг: попытка {} не удалась ({}), повторяем", attempt, e.getMessage());
@@ -375,6 +379,7 @@ public class VacancyAiAnalyzer {
     private List<AiResult> analyzeWithRetry(List<Vacancy> vacancies, SearchJob job, int maxRetries)
             throws Exception {
         int attempt = 0;
+        int badResponses = 0;
 
         while (true) {
             if (providerManager.isInCooldown()) {
@@ -382,10 +387,11 @@ public class VacancyAiAnalyzer {
                 throw new RuntimeException("Cooldown active, aborting");
             }
             try {
-                return analyzeChunk(vacancies, job);
+                return analyzeChunk(vacancies, job, rotatedChain(badResponses));
             } catch (Exception e) {
                 attempt++;
                 LlmException.Kind kind = e instanceof LlmException le ? le.kind() : LlmException.Kind.TRANSPORT;
+                if (kind == LlmException.Kind.BAD_RESPONSE) badResponses++;
                 metrics.recordAnalysisFailure(providerManager.getCurrentProviderName(), kind.name(), "analyze");
                 boolean isAuthError = kind == LlmException.Kind.AUTH;
                 if (kind == LlmException.Kind.EDGE_BLOCKED) {
@@ -419,6 +425,7 @@ public class VacancyAiAnalyzer {
                         isAuthError ? "Ошибка авторизации" : "Исчерпаны попытки",
                         currentProvider, kind, providerManager.getCurrentProviderName());
                     attempt = 0; // свежий бюджет попыток для нового провайдера
+                    badResponses = 0;
                     continue;
                 }
 
@@ -430,7 +437,8 @@ public class VacancyAiAnalyzer {
         }
     }
 
-    private List<AiResult> analyzeChunk(List<Vacancy> vacancies, SearchJob job) throws Exception {
+    /** chain — цепочка моделей для этого вызова, null — как настроено у провайдера. */
+    private List<AiResult> analyzeChunk(List<Vacancy> vacancies, SearchJob job, String chain) throws Exception {
         String prompt = buildPrompt(vacancies, job);
         // Same floor as the prescreen path: openrouter/free routes to reasoning models
         // that burn thousands of tokens thinking before emitting the array, so a
@@ -442,7 +450,8 @@ public class VacancyAiAnalyzer {
         // full fields per item — live symptom was noveltyColor/noveltyNote silently
         // missing from most items in a batch, not just occasionally.
         long started = System.nanoTime();
-        String response = callLlm(prompt, Math.min(10000, 4000 + 220 * vacancies.size()));
+        int maxTokens = Math.min(10000, 4000 + 220 * vacancies.size());
+        String response = chain == null ? callLlm(prompt, maxTokens) : callLlmWithChain(prompt, maxTokens, chain);
         long elapsedMs = (System.nanoTime() - started) / 1_000_000;
         // Какая модель ответила на самом деле: при списке моделей OpenRouter сам выбирает
         // из трёх, и без этого сбои в работе нельзя было приписать конкретной модели.
@@ -785,13 +794,44 @@ public class VacancyAiAnalyzer {
      * got a 400 back (observed live) and the AI selection silently never ran.
      */
     String callLlm(String prompt, int maxTokens, String modelOverride) throws Exception {
+        return callLlmGeoRetrying(prompt, maxTokens, modelOverride, modelOverride != null);
+    }
+
+    /**
+     * Боевой вызов с цепочкой моделей в другом порядке (см. {@link #rotatedChain}). Отдельно от
+     * modelOverride: тот означает пробу модели, и её ошибки пишутся в лог как ожидаемые (WARN).
+     */
+    String callLlmWithChain(String prompt, int maxTokens, String chain) throws Exception {
+        return callLlmGeoRetrying(prompt, maxTokens, chain, false);
+    }
+
+    /**
+     * Цепочка моделей текущего провайдера, начинающаяся с модели номер shift; null — переставлять
+     * нечего (shift 0, одна модель или полный круг).
+     *
+     * Нужна для повтора после негодного ответа. OpenRouter переходит к следующей модели списка
+     * только на ошибке HTTP, а битый JSON приходит с кодом 200 — и повтор того же запроса раньше
+     * уходил той же модели, которая его только что испортила (живые случаи 21.09 и 02.10.2026).
+     */
+    String rotatedChain(int shift) {
+        if (shift <= 0) return null;
+        List<String> models = java.util.Arrays.stream(providerManager.getCurrentModel().split(","))
+            .map(String::trim).filter(m -> !m.isEmpty()).limit(3).toList();
+        if (models.size() < 2 || shift % models.size() == 0) return null;
+        int from = shift % models.size();
+        List<String> rotated = new ArrayList<>(models.subList(from, models.size()));
+        rotated.addAll(models.subList(0, from));
+        return String.join(", ", rotated);
+    }
+
+    private String callLlmGeoRetrying(String prompt, int maxTokens, String modelOverride, boolean probe) throws Exception {
         // Отказ по региону выхода повторяем прямо здесь, а не в analyzeWithRetry: через
         // этот метод ходят и генератор статей, и пробы моделей, у которых своего цикла
         // повторов нет. Повтор мгновенный и не считается попыткой — у выхода VPN
         // несколько адресов, и следующий запрос уходит уже с другого.
         for (int geoRetry = 0; ; geoRetry++) {
             try {
-                return callLlmOnce(prompt, maxTokens, modelOverride);
+                return callLlmOnce(prompt, maxTokens, modelOverride, probe);
             } catch (LlmException e) {
                 if (e.kind() != LlmException.Kind.GEO_BLOCKED || geoRetry >= MAX_GEO_RETRIES) throw e;
                 log.warn("Запрос отклонён по региону выхода (повтор {}/{})", geoRetry + 1, MAX_GEO_RETRIES);
@@ -799,7 +839,7 @@ public class VacancyAiAnalyzer {
         }
     }
 
-    private String callLlmOnce(String prompt, int maxTokens, String modelOverride) throws Exception {
+    private String callLlmOnce(String prompt, int maxTokens, String modelOverride, boolean probe) throws Exception {
         String url = providerManager.getCurrentUrl();
         String key = providerManager.getCurrentKey();
         String model = modelOverride != null ? modelOverride : providerManager.getCurrentModel();
@@ -893,8 +933,8 @@ public class VacancyAiAnalyzer {
             }
             // Пробные вызовы с явной моделью (FreeModelUpdater, CommentRadar) регулярно ловят
             // 403 от free-моделей с ограничениями провайдера — это ожидаемый исход проверки,
-            // а не сбой системы, поэтому WARN. Боевые вызовы (modelOverride == null) — ERROR.
-            if (modelOverride != null) {
+            // а не сбой системы, поэтому WARN. Боевые вызовы — ERROR.
+            if (probe) {
                 log.warn("Ошибка LLM API {} ({}, проба модели {}): {}", code, provider, modelOverride, body);
             } else {
                 log.error("Ошибка LLM API {} ({}): {}", code, provider, body);

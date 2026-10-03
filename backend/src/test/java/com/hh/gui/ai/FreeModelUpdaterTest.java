@@ -546,4 +546,19 @@ class FreeModelUpdaterTest {
         assertEquals("a/one:free, c/three:free, e/other-instruct:free", openrouterModel(),
             "при равной оценке пробы — та, что отвечает быстрее, а не с длинным контекстом");
     }
+
+    @Test
+    void sameModels_reorderedByProductionReliability() {
+        ModelHealth health = new ModelHealth();
+        for (int i = 0; i < ModelHealth.OUTCOME_WINDOW; i++) health.recordOutcome("a/one:free", i % 3 != 0);
+        for (int i = 0; i < ModelHealth.MIN_OUTCOMES_TO_JUDGE; i++) health.recordOutcome("c/three:free", true);
+        TestUpdater updater = withHealth(health);
+        updater.healthy = Set.of("a/one:free", "b/two:free", "c/three:free");
+
+        Map<String, Object> summary = updater.refresh();
+
+        assertEquals("reordered", summary.get("status"));
+        assertEquals("c/three:free, a/one:free, b/two:free", openrouterModel(),
+            "лидер, ломающий треть ответов, уступает место модели без сбоев; без истории — в конце");
+    }
 }
