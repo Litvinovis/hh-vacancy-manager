@@ -10,7 +10,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -130,6 +133,27 @@ public class ModelHealth {
             e.outcomes = "";
             save();
         }
+    }
+
+    /**
+     * Цепочка в порядке надёжности в работе. OpenRouter отдаёт почти все запросы первой модели
+     * списка, а порядок раньше задавался один раз — при посадке модели в цепочку — и больше не
+     * пересматривался: деградирующий лидер (до порога исключения в 50% сбоев) так и оставался
+     * первым, хотя запасная модель рядом отвечала лучше.
+     *
+     * Сравниваются только модели с достаточной историей: по доле сбоев, огрублённой до десятков
+     * процентов (иначе цепочка переставлялась бы от каждого сбоя), при равенстве — по скорости.
+     * Модели без истории идут следом в прежнем порядке: «не знаем» — не повод ни повышать, ни
+     * понижать.
+     */
+    public synchronized List<String> orderByProduction(List<String> chain) {
+        List<String> judged = new ArrayList<>(chain.stream().filter(m -> failureRate(m) != null).toList());
+        judged.sort(Comparator
+            .comparingInt((String m) -> (int) Math.floor(failureRate(m) * 10))
+            .thenComparingDouble(this::latencyMs));
+        List<String> ordered = new ArrayList<>(judged);
+        chain.stream().filter(m -> failureRate(m) == null).forEach(ordered::add);
+        return ordered;
     }
 
     public synchronized void recordLatency(String model, long ms) {

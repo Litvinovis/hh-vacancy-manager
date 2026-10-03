@@ -51,4 +51,33 @@ class ModelHealthTest {
         assertTrue(after.isBlocked("x", System.currentTimeMillis()));
         assertEquals("0", after.snapshot().get("m").outcomes);
     }
+
+    @Test
+    void orderByProduction_reliableFirst_unknownKeepOrderAtTheEnd() {
+        ModelHealth h = new ModelHealth();
+        // лидер ломает 40% ответов, запасная — ни одного; третья в работе ещё не была
+        for (int i = 0; i < 10; i++) h.recordOutcome("leader", i % 5 >= 2);
+        for (int i = 0; i < 10; i++) h.recordOutcome("backup", true);
+        assertEquals(java.util.List.of("backup", "leader", "fresh"),
+            h.orderByProduction(java.util.List.of("leader", "fresh", "backup")));
+    }
+
+    @Test
+    void orderByProduction_smallDifferenceDecidedBySpeed_notByOneFailure() {
+        ModelHealth h = new ModelHealth();
+        // 10% и 15% сбоев — одна корзина: один лишний сбой не должен переставлять цепочку
+        for (int i = 0; i < 20; i++) h.recordOutcome("slow", i % 10 != 0);
+        for (int i = 0; i < 20; i++) h.recordOutcome("fast", i != 0 && i != 7 && i != 14);
+        h.recordLatency("slow", 30_000);
+        h.recordLatency("fast", 6_000);
+        assertEquals(java.util.List.of("fast", "slow"), h.orderByProduction(java.util.List.of("slow", "fast")));
+    }
+
+    @Test
+    void orderByProduction_withoutHistory_changesNothing() {
+        ModelHealth h = new ModelHealth();
+        h.recordLatency("b", 100);
+        assertEquals(java.util.List.of("a", "b", "c"), h.orderByProduction(java.util.List.of("a", "b", "c")),
+            "одна скорость пробы без истории работы — не основание переставлять");
+    }
 }

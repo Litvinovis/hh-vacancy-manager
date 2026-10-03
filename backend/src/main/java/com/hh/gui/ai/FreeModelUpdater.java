@@ -255,8 +255,19 @@ public class FreeModelUpdater {
         // healthy can only contain models that were in stillFree, so reaching a full chain
         // here already means every one of them is both free and answering.
         if (healthy.size() == MODELS_IN_CHAIN) {
-            summary.put("status", "unchanged");
             summary.put("probes", probe.used);
+            // Состав прежний, но лидер цепочки получает почти все запросы — он должен быть
+            // самым надёжным в работе, а не тем, кто раньше других попал в список.
+            List<String> ordered = health.orderByProduction(healthy);
+            if (!ordered.equals(current)) {
+                target.setModel(String.join(", ", ordered));
+                runtimeConfig.setAiProviders(providers);
+                log.warn("Обновление free-моделей: порядок по работе изменён {} -> {}", current, ordered);
+                summary.put("status", "reordered");
+                summary.put("selected", ordered);
+                return summary;
+            }
+            summary.put("status", "unchanged");
             log.info("Обновление free-моделей: все {} текущих моделей отвечают — список не тронут", healthy.size());
             return summary;
         }
@@ -319,19 +330,20 @@ public class FreeModelUpdater {
             return summary;
         }
 
-        if (healthy.equals(current)) {
+        List<String> chain = health.orderByProduction(healthy);
+        if (chain.equals(current)) {
             summary.put("status", "unchanged");
             return summary;
         }
 
-        target.setModel(String.join(", ", healthy));
+        target.setModel(String.join(", ", chain));
         runtimeConfig.setAiProviders(providers);
         // Исключённые начинают с чистого листа: если модель исправится, прошлые сбои не
         // должны навсегда закрыть ей дорогу обратно.
-        current.stream().filter(m -> !healthy.contains(m)).forEach(health::resetOutcomes);
-        log.warn("Обновление free-моделей: список заменён {} -> {}", current, healthy);
+        current.stream().filter(m -> !chain.contains(m)).forEach(health::resetOutcomes);
+        log.warn("Обновление free-моделей: список заменён {} -> {}", current, chain);
         summary.put("status", "updated");
-        summary.put("selected", List.copyOf(healthy));
+        summary.put("selected", List.copyOf(chain));
         return summary;
     }
 
