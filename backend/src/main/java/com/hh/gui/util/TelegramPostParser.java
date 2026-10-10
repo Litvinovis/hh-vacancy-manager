@@ -318,6 +318,15 @@ public final class TelegramPostParser {
     private static final Pattern CONTACT_PERSONAL_USERNAME = Pattern.compile(
         "(?:напиши(?:те)?|пишите|отклик|контакт|обращайтесь|связаться|для\\s+связи)\\S*[:\\s].*?(@[a-zA-Z0-9_]{5,})",
         Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+    // Метка с двоеточием, а контакт — первым после неё, хоть через пустую строку: так пишет бот
+    // агрегаторов (freelancce, frilanser_vacansii) — «Контакт:\n\n @handle». Шаблон выше пустую
+    // строку не перешагивал, и у 466 постов из 1360 контакт не находился (10.10.2026): одобренные
+    // без ссылки на сайт не проходили «есть куда откликнуться» ни в канал, ни в очередь VK.
+    // Пустые строки разрешены только здесь, где @ стоит сразу после метки, — в «свободном»
+    // шаблоне они пустили бы «ждём отклик\n\nПодписывайтесь на @канал».
+    private static final Pattern CONTACT_LABELED_USERNAME = Pattern.compile(
+        "(?:напиши(?:те)?|пишите|отклик|контакт|обращайтесь|связаться|для\\s+связи)[^\\s:]*\\s*:\\s*(@[a-zA-Z0-9_]{5,})",
+        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
     /** Where a reader should actually apply, or null if the post never says. */
     public static Contact contact(String text) {
@@ -329,6 +338,8 @@ public final class TelegramPostParser {
         if (email.find()) return new Contact("📧", email.group());
         Matcher phone = CONTACT_PHONE.matcher(text);
         if (phone.find()) return new Contact("📞", phone.group().trim());
+        Matcher labeled = CONTACT_LABELED_USERNAME.matcher(text);
+        if (labeled.find()) return new Contact("💬", "https://t.me/" + labeled.group(1).substring(1));
         Matcher personal = CONTACT_PERSONAL_USERNAME.matcher(text);
         if (personal.find()) return new Contact("💬", "https://t.me/" + personal.group(1).substring(1));
         return null;

@@ -338,6 +338,21 @@ class TelegramPostParserTest {
     }
 
     @Test
+    void contact_labelThenBlankLineThenUsername_found() {
+        // Формат бота агрегаторов (freelancce, frilanser_vacansii): у 466 постов контакт не находился.
+        assertEquals("https://t.me/regimzu", TelegramPostParser.contact(
+            "Условия:\n— удалённая работа;\n\n Контакт:\n\n @regimzu\n\nОтклик нужно начать со слова «ДИРЕКТОЛОГ»").display());
+        assertEquals("https://t.me/asya_itrecruiter",
+            TelegramPostParser.contact("Отклик:\n\n @asya_itrecruiter\n\nhttps://hooks.pro/media/x.jpg").display());
+    }
+
+    @Test
+    void contact_blankLineAfterLooseKeyword_notBridgedToUnrelatedMention() {
+        // Пустую строку перешагивает только метка с двоеточием: «ждём отклик» и канал-реклама ниже — не контакт.
+        assertNull(TelegramPostParser.contact("Ждём ваш отклик\n\nПодписывайтесь на @rabota_channel"));
+    }
+
+    @Test
     void externalUrl_prefersNonTelegramLink() {
         assertEquals("https://kadrout.ru/vacancies/42",
             TelegramPostParser.externalUrl("Посмотреть полностью https://kadrout.ru/vacancies/42"));
