@@ -347,6 +347,40 @@ class VacancyDiscoveryTest {
     }
 
     @Test
+    void discoverFromTelegram_employerFromTitle_keepsTitleKeySoRewordedRepostsCollapse() {
+        // Работодатель найден в самом заголовке, а не меткой в тексте — так пишут боты-агрегаторы,
+        // перефразирующие повторы. Ключ по описанию эти повторы бы разлучил.
+        String text1 = "Копирайтер в онлайн-школу «Мамина опора»\n\nЗадачи:\n— писать посты";
+        String text2 = "Копирайтер в онлайн-школу «Мамина опора»\n\nЧем заниматься: посты, рассылки, лендинги";
+        FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
+            true, null, List.of(tgMsg("tg_testchan_71", text1), tgMsg("tg_testchan_72", text2)))));
+        FakeTgRepo repo = new FakeTgRepo(Set.of());
+        VacancyDiscovery discovery = discovery().telegram(tg).repo(repo).build();
+
+        discovery.fromTelegram(tgJob(), List.of("testchan"));
+
+        assertEquals(2, repo.saved.size());
+        assertEquals("Мамина опора", repo.saved.get(0).getCompany());
+        assertEquals(repo.saved.get(0).getDedupKey(), repo.saved.get(1).getDedupKey());
+    }
+
+    @Test
+    void discoverFromTelegram_labeledEmployer_keepsDescriptionKey() {
+        // Работодатель названный меткой — обычный случай: разные вакансии одной компании
+        // с одинаковым заголовком не склеиваются, ключ строится по описанию.
+        String text1 = "Оператор чата\nКомпания: Ромашка\nСмены днём";
+        String text2 = "Оператор чата\nКомпания: Ромашка\nНочные смены, другой проект";
+        FakeTelegramClient tg = new FakeTelegramClient(java.util.Map.of("testchan", new TelegramClient.ChannelResult(
+            true, null, List.of(tgMsg("tg_testchan_73", text1), tgMsg("tg_testchan_74", text2)))));
+        FakeTgRepo repo = new FakeTgRepo(Set.of());
+        VacancyDiscovery discovery = discovery().telegram(tg).repo(repo).build();
+
+        discovery.fromTelegram(tgJob(), List.of("testchan"));
+
+        assertNotEquals(repo.saved.get(0).getDedupKey(), repo.saved.get(1).getDedupKey());
+    }
+
+    @Test
     void discoverFromTelegram_organizationAsDutiesSubheading_doesNotMisfireAsEmployer() {
         // Живой пример: "Организация:" использовано как подзаголовок раздела обязанностей
         // ("организовывать процесс"), а не как метка "название организации-работодателя".

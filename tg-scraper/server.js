@@ -279,7 +279,10 @@ async function collectMessages(page, channel) {
       // number ending "...68-12" right before a badge starting "63…" got merged into
       // one 4-digit "1263…" match). Requiring the SAME chunk to repeat verbatim can't
       // do that: real content immediately before the badge never duplicates itself.
-      text = text.replace(/([-]?\d{1,4}[-]\d{1,2}:\d{2})\1\s*$/, '').trimEnd();
+      // С тысячи просмотров число пишется «1.1K», у изменённых постов перед ним «edited» —
+      // прежний вариант (только цифры) такие подвалы пропускал, и цифры прилипали к контакту
+      // в конце поста: «@senkinaa1K» (10.10.2026). Значок — символ из приватной области Unicode.
+      text = text.replace(/((?:edited|изменено)?[\uE000-\uF8FF]?\d{1,4}(?:[.,]\d{1,2})?[KkMmКкМм]?[\uE000-\uF8FF]\d{1,2}:\d{2})\1\s*$/, '').trimEnd();
       // innerText drops href attributes — a link whose visible label is just
       // "Посмотреть вакансию полностью" (verified live on the kadrout channel)
       // leaves the actual URL nowhere in the plain text at all. Anchor hrefs are

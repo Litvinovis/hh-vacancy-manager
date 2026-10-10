@@ -97,6 +97,15 @@ public final class TelegramPostParser {
         Pattern.compile("(?:\\sв|\\sдля)\\s+([A-ZА-ЯЁ][\\w\\-&+./]*(?:\\s[A-ZА-ЯЁ0-9][\\w\\-&+./]*)*)\\s*$",
             Pattern.UNICODE_CASE);
 
+    // Название в кавычках в конце заголовка: «Копирайтер в онлайн-школу «Мамина опора»», «Маркетолог
+    // в платформу «Кинокадр»». Правило выше их не видело — кавычка не буква, а у кириллицы \w не
+    // срабатывает, — и пост уходил с «@канал» вместо работодателя, а без работодателя и зарплаты
+    // фильтр качества его не пускал (37 таких на 10.10.2026, ни одного ложного). Между «в/для» и
+    // кавычками — до двух слов вида «онлайн-школу», «образовательный проект».
+    private static final Pattern TITLE_QUOTED_EMPLOYER = Pattern.compile(
+        "(?:\\sв|\\sдля)\\s+(?:[\\p{L}\\d-]+\\s+){0,2}[«\"„]([^»\"“”«]{2,40})[»\"“”]\\s*\\.?\\s*$",
+        Pattern.UNICODE_CASE);
+
     // "Роль в Telegram" / "для YouTube-проекта" name the PLATFORM the work happens on,
     // not who's hiring — TITLE_TRAILING_EMPLOYER can't distinguish that from a real
     // company name syntactically, so reject a capture that starts with one of these.
@@ -141,6 +150,10 @@ public final class TelegramPostParser {
         Matcher structured = STRUCTURED_COMPANY_LEVEL.matcher(text);
         if (structured.find()) {
             return stripTrailingPeriod(structured.group(1).trim());
+        }
+        Matcher quoted = TITLE_QUOTED_EMPLOYER.matcher(title);
+        if (quoted.find() && !quoted.group(1).isBlank()) {
+            return quoted.group(1).trim();
         }
         Matcher titleMatch = TITLE_TRAILING_EMPLOYER.matcher(title);
         if (titleMatch.find() && !PLATFORM_NOT_EMPLOYER.matcher(titleMatch.group(1)).find()
@@ -309,6 +322,9 @@ public final class TelegramPostParser {
     /** Where a reader should actually apply, or null if the post never says. */
     public static Contact contact(String text) {
         if (text == null) return null;
+        // Описания, сохранённые до починки сайдкара, ещё несут счётчик просмотров — снимаем
+        // здесь, иначе он прилипает к контакту (см. stripViewBadges).
+        text = stripViewBadges(text);
         Matcher email = CONTACT_EMAIL.matcher(text);
         if (email.find()) return new Contact("📧", email.group());
         Matcher phone = CONTACT_PHONE.matcher(text);
@@ -331,6 +347,21 @@ public final class TelegramPostParser {
     // and only the "###" heading gets stripped, leaving the prefix behind.
     private static final Pattern MD_HEADING_AND_VACANCY_PREFIX =
         Pattern.compile("^#{1,6}\\s*(?:вакансия\\s*:?\\s*)?", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+
+    // Счётчик просмотров и время поста из подвала Telegram Web, дважды подряд: «1.1K17:001.1K17:00»,
+    // «edited81118:07edited81118:07» (между числом и временем — значок-глаз из приватной области
+    // Unicode). Сайдкар срезал его только для просмотров без «K», и с тысячи просмотров подвал
+    // оставался в тексте: 196 из 1360 Telegram-вакансий на 10.10.2026, контакт «@senkinaa» из
+    // такого поста читался как «@senkinaa1K» — ссылка на чужой аккаунт. Повтор обязателен (\1):
+    // только он отделяет число просмотров от цифр, стоящих в тексте прямо перед подвалом.
+    private static final Pattern VIEW_BADGE = Pattern.compile(
+        "((?:edited|изменено)?[\\uE000-\\uF8FF]?\\d{1,4}(?:[.,]\\d{1,2})?[KkMmКкМм]?[\\uE000-\\uF8FF]\\d{1,2}:\\d{2})\\1");
+
+    /** Текст поста без подвала с просмотрами и временем, который веб-клиент Telegram дописывает к нему. */
+    public static String stripViewBadges(String text) {
+        if (text == null || text.isEmpty()) return text;
+        return VIEW_BADGE.matcher(text).replaceAll("");
+    }
 
     /**
      * Telegram's rich-text editor prepends a zero-width space to some posts (styling

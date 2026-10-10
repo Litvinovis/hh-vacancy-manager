@@ -376,7 +376,11 @@ public class VacancyDiscovery {
                     // Only applied when employer IS the channel fallback ("@channel"): once a
                     // real employer is extracted, different postings from it deserve their own
                     // description-hash keys as normal.
-                    v.setDedupKey(employer.startsWith("@")
+                    // Работодатель, вычитанный из самого заголовка («Копирайтер в «Мамина опора»»),
+                    // — тот же случай: так пишут боты-агрегаторы, перефразирующие повторы, и ключ
+                    // по описанию склеивать их перестал бы. Заголовок с работодателем у них стабилен.
+                    boolean employerFromTitle = employer.startsWith("@") || title.contains(employer);
+                    v.setDedupKey(employerFromTitle
                         ? DedupKeys.compute(v.getTitle(), employer)
                         : DedupKeys.compute(v.getTitle(), employer, msg.text()));
                 }

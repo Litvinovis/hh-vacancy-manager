@@ -2,6 +2,7 @@ package com.hh.gui.client;
 
 import tools.jackson.databind.ObjectMapper;
 import com.hh.gui.util.HttpUtil;
+import com.hh.gui.util.TelegramPostParser;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -119,7 +120,9 @@ public class TelegramClient {
             List<TelegramMessage> items = new ArrayList<>();
             for (Map<String, Object> item : rawItems) {
                 items.add(new TelegramMessage(
-                    str(item.get("id")), str(item.get("text")),
+                    // Подвал с просмотрами снимаем и здесь, а не только в сайдкаре: старая его версия
+                    // или новый вид подвала не должны дописывать цифры к контакту в посте.
+                    str(item.get("id")), TelegramPostParser.stripViewBadges(str(item.get("text"))),
                     // Сайдкар отдаёт дату как publishedAt; после переименования колонки в
                     // hh_published_at (PR #220) здесь стали читать несуществующий ключ, и у всех
                     // Telegram-вакансий дата публикации пропала (748 из 748 на 23.09.2026).
