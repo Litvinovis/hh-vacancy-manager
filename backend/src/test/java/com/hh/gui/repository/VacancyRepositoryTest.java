@@ -688,6 +688,20 @@ class VacancyRepositoryTest {
     }
 
     @Test
+    void freshness403_isRememberedUntilVacancyOpensAgain() {
+        Long id = saveApproved("403001", java.time.Instant.now().toString(), null);
+        java.time.Instant later = java.time.Instant.now().plusSeconds(60);
+
+        assertFalse(vacancyRepo.hadFreshness403Before(id, later));
+        vacancyRepo.recordFreshness403(id);
+        assertTrue(vacancyRepo.hadFreshness403Before(id, later));
+        assertFalse(vacancyRepo.hadFreshness403Before(id, java.time.Instant.now().minusSeconds(3600)),
+            "403 моложе порога не считается — нужен разрыв между проверками");
+        vacancyRepo.clearFreshness403(id);
+        assertFalse(vacancyRepo.hadFreshness403Before(id, later));
+    }
+
+    @Test
     void findDueFreshnessCheck_recheckedRowWaitsFullIntervalAgain() {
         String old = java.time.Instant.now().minusSeconds(10 * 24 * 3600).toString();
         Long id = saveApproved("fr-recheck", old, null);
