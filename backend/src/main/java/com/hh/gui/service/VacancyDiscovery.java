@@ -8,6 +8,7 @@ import com.hh.gui.model.SearchJob;
 import com.hh.gui.model.Vacancy;
 import com.hh.gui.repository.VacancyRepository;
 import com.hh.gui.util.DedupKeys;
+import com.hh.gui.util.ExcludeWords;
 import com.hh.gui.util.TelegramPostParser;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -20,6 +21,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -153,9 +155,23 @@ public class VacancyDiscovery {
      * ScraperClient.searchByUrl), filters excluded titles, prescreens genuinely new
      * hits (VacancyAiAnalyzer.prescreenHits), and saves each as a scrape-pending stub
      * (or scrape_status='skipped' if prescreen rejected it, so it still counts as
-     * "seen"). Always walks every requested page up to MAX_URL_SEARCH_PAGES — no
-     * early stop: this listing's known/new hits interleave unpredictably across
-     * pages (mass-reposted clones), so a "saturated" page can't predict the next one.
+     * "seen").
+     *
+     * Свежие первыми (10.10.2026). Ссылка без своей сортировки идёт с order_by=publication_time:
+     * по умолчанию hh сортирует «по релевантности», и в первые сутки после публикации находилось
+     * только 40% вакансий, 23% — позже трёх дней, а 10 страниц обходили почти одно и то же. В
+     * порядке по дате новое и известное перемешаны уже не «как угодно», поэтому листание
+     * останавливается:
+     * <ul>
+     *   <li>после {@link #PAGES_WITHOUT_NEW_TO_STOP} страниц подряд без новых карточек — дальше то,
+     *       что видели прошлые запуски (в порядке по релевантности стоп не действует: там за
+     *       известной страницей бывает страница нового);</li>
+     *   <li>когда очередь на скрейп дошла до scrapeBacklogCap — поток по дате ~130 карточек в час,
+     *       и без предела запуск набирал бы в разы больше, чем скрейпер успевает скачать; так
+     *       берутся самые свежие в пределах пропускной способности.</li>
+     * </ul>
+     * Чтобы вернуть прежний порядок, достаточно указать сортировку в самой ссылке
+     * (order_by=relevance) — она не переопределяется.
      */
     // No @Transactional: it used to be here and did nothing. Spring's proxy-based
     // transaction advice only applies to public methods, and both callers of this one
@@ -164,6 +180,11 @@ public class VacancyDiscovery {
     // auto-commits on its own — which is also what the per-save try/catch already
     // assumes, since it deliberately keeps going after one bad row.
     public int fromUrl(SearchJob job, String url, int maxPages) {
+        return fromUrl(job, url, maxPages, Integer.MAX_VALUE);
+    }
+
+    /** @param scrapeBacklogCap сколько вакансий может ждать скрейпа, прежде чем листание остановится */
+    public int fromUrl(SearchJob job, String url, int maxPages, int scrapeBacklogCap) {
         if (scrapeCooldown.isCoolingDown()) {
             log.warn("Поиск по ссылке ({} · {}) пропущен — скрейпинг заморожен после блокировки", job.personName, job.searchName);
             return 0;
@@ -171,9 +192,20 @@ public class VacancyDiscovery {
         int pages = Math.min(Math.max(maxPages, 1), MAX_URL_SEARCH_PAGES);
         int saved = 0;
         Map<String, VacancyRepository.PrescreenMemo> memory = null;   // лениво: только если найдутся новые карточки
+        String walkUrl = freshFirst(url);
+        boolean byDate = isByPublicationTime(walkUrl);
+        int pagesWithoutNew = 0;
 
         for (int page = 0; page < pages; page++) {
-            ScraperClient.SearchPageResult result = scraperClient.searchByUrl(url, page);
+            if (scrapeBacklogCap < Integer.MAX_VALUE) {
+                int backlog = awaitingScrape(job);
+                if (backlog >= scrapeBacklogCap) {
+                    log.info("Поиск по ссылке ({} · {}) остановлен перед страницей {}: скрейпа ждут {} вакансий (предел {})",
+                        job.personName, job.searchName, page, backlog, scrapeBacklogCap);
+                    break;
+                }
+            }
+            ScraperClient.SearchPageResult result = scraperClient.searchByUrl(walkUrl, page);
             if (!result.ok()) {
                 log.warn("Поиск по ссылке ({} · {}) остановлен на странице {}: {}",
                     job.personName, job.searchName, page, result.reason());
@@ -192,7 +224,15 @@ public class VacancyDiscovery {
             List<ScraperClient.SearchHit> newHits = filterExcludedHits(rawHits, job.excludeWords).stream()
                 .filter(hit -> !knownHhIds.contains(hit.hhId()))
                 .toList();
-            if (newHits.isEmpty()) continue;
+            if (newHits.isEmpty()) {
+                if (byDate && ++pagesWithoutNew >= PAGES_WITHOUT_NEW_TO_STOP) {
+                    log.info("Поиск по ссылке ({} · {}) остановлен на странице {}: {} страницы подряд без новых — дальше уже виденное",
+                        job.personName, job.searchName, page, pagesWithoutNew);
+                    break;
+                }
+                continue;
+            }
+            pagesWithoutNew = 0;
 
             if (memory == null) memory = prescreenMemory(job);
             Map<String, VacancyAiAnalyzer.AiResult> prescreen = new HashMap<>();
@@ -423,6 +463,37 @@ public class VacancyDiscovery {
         return saved;
     }
 
+    /** Сколько страниц подряд без новых карточек останавливают листание по дате. Одна — мало: пачка
+     *  поднятых разом известных вакансий может занять целую страницу, а за ней идёт новое. */
+    static final int PAGES_WITHOUT_NEW_TO_STOP = 2;
+
+    private static final Pattern ORDER_BY_PARAM = Pattern.compile("[?&]order_by=([^&#]*)", Pattern.CASE_INSENSITIVE);
+
+    /** Ссылка с сортировкой по дате публикации, если своей сортировки в ней нет. */
+    static String freshFirst(String url) {
+        if (url == null || url.isBlank() || ORDER_BY_PARAM.matcher(url).find()) return url;
+        int hash = url.indexOf('#');
+        String base = hash < 0 ? url : url.substring(0, hash);
+        String fragment = hash < 0 ? "" : url.substring(hash);
+        return base + (base.contains("?") ? "&" : "?") + "order_by=publication_time" + fragment;
+    }
+
+    static boolean isByPublicationTime(String url) {
+        if (url == null) return false;
+        java.util.regex.Matcher m = ORDER_BY_PARAM.matcher(url);
+        return m.find() && "publication_time".equalsIgnoreCase(m.group(1));
+    }
+
+    /** Очередь на скрейп этого поиска; не удалось посчитать — 0, чтобы сбой подсчёта не останавливал сбор. */
+    private int awaitingScrape(SearchJob job) {
+        try {
+            return vacancyRepo.countAwaitingScrape(job.personName, job.searchName);
+        } catch (Exception e) {
+            log.warn("Очередь скрейпа ({} · {}) не посчитана: {} — листаем без предела", job.personName, job.searchName, e.getMessage());
+            return 0;
+        }
+    }
+
     /**
      * Прошлые решения этого поиска по названию+работодателю, принятые после последней правки
      * его настроек. Работодатели перевыкладывают одну и ту же вакансию под новыми hh_id
@@ -483,16 +554,17 @@ public class VacancyDiscovery {
 
     private List<ScraperClient.SearchHit> filterExcludedHits(List<ScraperClient.SearchHit> hits, List<String> excludeWords) {
         if (excludeWords == null || excludeWords.isEmpty()) return hits;
-        List<String> lower = excludeWords.stream().map(String::toLowerCase).toList();
+        // Целыми словами, как hh, а не подстрокой — см. ExcludeWords
+        List<Pattern> patterns = ExcludeWords.compile(excludeWords);
         List<ScraperClient.SearchHit> result = new ArrayList<>();
         for (ScraperClient.SearchHit h : hits) {
-            String title = h.title() != null ? h.title().toLowerCase() : "";
             // Some listings hide the excluded trade behind a generic title ("Менеджер /
             // Помощник руководителя") and only give it away in the employer name (e.g.
             // "Агентство Недвижимости ..." recruiting under a vague title) — title alone
             // missed those.
-            String employer = h.employerName() != null ? h.employerName().toLowerCase() : "";
-            if (lower.stream().noneMatch(w -> title.contains(w) || employer.contains(w))) result.add(h);
+            if (!ExcludeWords.matchesAny(h.title(), patterns) && !ExcludeWords.matchesAny(h.employerName(), patterns)) {
+                result.add(h);
+            }
         }
         return result;
     }
@@ -505,12 +577,12 @@ public class VacancyDiscovery {
      */
     private List<Vacancy> filterExcluded(List<Vacancy> vacancies, List<String> excludeWords) {
         if (excludeWords == null || excludeWords.isEmpty()) return vacancies;
-        List<String> lower = excludeWords.stream().map(String::toLowerCase).toList();
+        List<Pattern> patterns = ExcludeWords.compile(excludeWords);
         List<Vacancy> result = new ArrayList<>();
         for (Vacancy v : vacancies) {
-            String title = v.getTitle() != null ? v.getTitle().toLowerCase() : "";
-            String employer = v.employerOrCompany().toLowerCase();
-            if (lower.stream().noneMatch(w -> title.contains(w) || employer.contains(w))) result.add(v);
+            if (!ExcludeWords.matchesAny(v.getTitle(), patterns) && !ExcludeWords.matchesAny(v.employerOrCompany(), patterns)) {
+                result.add(v);
+            }
         }
         return result;
     }

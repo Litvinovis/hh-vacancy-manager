@@ -551,6 +551,7 @@ class VacancyDiscoveryTest {
     /** Отдаёт заранее заданные страницы по номеру вызова (0, 1, 2...) и считает обращения. */
     private static class FakeScraper extends ScraperClient {
         final List<SearchPageResult> pages;
+        final List<String> urls = new ArrayList<>();
         int calls = 0;
         FakeScraper(RuntimeConfig config, SearchPageResult... pages) {
             super(config, new com.hh.gui.client.ScraperMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
@@ -558,6 +559,7 @@ class VacancyDiscoveryTest {
         }
         @Override
         public SearchPageResult searchByUrl(String url, int pageNum) {
+            urls.add(url);
             SearchPageResult result = pages.get(calls);
             calls++;
             return result;
@@ -626,6 +628,89 @@ class VacancyDiscoveryTest {
         assertEquals(2, saved, "новые вакансии и до, и после полностью известной страницы должны сохраниться");
         assertEquals(List.of("101", "102"), repo.saved.stream().map(Vacancy::getHhId).toList());
         assertEquals(3, scraper.calls, "должны быть запрошены все 3 страницы, включая ту, что идёт после 100%-известной");
+    }
+
+    // ── свежие первыми: сортировка по дате, стоп по уже виденному и по очереди скрейпа (10.10.2026) ──
+
+    private static ScraperClient.SearchPageResult page(String... ids) {
+        return new ScraperClient.SearchPageResult(true, null,
+            java.util.Arrays.stream(ids).map(VacancyDiscoveryTest::hit).toList(), null);
+    }
+
+    @Test
+    void freshFirst_addsPublicationTimeOrder_onlyWhenTheUrlHasNoOrderOfItsOwn() {
+        assertEquals("https://hh.ru/search/vacancy?area=113&order_by=publication_time",
+            VacancyDiscovery.freshFirst("https://hh.ru/search/vacancy?area=113"));
+        assertEquals("https://hh.ru/search/vacancy?order_by=publication_time",
+            VacancyDiscovery.freshFirst("https://hh.ru/search/vacancy"));
+        assertEquals("https://hh.ru/search/vacancy?area=1&order_by=relevance",
+            VacancyDiscovery.freshFirst("https://hh.ru/search/vacancy?area=1&order_by=relevance"),
+            "своя сортировка в ссылке — решение владельца, её не трогаем");
+        assertTrue(VacancyDiscovery.isByPublicationTime("https://hh.ru/search/vacancy?order_by=publication_time&area=1"));
+        assertFalse(VacancyDiscovery.isByPublicationTime("https://hh.ru/search/vacancy?order_by=relevance"));
+    }
+
+    @Test
+    void fromUrl_byDate_stopsAfterTwoPagesWithNothingNew() {
+        RuntimeConfig config = new RuntimeConfig();
+        FakeScraper scraper = new FakeScraper(config,
+            page("401", "901"), page("902", "903"), page("904"), page("402"));
+        FakeRepo repo = new FakeRepo(Set.of("901", "902", "903", "904"));
+        VacancyDiscovery discovery = discovery().scraper(scraper).analyzer(new FakeAnalyzer(config)).repo(repo).build();
+
+        int saved = discovery.fromUrl(urlJob(), "https://hh.ru/search/vacancy?area=113", 10);
+
+        assertEquals(1, saved);
+        assertEquals(3, scraper.calls, "две страницы подряд без нового — дальше уже виденное, четвёртую не грузим");
+        assertTrue(scraper.urls.get(0).endsWith("&order_by=publication_time"), scraper.urls.get(0));
+    }
+
+    @Test
+    void fromUrl_explicitRelevanceOrder_walksEveryPage() {
+        RuntimeConfig config = new RuntimeConfig();
+        FakeScraper scraper = new FakeScraper(config, page("901"), page("902"), page("402"));
+        FakeRepo repo = new FakeRepo(Set.of("901", "902"));
+        VacancyDiscovery discovery = discovery().scraper(scraper).analyzer(new FakeAnalyzer(config)).repo(repo).build();
+
+        int saved = discovery.fromUrl(urlJob(), "https://hh.ru/search/vacancy?order_by=relevance", 3);
+
+        assertEquals(1, saved, "по релевантности за известными страницами бывает новое — стоп не действует");
+        assertEquals(3, scraper.calls);
+    }
+
+    @Test
+    void fromUrl_stopsOnceScrapeBacklogReachesTheCap() {
+        RuntimeConfig config = new RuntimeConfig();
+        FakeScraper scraper = new FakeScraper(config, page("501", "502"), page("503", "504"), page("505"));
+        FakeRepo repo = new FakeRepo(Set.of()) {
+            @Override
+            public int countAwaitingScrape(String person, String searchName) {
+                return saved.size();   // всё сохранённое прескрин пропустил — ждёт скрейпа
+            }
+        };
+        VacancyDiscovery discovery = discovery().scraper(scraper).analyzer(new FakeAnalyzer(config)).repo(repo).build();
+
+        int saved = discovery.fromUrl(urlJob(), "https://hh.ru/search/vacancy?area=113", 10, 3);
+
+        assertEquals(4, saved);
+        assertEquals(2, scraper.calls, "после второй страницы скрейпа ждут 4 при пределе 3 — третью не грузим");
+    }
+
+    @Test
+    void fromUrl_agencyEmployerIsNotAnExcludedAgent() {
+        // «агент» в стоп-словах отсекал кадровые и маркетинговые агентства — hh так не делает
+        RuntimeConfig config = new RuntimeConfig();
+        FakeScraper scraper = new FakeScraper(config, new ScraperClient.SearchPageResult(true, null, List.of(
+            new ScraperClient.SearchHit("601", "Помощник логиста", "Кадровое агентство HR-TARGET", null, null, null, "https://hh.ru/vacancy/601"),
+            new ScraperClient.SearchHit("602", "Агент по недвижимости", "ООО Дом", null, null, null, "https://hh.ru/vacancy/602")), null));
+        FakeRepo repo = new FakeRepo(Set.of());
+        VacancyDiscovery discovery = discovery().scraper(scraper).analyzer(new FakeAnalyzer(config)).repo(repo).build();
+        SearchJob job = urlJob();
+        job.excludeWords = List.of("агент", "колл");
+
+        discovery.fromUrl(job, "https://hh.ru/search/vacancy?area=113", 1);
+
+        assertEquals(List.of("601"), repo.saved.stream().map(Vacancy::getHhId).toList());
     }
 
     @Test

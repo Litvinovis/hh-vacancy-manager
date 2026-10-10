@@ -1401,7 +1401,7 @@ function searchCardHtml(s, opts) {
           <textarea class="provider-textarea cab-not-suitable">${listVal(s.notSuitable)}</textarea>
         </div>
         <div class="provider-field">
-          <label>Слова-исключения из названия</label>
+          <label title="«агент» отсечёт «агентов», но не «агентство»">Слова-исключения — целым словом, как в hh</label>
           <textarea class="provider-textarea cab-exclude">${listVal(s.excludeWords)}</textarea>
         </div>
         <div class="provider-field provider-field-full">
