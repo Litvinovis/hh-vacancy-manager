@@ -305,6 +305,41 @@ class VacancyRepositoryTest {
         assertEquals(1, counts.get("telegram"));
     }
 
+    @Test
+    void weekFacts_countsByCreatedAt_withRussianLabels() {
+        String now = java.time.Instant.now().toString();
+        weekRow("wf-1", "hh", "no", "Прескрининг: холодные звонки", null);
+        weekRow("wf-2", "hh", "no", "строгий скрипт", null);
+        weekRow("wf-3", "telegram", "fraud", "оплата обучения", null);
+        weekRow("wf-4", "hh", "yes", "ведение календаря", now);
+        long old = weekRow("wf-5", "hh", "yes", "старая", null);
+        // Месячной давности, но недавно тронутая актуализацией: в «за неделю» не попадает
+        jdbc.update("UPDATE vacancies SET created_at=?, updated_at=? WHERE id=?",
+            java.time.Instant.now().minus(java.time.Duration.ofDays(20)).toString(), now, old);
+        jdbc.update("UPDATE vacancies SET vk_status='sent', vk_published_at=? WHERE hh_id='wf-4'", now);
+
+        var facts = vacancyRepo.weekFacts(java.time.Instant.now().minus(java.time.Duration.ofDays(7)).toString());
+
+        assertEquals(4, facts.get("собрано вакансий"));
+        assertEquals(1, facts.get("из них из Telegram-каналов"));
+        assertEquals(1, facts.get("отсеяно по краткой карточке, до чтения описания"));
+        assertEquals(1, facts.get("отклонено после чтения полного описания"));
+        assertEquals(1, facts.get("отмечено как обман"));
+        assertEquals(1, facts.get("одобрено"));
+        assertEquals(1, facts.get("опубликовано в Telegram-канале"));
+        assertEquals(1, facts.get("опубликовано ВКонтакте (постами и в подборках)"));
+        assertTrue(facts.keySet().stream().noneMatch(k -> k.matches("[a-z_]+")), "ни одного ключа воронки вроде published: " + facts.keySet());
+    }
+
+    private long weekRow(String hhId, String source, String verdict, String reason, String channelPublishedAt) {
+        Vacancy v = createTestVacancy(hhId, "Тест", "new");
+        v.setSource(source);
+        Vacancy saved = vacancyRepo.save(v);
+        jdbc.update("UPDATE vacancies SET ai_verdict=?, ai_reason=?, channel_published_at=? WHERE id=?",
+            verdict, reason, channelPublishedAt, saved.getId());
+        return saved.getId();
+    }
+
     // ── findNotifiedByEmployer / findWithUnresolvedEmployer: cross-search dedup ──
 
     /** Two EDITORIAL searches that both publish to the same Telegram channel, exactly

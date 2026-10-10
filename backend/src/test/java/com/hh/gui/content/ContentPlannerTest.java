@@ -60,7 +60,8 @@ class ContentPlannerTest {
     @Test
     void recentlyUsedTopics_areSkipped() {
         FakeArticles repo = new FakeArticles();
-        repo.usedRecently.addAll(List.of("fraud_signs", "top_professions_week", "salary_snapshot", "week_digest", "rejected_reasons"));
+        repo.usedRecently.addAll(List.of("fraud_signs", "top_professions_week", "salary_snapshot", "week_digest", "rejected_reasons",
+            "how_we_select"));
         new ContentPlanner(repo, config(2, 0, "TUE,THU"), at("2026-09-21T08:00:00")).planCurrentWeek();
 
         List<String> keys = repo.saved.stream().map(VkArticle::getTopicKey).toList();

@@ -1305,15 +1305,39 @@ public class VacancyRepository {
         return out;
     }
 
-    /** Сколько вердиктов каждого вида получено после даты. */
-    public Map<String, Integer> verdictCountsSince(String sinceIso) {
+    /**
+     * Неделя в цифрах для статей сообщества (ArticleGenerator): сколько собрано с даты и что с этим
+     * стало. Считается по created_at: updated_at сдвигают актуализация и переоценка, и в «за неделю»
+     * попадали вакансии месячной давности. Подписи по-русски, потому что модель переносит в текст
+     * то, что видит, — английский ключ воронки дошёл до поста ВК как «Оpublished — 1566» (01.10.2026).
+     */
+    public Map<String, Integer> weekFacts(String sinceIso) {
+        Map<String, Object> row = jdbc.queryForMap(
+            "SELECT COUNT(*) AS collected, " +
+            "SUM(CASE WHEN source = 'telegram' THEN 1 ELSE 0 END) AS from_tg, " +
+            "SUM(CASE WHEN ai_verdict = 'no' AND COALESCE(ai_reason, '') LIKE 'Прескрининг%' THEN 1 ELSE 0 END) AS prescreen_no, " +
+            "SUM(CASE WHEN ai_verdict = 'no' AND COALESCE(ai_reason, '') NOT LIKE 'Прескрининг%' THEN 1 ELSE 0 END) AS ai_no, " +
+            "SUM(CASE WHEN ai_verdict = 'fraud' THEN 1 ELSE 0 END) AS fraud, " +
+            "SUM(CASE WHEN ai_verdict = 'yes' THEN 1 ELSE 0 END) AS approved " +
+            "FROM vacancies WHERE created_at >= ?", sinceIso);
+        Integer telegram = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM vacancies WHERE channel_published_at >= ?", Integer.class, sinceIso);
+        Integer vk = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM vacancies WHERE vk_status = 'sent' AND vk_published_at >= ?", Integer.class, sinceIso);
         Map<String, Integer> out = new LinkedHashMap<>();
-        for (Map<String, Object> row : jdbc.queryForList(
-                "SELECT ai_verdict, COUNT(*) AS cnt FROM vacancies WHERE updated_at >= ? AND ai_verdict IN ('yes','no','fraud') " +
-                "GROUP BY ai_verdict", sinceIso)) {
-            out.put(String.valueOf(row.get("ai_verdict")), ((Number) row.get("cnt")).intValue());
-        }
+        out.put("собрано вакансий", intOf(row.get("collected")));
+        out.put("из них из Telegram-каналов", intOf(row.get("from_tg")));
+        out.put("отсеяно по краткой карточке, до чтения описания", intOf(row.get("prescreen_no")));
+        out.put("отклонено после чтения полного описания", intOf(row.get("ai_no")));
+        out.put("отмечено как обман", intOf(row.get("fraud")));
+        out.put("одобрено", intOf(row.get("approved")));
+        out.put("опубликовано в Telegram-канале", telegram == null ? 0 : telegram);
+        out.put("опубликовано ВКонтакте (постами и в подборках)", vk == null ? 0 : vk);
         return out;
+    }
+
+    private static int intOf(Object value) {
+        return value instanceof Number n ? n.intValue() : 0;
     }
 
     // ── очередь VK ─────────────────────────────────────────────────────────────
