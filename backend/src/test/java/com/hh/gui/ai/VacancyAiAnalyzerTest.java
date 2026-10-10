@@ -834,6 +834,78 @@ class VacancyAiAnalyzerTest {
             "reason одобренной вакансии уходит в пост как «Что делать» — это должна быть суть работы, а не оценка объявления");
     }
 
+    // ── формат работы из полного описания (10.10.2026) ──
+
+    @Test
+    void workFormatHints_onSiteLineAtTheEnd_reachesThePromptBeyondTheExcerpt() {
+        // Живой случай (id 5893): обязанности на 2 тыс. символов, а «Работа в шоу-руме» — в самом
+        // конце «Условий»; модель видела 600 символов обязанностей и одобрила как удалённую.
+        Vacancy v = hhVacancy("5893");
+        v.setDescription("Обязанности:\n" + "• работа с документами и почтой;\n".repeat(40)
+            + "Условия:\nГрафик работы: 5/2;\nРабота в шоу-руме . (м. Автозаводская)\nДружный коллектив");
+        String prompt = analyzer.buildPrompt(List.of(v), editorialJob());
+        assertTrue(prompt.contains("Формат работы: Работа в шоу-руме . (м. Автозаводская)"), prompt);
+        assertTrue(prompt.contains("это не удалёнка"), "модели сказано, как читать эту строку");
+    }
+
+    @Test
+    void workFormatHints_nothingAboutPlace_noLineAndNoRule() {
+        String prompt = analyzer.buildPrompt(List.of(hhVacancy("1")), editorialJob());
+        assertFalse(prompt.contains("Формат работы"), "нет строк о месте работы — нет и правила, токены не тратим");
+    }
+
+    @Test
+    void workFormatHints_skipsWhatTheExcerptAlreadyShows_andPrefersTheEnd() {
+        String description = "Организовывать работу офиса и закупки\nДокументы\nУсловия:\nВозможна работа удалённо или в офисе на Тверской";
+        assertEquals("Возможна работа удалённо или в офисе на Тверской",
+            VacancyAiAnalyzer.workFormatHints(description, "Организовывать работу офиса и закупки Документы"));
+    }
+
+    @Test
+    void workFormatHints_metroOnlyWithCapitalStation() {
+        assertEquals("Офис у м. Чкаловская", VacancyAiAnalyzer.workFormatHints("Офис у м. Чкаловская", ""));
+        assertEquals("", VacancyAiAnalyzer.workFormatHints("Рулон 5 м. в длину и 2 м. в ширину", ""));
+        assertEquals("", VacancyAiAnalyzer.workFormatHints("Уверенно владеете офисными программами", ""),
+            "«офисные программы» — навык, а не место работы");
+    }
+
+    @Test
+    void workFormatHints_longLine_cutAroundTheMatch() {
+        String line = "Мы большая компания с историей в двадцать лет, ".repeat(5) + "работа в офисе в центре города, "
+            + "дружный коллектив и много чего ещё, о чём можно рассказывать очень долго";
+        String hint = VacancyAiAnalyzer.workFormatHints(line, "");
+        assertTrue(hint.contains("работа в офисе"), hint);
+        assertTrue(hint.length() <= 142, "строка обрезана вокруг совпадения: " + hint.length());
+    }
+
+    // ── ответ модели: только вакансии пакета ──
+
+    @Test
+    void onlyBatchIds_dropsForeignAndRepeatedIds() {
+        Vacancy one = hhVacancy("tg_freelancce_16171");
+        Vacancy two = hhVacancy("2");
+        var results = analyzer.onlyBatchIds(List.of(
+            new VacancyAiAnalyzer.AiResult("tg_freelancce_1617", 90, "yes", "искажённый id", "", ""),
+            new VacancyAiAnalyzer.AiResult("2", 80, "yes", "первая оценка", "", ""),
+            new VacancyAiAnalyzer.AiResult("2", 10, "no", "повтор", "", ""),
+            new VacancyAiAnalyzer.AiResult("tg_freelancce_16171", 70, "yes", "ок", "", "")), List.of(one, two));
+        assertEquals(List.of("2", "tg_freelancce_16171"), results.stream().map(VacancyAiAnalyzer.AiResult::hhId).toList());
+        assertEquals("первая оценка", results.get(0).reason());
+    }
+
+    @Test
+    void buildPrompt_companyRuleShowsTitleExample() {
+        Vacancy v = new Vacancy();
+        v.setHhId("tg_chan_2");
+        v.setSource("telegram");
+        v.setTitle("Директолог в Jungle marketing");
+        v.setCompany("@chan");
+        v.setDescription("Задачи: аудиты, стратегии");
+        String prompt = analyzer.buildPrompt(List.of(v), editorialJob());
+        assertTrue(prompt.contains("в названии или описании"), "работодатель часто только в заголовке поста");
+        assertTrue(prompt.contains("\"Jungle marketing\""));
+    }
+
     // ── прескрин: в ответе только отсеянные ──
 
     private static String completion(String content) throws Exception {
