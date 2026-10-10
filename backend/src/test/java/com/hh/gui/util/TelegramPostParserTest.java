@@ -282,6 +282,61 @@ class TelegramPostParserTest {
         assertNull(TelegramPostParser.contact("Репост из @somechannel, вакансия интересная."));
     }
 
+    // ── подвал с просмотрами (Telegram Web) ──
+
+    @Test
+    void stripViewBadges_thousandsAndEditedForms_removed() {
+        // Живые формы 10.10.2026: «1.1K», «105.8K», «1K» и «edited811» перед значком-глазом.
+        assertEquals("Контакт:\n @nadufkapolik\n\nhttps://hooks.pro/x.jpg", TelegramPostParser.stripViewBadges(
+            "Контакт:\n @nadufkapolik1.1K\uEB1F17:001.1K\uEB1F17:00\n\nhttps://hooks.pro/x.jpg"));
+        assertEquals("Подробнее у бота", TelegramPostParser.stripViewBadges(
+            "Подробнее у бота105.8K\uEB1F15:00105.8K\uEB1F15:00"));
+        assertEquals("Пишите @hr_anna", TelegramPostParser.stripViewBadges(
+            "Пишите @hr_annaedited811\uEB1F18:07edited811\uEB1F18:07"));
+    }
+
+    @Test
+    void stripViewBadges_digitsRightBeforeBadge_keptWithContent() {
+        // Повтор фрагмента — единственное, что отделяет просмотры от цифр текста: у «@adddic_99»
+        // при подвале «1K» нельзя съесть «99».
+        assertEquals("Отклик: @adddic_99", TelegramPostParser.stripViewBadges(
+            "Отклик: @adddic_991K\uEB1F13:001K\uEB1F13:00"));
+    }
+
+    @Test
+    void stripViewBadges_withoutIconGlyph_textUntouched() {
+        String text = "График 5/2, с 10:00 до 19:00, 1.5K подписчиков 10:00";
+        assertEquals(text, TelegramPostParser.stripViewBadges(text));
+    }
+
+    @Test
+    void contact_usernameFollowedByViewBadge_notGluedToCounter() {
+        // Живой случай: «@senkinaa1K…» уводил читателя на чужой аккаунт t.me/senkinaa1K.
+        assertEquals("https://t.me/senkinaa",
+            TelegramPostParser.contact("Контакт:\n @senkinaa1K\uEB1F17:001K\uEB1F17:00\n\nhttps://hooks.pro/m.jpg").display());
+    }
+
+    // ── работодатель в кавычках в заголовке ──
+
+    @Test
+    void employer_quotedNameAtTitleEnd_extracted() {
+        assertEquals("Мамина опора",
+            TelegramPostParser.employer("Описание", "Копирайтер в онлайн-школу «Мамина опора»", "freelancce"));
+        assertEquals("Кинокадр",
+            TelegramPostParser.employer("Описание", "Middle UI/UX Designer в «Кинокадр»", "frilanser_vacansii"));
+        assertEquals("Спорт-Экспресс",
+            TelegramPostParser.employer("Описание", "Редактор ленты новостей в \"Спорт-Экспресс\"", "udafrii"));
+        assertEquals("КОГИТО",
+            TelegramPostParser.employer("Описание", "Маркетолог в образовательный проект «КОГИТО»", "freelancce"));
+    }
+
+    @Test
+    void employer_quotesInsideTitleNotAtEnd_notTakenAsEmployer() {
+        // Кавычки посреди заголовка — это не «кто нанимает»: «рилсы «под ключ» для экспертов».
+        assertEquals("@somechan",
+            TelegramPostParser.employer("Описание", "Монтажёр рилсов «под ключ» для экспертов", "somechan"));
+    }
+
     @Test
     void externalUrl_prefersNonTelegramLink() {
         assertEquals("https://kadrout.ru/vacancies/42",
