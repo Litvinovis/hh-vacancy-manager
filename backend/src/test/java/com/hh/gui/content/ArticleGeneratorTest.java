@@ -24,6 +24,14 @@ class ArticleGeneratorTest {
         FakeVacancies() { super(null); }
         @Override public List<String> recentFraudReasons(int limit) { return List.of("оплата обучения перед стартом", "работа под чужими аккаунтами"); }
         @Override public Map<String, Integer> topTitlesSince(String s, int l) { return Map.of("Ассистент", 12); }
+        @Override public Map<String, Integer> weekFacts(String s) {
+            Map<String, Integer> m = new java.util.LinkedHashMap<>();
+            m.put("собрано вакансий", 1938); m.put("одобрено", 279); m.put("опубликовано в Telegram-канале", 412);
+            return m;
+        }
+        @Override public List<String> recentRejectReasons(int limit) {
+            return List.of("Прескрининг: холодные звонки", "строгий скрипт", "Прескрининг: холодные звонки");
+        }
         List<com.hh.gui.model.Vacancy> approved = new ArrayList<>();
         @Override public List<com.hh.gui.model.Vacancy> approvedSince(String s, int l) { return approved; }
     }
@@ -77,7 +85,54 @@ class ArticleGeneratorTest {
         arts.toGenerate.add(planned("resume_remote", "article"));
         new ArticleGenerator(arts, new FakeVacancies(), ai).generateDue("2026-09-22");
         assertTrue(!ai.lastPrompt.contains("ФАКТЫ ИЗ НАШЕЙ БАЗЫ"));
-        assertTrue(ai.lastPrompt.contains("ровно два хэштега"));
+        assertTrue(ai.lastPrompt.contains("Без хэштегов"));
+        assertTrue(ai.lastPrompt.contains(ArticleGenerator.ABOUT_US), "что мы делаем на самом деле — в каждой статье");
+    }
+
+    @Test
+    void article_modelHashtagsReplacedWithOurs_evenWhenGluedToLastSentence() {
+        FakeAnalyzer ai = new FakeAnalyzer();
+        ai.reply = "Первая строка-хук.\n\n" + "х".repeat(400) + "\n\nЧто для вас важнее? #удалённаяработа #удалёнкаНеделя";
+        FakeArticles arts = new FakeArticles(); arts.toGenerate.add(planned("resume_remote", "article"));
+        new ArticleGenerator(arts, new FakeVacancies(), ai).generateDue("2026-09-22");
+
+        String body = arts.updated.get(0).getBody();
+        assertTrue(body.endsWith("Что для вас важнее?\n\n" + ArticleGenerator.ARTICLE_HASHTAGS), body);
+        assertTrue(!body.contains("удалёнкаНеделя"), body);
+    }
+
+    @Test
+    void article_garbledModelText_notSaved_retriedLater() {
+        // Живой случай 08.10.2026: «полусRemote», «с periodic выездом» ушли в пост ВК.
+        FakeAnalyzer ai = new FakeAnalyzer();
+        ai.reply = "Бывает, что «удалёнка» оказывается полусRemote. " + "х".repeat(400);
+        FakeArticles arts = new FakeArticles(); arts.toGenerate.add(planned("resume_remote", "article"));
+
+        assertEquals(0, new ArticleGenerator(arts, new FakeVacancies(), ai).generateDue("2026-09-22"));
+        assertTrue(arts.updated.isEmpty(), "испорченный текст не сохраняем — следующий тик попросит заново");
+    }
+
+    @Test
+    void weekDigest_factsAreRussianLabeledWeekNumbers_withoutPrescreenMarker() {
+        FakeAnalyzer ai = new FakeAnalyzer(); FakeArticles arts = new FakeArticles();
+        arts.toGenerate.add(planned("week_digest", "article"));
+        new ArticleGenerator(arts, new FakeVacancies(), ai).generateDue("2026-09-22");
+
+        assertTrue(ai.lastPrompt.contains("- собрано вакансий: 1938"), ai.lastPrompt);
+        assertTrue(ai.lastPrompt.contains("- опубликовано в Telegram-канале: 412"), ai.lastPrompt);
+        assertTrue(!ai.lastPrompt.contains("published"), "английский ключ воронки дошёл до поста как «Оpublished»");
+        assertTrue(!ai.lastPrompt.contains("Прескрининг:"), ai.lastPrompt);
+        assertEquals(1, ai.lastPrompt.split("холодные звонки", -1).length - 1, "причины без повторов");
+    }
+
+    @Test
+    void howWeSelect_isDataBacked_andDoesNotPromiseManualReview() {
+        FakeAnalyzer ai = new FakeAnalyzer(); FakeArticles arts = new FakeArticles();
+        arts.toGenerate.add(planned("how_we_select", "article"));
+        new ArticleGenerator(arts, new FakeVacancies(), ai).generateDue("2026-09-22");
+
+        assertTrue(ai.lastPrompt.contains("ФАКТЫ ИЗ НАШЕЙ БАЗЫ"), ai.lastPrompt);
+        assertTrue(!ContentTopics.byKey("how_we_select").brief().contains("ручн"), "ручной проверки нет — бриф её не обещает");
     }
 
     // ── обзоры по профессиям ──

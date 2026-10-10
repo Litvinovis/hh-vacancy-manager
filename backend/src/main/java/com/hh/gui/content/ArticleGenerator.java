@@ -26,6 +26,8 @@ public class ArticleGenerator {
 
     private static final Logger log = LoggerFactory.getLogger(ArticleGenerator.class);
     private static final int MAX_TOKENS = 1800;
+    /** Так помечены отказы прескрина (VacancyDiscovery); в статье пометка ни к чему. */
+    private static final String PRESCREEN_PREFIX = "Прескрининг: ";
 
     private final VkArticleRepository articles;
     private final VacancyRepository vacancies;
@@ -67,7 +69,14 @@ public class ArticleGenerator {
                 log.warn("Статья id={} «{}»: модель не вернула текст, попробуем позже", a.getId(), topic.title());
                 continue;
             }
-            a.setBody(text);
+            // Та же проверка, что у обзоров: статьи шли в ВК как есть, и «полусRemote», «с periodic
+            // выездом» вышли в посте 08.10.2026
+            text = com.hh.gui.util.AiText.clean(text);
+            if (text == null) {
+                log.warn("Статья id={} «{}»: модель вернула испорченный текст, попробуем позже", a.getId(), topic.title());
+                continue;
+            }
+            a.setBody(articlePost(text));
             a.setStatus("generated");
             a.setGeneratedAt(Instant.now().toString());
             articles.update(a);
@@ -83,6 +92,7 @@ public class ArticleGenerator {
           .append("технических требований (ассистенты, поддержка, контент, координация). Напиши пост для сообщества.\n\n");
         sb.append("ТЕМА: ").append(topic.title()).append("\n");
         sb.append("О ЧЁМ: ").append(topic.brief()).append("\n\n");
+        sb.append(ABOUT_US).append("\n");
         if (topic.dataBacked()) {
             sb.append("ФАКТЫ ИЗ НАШЕЙ БАЗЫ (используй только их, ничего не выдумывай, цифры не округляй в большую сторону):\n")
               .append(facts(topic.key())).append("\n\n");
@@ -94,9 +104,43 @@ public class ArticleGenerator {
           .append("- Никаких списков из эмодзи, максимум один эмодзи на весь текст или ни одного.\n")
           .append("- Без внешних ссылок и без упоминания других площадок.\n")
           .append("- В конце — один вопрос читателю, на который хочется ответить в комментариях.\n")
-          .append("- Последней строкой ровно два хэштега: #удалённаяработа и один по теме.\n")
+          .append("- Без хэштегов — их добавим сами.\n")
           .append("- Только текст поста, без заголовка «Тема:», без пояснений от себя.\n");
         return sb.toString();
+    }
+
+    /**
+     * Что мы на самом деле делаем — в промпт каждой статьи. Без этого модель додумывала процесс:
+     * «я и мои коллеги читаем каждое оставшееся объявление», «мониторим биржи, чаты, рекомендации
+     * подписчиков» (статья «Как мы отбираем вакансии», ВК, 08.10.2026). Ни ручной проверки, ни
+     * рекомендаций у нас нет, а пост с выдуманным процессом читатель вправе считать враньём.
+     */
+    static final String ABOUT_US = "О НАС (это правда; другого о себе не придумывай — ни людей, которые вручную читают "
+        + "объявления, ни других источников, ни партнёров):\n"
+        + "- вакансии собираются автоматически: поиск hh.ru по удалённой работе и несколько открытых Telegram-каналов с вакансиями;\n"
+        + "- сначала отсев по краткой карточке, потом языковая модель читает полное описание и решает по нашим правилам: "
+        + "понятные задачи, живая работа, есть куда откликнуться;\n"
+        + "- обман не публикуем: оплата обучения или доступа, MLM, завышенная зарплата для простой работы;\n"
+        + "- повторы одной вакансии склеиваем, закрытые на hh в публикацию не идут;\n"
+        + "- публикуем здесь, ВКонтакте, и в нашем Telegram-канале.\n";
+
+    /** Общие хэштеги статьи. Без «ё»: в поиске ВК пишут «удаленная», а не «удалённая». */
+    static final String ARTICLE_HASHTAGS = "#удаленнаяработа #работанадому";
+
+    /**
+     * Текст модели + наши хэштеги. Свои она придумывала сама и не те, что ищут: «#удалёнкаНеделя»,
+     * «#удалёнкаБезОпыта», с «ё» — и дописывала их и отдельной строкой, и в хвост последней фразы.
+     */
+    static String articlePost(String modelText) {
+        return withoutHashtags(modelText) + "\n\n" + ARTICLE_HASHTAGS;
+    }
+
+    /** Без строк из одних хэштегов и без хэштегов в хвосте текста. */
+    static String withoutHashtags(String text) {
+        return text.strip()
+            .replaceAll("(?m)^\\s*(#\\S+\\s*)+$", "")
+            .replaceAll("(?U)(\\s*#\\w+)+\\s*$", "")
+            .strip();
     }
 
     /** Материал из базы для тем на данных. Формат — строки «факт: значение», модели так проще. */
@@ -120,14 +164,17 @@ public class ArticleGenerator {
                     med.forEach((k, v) -> sb.append("- ").append(k).append(": ").append(v).append("\n"));
                     return sb.toString();
                 }
-                case "week_digest", "rejected_reasons" -> {
-                    // Для статьи планка канала не важна: «одобрено» — это всё одобренное.
-                    Map<String, Integer> f = vacancies.funnelSnapshot(0);
-                    Map<String, Integer> verdicts = vacancies.verdictCountsSince(daysAgo(7));
-                    List<String> reasons = vacancies.recentRejectReasons(10);
-                    return "воронка сейчас (этап: количество): " + f + "\n"
-                        + "вердикты за 7 дней (вердикт: количество): " + verdicts + "\n"
-                        + "типичные причины отказа:\n- " + String.join("\n- ", reasons);
+                case "week_digest", "rejected_reasons", "how_we_select" -> {
+                    StringBuilder sb = new StringBuilder("за последние 7 дней (что: сколько):\n");
+                    vacancies.weekFacts(daysAgo(7)).forEach((k, v) -> sb.append("- ").append(k).append(": ").append(v).append("\n"));
+                    sb.append("опубликовано меньше, чем одобрено: в канал идут лучшие по оценке и только с контактом для отклика\n");
+                    List<String> reasons = vacancies.recentRejectReasons(15).stream()
+                        .map(r -> r.startsWith(PRESCREEN_PREFIX) ? r.substring(PRESCREEN_PREFIX.length()) : r)
+                        .filter(r -> !r.isBlank()).distinct().limit(10).toList();
+                    if (!reasons.isEmpty()) {
+                        sb.append("типичные причины отказа:\n- ").append(String.join("\n- ", reasons));
+                    }
+                    return sb.toString();
                 }
                 default -> { return "данных нет"; }
             }
@@ -240,7 +287,7 @@ public class ArticleGenerator {
 
     /** Текст модели + призыв вступить + хэштеги; хэштеги модели срезаются, чтобы не было дублей. */
     static String seoPost(String modelText, SeoTopics.Topic topic) {
-        String body = modelText.strip().replaceAll("(?m)^\\s*(#\\S+\\s*)+$", "").strip();
+        String body = withoutHashtags(modelText);
         return body + "\n\n" + SEO_CALL_TO_ACTION + "\n\n"
             + "#удаленнаяработа #работанадому " + topic.hashtag();
     }
