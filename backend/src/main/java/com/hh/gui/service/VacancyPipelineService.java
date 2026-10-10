@@ -206,7 +206,7 @@ public class VacancyPipelineService {
         boolean urlOnly = (job.queries == null || job.queries.isEmpty())
             && job.sourceUrl != null && !job.sourceUrl.isBlank();
         if (urlOnly) {
-            discovered = timed("url", "discover", () -> discovery.fromUrl(job, job.sourceUrl, VacancyDiscovery.MAX_URL_SEARCH_PAGES));
+            discovered = timed("url", "discover", () -> discovery.fromUrl(job, job.sourceUrl, VacancyDiscovery.MAX_URL_SEARCH_PAGES, urlScrapeBacklogCap()));
             log.info("Шаг 1 по ссылке ({} · {}): {} новых вакансий", job.personName, job.searchName, discovered);
         } else if (runtimeConfig.isRssEnabled()) {
             discovered = timed("rss", "discover", () -> discovery.fromRss(job));
@@ -296,7 +296,7 @@ public class VacancyPipelineService {
     private PipelineResult runFullPipelineFromUrlLocked(SearchJob job, String url, int maxPages) {
         log.info("=== Пайплайн по ссылке: {} · {} ({}) ===", job.personName, job.searchName, url);
 
-        int discovered = timed("url", "discover", () -> discovery.fromUrl(job, url, maxPages));
+        int discovered = timed("url", "discover", () -> discovery.fromUrl(job, url, maxPages, urlScrapeBacklogCap()));
         log.info("Шаг 1 по ссылке ({} · {}): {} новых вакансий", job.personName, job.searchName, discovered);
 
         int scraped = timed("url", "scrape", () -> scrapePending(job));
@@ -807,6 +807,18 @@ public class VacancyPipelineService {
         log.info("Режим догона: необработанных {}, лимит скрейпа поднят {} → {}", waiting, configured, boosted);
         return boosted;
     }
+
+    /**
+     * Сколько вакансий может ждать скрейпа, прежде чем поиск по ссылке перестанет листать (см.
+     * VacancyDiscovery.fromUrl): два запуска скрейпа — этого и Telegram-поиска, который идёт
+     * следом со своим шагом скрейпа. Так к следующему поиску по ссылке очередь успевает уйти, и
+     * объём сбора растёт вместе с scrapeMaxPerRun без отдельной настройки.
+     */
+    int urlScrapeBacklogCap() {
+        return Math.max(1, runtimeConfig.getScrapeMaxPerRun()) * URL_SCRAPE_BACKLOG_RUNS;
+    }
+
+    private static final int URL_SCRAPE_BACKLOG_RUNS = 2;
 
     /** Во сколько раз хвост должен превышать лимит, чтобы включить догон. */
     private static final int CATCHUP_BACKLOG_FACTOR = 5;
