@@ -603,6 +603,9 @@ public class VacancyPipelineService {
     // goes through the sidecar's human-paced queue. No bursts an anti-bot could latch onto.
     static final int FRESHNESS_RECHECK_DAYS = 7;
     public static final int FRESHNESS_BATCH_PER_TICK = 5;
+    // Минимальный разрыв между двумя 403, после которого вакансия считается закрытой:
+    // повтор в пределах суток мог бы поймать тот же кратковременный сбой hh.ru.
+    static final java.time.Duration FRESHNESS_403_CONFIRM_GAP = java.time.Duration.ofDays(1);
 
     /**
      * Re-verifies that approved ('yes') postings are still live on hh.ru — they get
@@ -636,8 +639,24 @@ public class VacancyPipelineService {
                 v.setScrapeStatus("ok");
                 vacancyRepo.updateScraped(v);
                 vacancyRepo.markFreshnessChecked(v.getId());
+                vacancyRepo.clearFreshness403(v.getId());
                 result.alive++;
                 scrapeCooldown.onSuccess();
+            } else if ("http_403".equals(r.reason())) {
+                // Закрытую вакансию hh.ru отдаёт как 403, а не 404/архив: за всё время
+                // актуализация закрыла 3 вакансии из ~2700, а 403 каждую неделю получали
+                // десятки (замер 03–10.10.2026), и все они так и висели живыми. Один 403 —
+                // ещё не доказательство, а второй подряд через сутки и больше — уже да.
+                if (vacancyRepo.hadFreshness403Before(v.getId(),
+                        java.time.Instant.now().minus(FRESHNESS_403_CONFIRM_GAP))) {
+                    vacancyRepo.markClosed(v.getId());
+                    result.closed++;
+                    log.info("Актуализация: вакансия {} ({} · {}) недоступна на hh.ru (403 повторно) — скрыта",
+                        v.getHhId(), v.getPerson(), v.getSearchName());
+                } else {
+                    vacancyRepo.recordFreshness403(v.getId());
+                    result.inconclusive++;
+                }
             } else if ("archived".equals(r.reason()) || "not_found".equals(r.reason())) {
                 vacancyRepo.markClosed(v.getId());
                 result.closed++;
@@ -649,7 +668,7 @@ public class VacancyPipelineService {
                 log.warn("Актуализация остановлена: {} — оставшиеся проверки подождут", r.reason());
                 break;
             } else {
-                // Per-vacancy hiccup (403/render glitch) — inconclusive, not proof of
+                // Per-vacancy hiccup (render glitch) — inconclusive, not proof of
                 // death: stamp the check so this row waits its full interval again
                 // instead of being retried every tick.
                 vacancyRepo.markFreshnessChecked(v.getId());

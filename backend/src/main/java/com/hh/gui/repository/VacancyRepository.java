@@ -894,6 +894,33 @@ public class VacancyRepository {
         jdbc.update("UPDATE vacancies SET last_checked_at=? WHERE id=?", Instant.now().toString(), id);
     }
 
+    static final String FRESHNESS_403_ACTION = "freshness_403";
+
+    /**
+     * Актуализация получила 403: отмечаем проверку и запоминаем исход в истории вакансии —
+     * по нему следующая проверка отличит закрытую вакансию от разового сбоя (см.
+     * VacancyPipelineService.checkVacancyFreshness). История, а не новая колонка: метка
+     * заодно объясняет в карточке вакансии, почему её скрыли.
+     */
+    public void recordFreshness403(Long id) {
+        jdbc.update("INSERT INTO history (vacancy_id, action, details, created_at) VALUES (?, ?, ?, ?)",
+            id, FRESHNESS_403_ACTION, "Актуализация: hh.ru закрыл доступ к вакансии (403)", Instant.now().toString());
+        markFreshnessChecked(id);
+    }
+
+    /** Был ли 403 при актуализации раньше {@code before} — без успешной проверки после него. */
+    public boolean hadFreshness403Before(Long id, Instant before) {
+        Integer n = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM history WHERE vacancy_id=? AND action=? AND created_at<?",
+            Integer.class, id, FRESHNESS_403_ACTION, before.toString());
+        return n != null && n > 0;
+    }
+
+    /** Вакансия открылась — прежние 403 были сбоем, серия начинается заново. */
+    public void clearFreshness403(Long id) {
+        jdbc.update("DELETE FROM history WHERE vacancy_id=? AND action=?", id, FRESHNESS_403_ACTION);
+    }
+
     /** The posting is gone from hh.ru (archived/deleted) — hide it from lists and reports, keep for dedup history. */
     public void markClosed(Long id) {
         String now = Instant.now().toString();
