@@ -340,6 +340,34 @@ class VacancyRepositoryTest {
         return saved.getId();
     }
 
+    @Test
+    void resolvePublishedDuplicates_closesOnlyApprovedCopiesOfAPublishedVacancy() {
+        long published = dupRow("dup-1", "k1", "yes", 1, null);
+        long stuck = dupRow("dup-2", "k1", "yes", 0, null);          // копия уже вышла — не выйдет никогда
+        long queued = dupRow("dup-3", "k1", "yes", 0, "2026-10-12T05:00:00Z"); // уже в очереди — не трогаем
+        long fresh = dupRow("dup-4", "k2", "yes", 0, null);          // своей копии в канале нет
+        long noKey = dupRow("dup-5", "", "yes", 0, null);            // без ключа не склеиваем
+
+        assertEquals(1, vacancyRepo.resolvePublishedDuplicates("test-person", "test-search"));
+
+        assertEquals(1, notified(stuck));
+        assertEquals(0, notified(queued));
+        assertEquals(0, notified(fresh));
+        assertEquals(0, notified(noKey));
+        assertEquals(1, notified(published));
+    }
+
+    private long dupRow(String hhId, String dedupKey, String verdict, int notified, String queuedAt) {
+        Vacancy saved = vacancyRepo.save(createTestVacancy(hhId, "Ассистент", "new"));
+        jdbc.update("UPDATE vacancies SET dedup_key=?, ai_verdict=?, ai_score=80, notified=?, queued_publish_at=? WHERE id=?",
+            dedupKey, verdict, notified, queuedAt, saved.getId());
+        return saved.getId();
+    }
+
+    private int notified(long id) {
+        return jdbc.queryForObject("SELECT notified FROM vacancies WHERE id=?", Integer.class, id);
+    }
+
     // ── findNotifiedByEmployer / findWithUnresolvedEmployer: cross-search dedup ──
 
     /** Two EDITORIAL searches that both publish to the same Telegram channel, exactly

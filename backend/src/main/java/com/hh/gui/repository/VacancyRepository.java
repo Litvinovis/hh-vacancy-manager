@@ -574,6 +574,22 @@ public class VacancyRepository {
     }
 
     /**
+     * Закрывает одобренные дубли, которые уже не выйдут никогда: копия той же вакансии (тот же
+     * dedup_key в этом поиске) опубликована, и findUnnotifiedApproved их больше не предлагает. Без
+     * этого они висели неотправленными неделями — 43 строки с 18.09 по 10.10.2026 — и завышали хвост
+     * для подпитки очереди канала и этап воронки «ждут публикации». Закрываются так же, как другие
+     * отсеянные дубли (notified=1). Возвращает число закрытых.
+     */
+    public int resolvePublishedDuplicates(String person, String searchName) {
+        return jdbc.update(
+            "UPDATE vacancies SET notified = 1, updated_at = ? WHERE person = ? AND search_name = ? " +
+            "AND ai_verdict = 'yes' AND notified = 0 AND queued_publish_at IS NULL AND moderation_status = 'none' " +
+            "AND dedup_key != '' AND EXISTS (SELECT 1 FROM vacancies v2 WHERE v2.dedup_key = vacancies.dedup_key " +
+            "AND v2.person = vacancies.person AND v2.search_name = vacancies.search_name AND v2.notified = 1 AND v2.id != vacancies.id)",
+            Instant.now().toString(), person, searchName);
+    }
+
+    /**
      * Хвост канала: одобренные со скором не ниже планки, которые ещё никуда не ушли и не
      * стоят в очереди. Те же условия, что у {@link #findUnnotifiedApproved}, без
      * dedup-защиты — для размера порции подпитки точность до клона не нужна.

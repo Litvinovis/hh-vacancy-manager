@@ -157,21 +157,22 @@ public class VacancyDiscovery {
      * (or scrape_status='skipped' if prescreen rejected it, so it still counts as
      * "seen").
      *
-     * Свежие первыми (10.10.2026). Ссылка без своей сортировки идёт с order_by=publication_time:
-     * по умолчанию hh сортирует «по релевантности», и в первые сутки после публикации находилось
-     * только 40% вакансий, 23% — позже трёх дней, а 10 страниц обходили почти одно и то же. В
-     * порядке по дате новое и известное перемешаны уже не «как угодно», поэтому листание
-     * останавливается:
-     * <ul>
-     *   <li>после {@link #PAGES_WITHOUT_NEW_TO_STOP} страниц подряд без новых карточек — дальше то,
-     *       что видели прошлые запуски (в порядке по релевантности стоп не действует: там за
-     *       известной страницей бывает страница нового);</li>
-     *   <li>когда очередь на скрейп дошла до scrapeBacklogCap — поток по дате ~130 карточек в час,
-     *       и без предела запуск набирал бы в разы больше, чем скрейпер успевает скачать; так
-     *       берутся самые свежие в пределах пропускной способности.</li>
-     * </ul>
-     * Чтобы вернуть прежний порядок, достаточно указать сортировку в самой ссылке
-     * (order_by=relevance) — она не переопределяется.
+     * Два прохода (12.10.2026), если в ссылке нет своей сортировки:
+     * <ol>
+     *   <li>по дате (order_by=publication_time) — до половины страниц: свежие. Без сортировки hh
+     *       отдаёт «по релевантности», и в первые сутки после публикации находилось 40% вакансий;</li>
+     *   <li>по релевантности — на оставшиеся страницы. Поток по дате — в основном поднятые за
+     *       деньги массовые продажи и колл-центры: прескрин пропускал из него 7–9% карточек против
+     *       ~50% по релевантности, и за двое суток только по дате одобренных со скором 75+ стало
+     *       37 в сутки вместо 60–83 (10–11.10.2026).</li>
+     * </ol>
+     * Страниц всего — не больше maxPages, как и раньше: что проход по дате не израсходовал,
+     * достаётся релевантности. Проход по дате останавливается после
+     * {@link #PAGES_WITHOUT_NEW_TO_STOP} страниц подряд без новых карточек — дальше то, что видели
+     * прошлые запуски; по релевантности такого стопа нет — там за известной страницей бывает
+     * страница нового. Оба прохода останавливаются, когда очередь на скрейп дошла до
+     * scrapeBacklogCap. Своя сортировка в ссылке (order_by=...) не переопределяется — один проход
+     * в её порядке.
      */
     // No @Transactional: it used to be here and did nothing. Spring's proxy-based
     // transaction advice only applies to public methods, and both callers of this one
@@ -190,28 +191,58 @@ public class VacancyDiscovery {
             return 0;
         }
         int pages = Math.min(Math.max(maxPages, 1), MAX_URL_SEARCH_PAGES);
-        int saved = 0;
-        Map<String, VacancyRepository.PrescreenMemo> memory = null;   // лениво: только если найдутся новые карточки
-        String walkUrl = freshFirst(url);
-        boolean byDate = isByPublicationTime(walkUrl);
-        int pagesWithoutNew = 0;
+        Walk walk = new Walk();
+        if (hasOwnOrder(url)) {
+            walkPages(job, url, pages, scrapeBacklogCap, isByPublicationTime(url), walk);
+        } else {
+            walkPages(job, withOrder(url, "publication_time"), (pages + 1) / 2, scrapeBacklogCap, true, walk);
+            int freshPages = walk.pages;
+            int freshSaved = walk.saved;
+            if (!walk.stopped && pages > freshPages) {
+                walkPages(job, withOrder(url, "relevance"), pages - freshPages, scrapeBacklogCap, false, walk);
+            }
+            log.info("Поиск по ссылке ({} · {}): по дате — страниц {}, новых {}; по релевантности — страниц {}, новых {}",
+                job.personName, job.searchName, freshPages, freshSaved, walk.pages - freshPages, walk.saved - freshSaved);
+        }
+        metrics.recordVacanciesCollected("hh.ru", walk.saved);
+        return walk.saved;
+    }
 
-        for (int page = 0; page < pages; page++) {
+    /** Итог прохода по страницам; общий у обоих проходов одного запуска. */
+    private static final class Walk {
+        int pages;
+        int saved;
+        /** Дальше листать незачем: очередь скрейпа полна или сайдкар/hh не отвечает. */
+        boolean stopped;
+        /** Прошлые решения прескрина — лениво, только если найдутся новые карточки. */
+        Map<String, VacancyRepository.PrescreenMemo> memory;
+    }
+
+    /**
+     * Листает до maxPages страниц выдачи walkUrl. stopOnSeen — остановиться после
+     * {@link #PAGES_WITHOUT_NEW_TO_STOP} страниц подряд без новых карточек (только для порядка по дате).
+     */
+    private void walkPages(SearchJob job, String walkUrl, int maxPages, int scrapeBacklogCap, boolean stopOnSeen, Walk walk) {
+        int pagesWithoutNew = 0;
+        for (int page = 0; page < maxPages; page++) {
             if (scrapeBacklogCap < Integer.MAX_VALUE) {
                 int backlog = awaitingScrape(job);
                 if (backlog >= scrapeBacklogCap) {
                     log.info("Поиск по ссылке ({} · {}) остановлен перед страницей {}: скрейпа ждут {} вакансий (предел {})",
                         job.personName, job.searchName, page, backlog, scrapeBacklogCap);
-                    break;
+                    walk.stopped = true;
+                    return;
                 }
             }
             ScraperClient.SearchPageResult result = scraperClient.searchByUrl(walkUrl, page);
             if (!result.ok()) {
                 log.warn("Поиск по ссылке ({} · {}) остановлен на странице {}: {}",
                     job.personName, job.searchName, page, result.reason());
-                break;
+                walk.stopped = true;
+                return;
             }
-            if (result.items().isEmpty()) break;
+            walk.pages++;
+            if (result.items().isEmpty()) return;
 
             List<ScraperClient.SearchHit> rawHits = result.items();
 
@@ -225,16 +256,17 @@ public class VacancyDiscovery {
                 .filter(hit -> !knownHhIds.contains(hit.hhId()))
                 .toList();
             if (newHits.isEmpty()) {
-                if (byDate && ++pagesWithoutNew >= PAGES_WITHOUT_NEW_TO_STOP) {
+                if (stopOnSeen && ++pagesWithoutNew >= PAGES_WITHOUT_NEW_TO_STOP) {
                     log.info("Поиск по ссылке ({} · {}) остановлен на странице {}: {} страницы подряд без новых — дальше уже виденное",
                         job.personName, job.searchName, page, pagesWithoutNew);
-                    break;
+                    return;
                 }
                 continue;
             }
             pagesWithoutNew = 0;
 
-            if (memory == null) memory = prescreenMemory(job);
+            if (walk.memory == null) walk.memory = prescreenMemory(job);
+            Map<String, VacancyRepository.PrescreenMemo> memory = walk.memory;
             Map<String, VacancyAiAnalyzer.AiResult> prescreen = new HashMap<>();
             List<ScraperClient.SearchHit> toAsk = new ArrayList<>();
             int remembered = 0;
@@ -296,14 +328,12 @@ public class VacancyDiscovery {
 
                 try {
                     vacancyRepo.save(v);
-                    saved++;
+                    walk.saved++;
                 } catch (Exception e) {
                     log.warn("Не удалось сохранить {} ({} · {}): {}", hit.hhId(), job.personName, job.searchName, e.getMessage());
                 }
             }
         }
-        metrics.recordVacanciesCollected("hh.ru", saved);
-        return saved;
     }
 
     // No @Transactional — see discoverFromUrl above for why it was a no-op here.
@@ -469,13 +499,18 @@ public class VacancyDiscovery {
 
     private static final Pattern ORDER_BY_PARAM = Pattern.compile("[?&]order_by=([^&#]*)", Pattern.CASE_INSENSITIVE);
 
-    /** Ссылка с сортировкой по дате публикации, если своей сортировки в ней нет. */
-    static String freshFirst(String url) {
-        if (url == null || url.isBlank() || ORDER_BY_PARAM.matcher(url).find()) return url;
+    /** Есть ли в ссылке своя сортировка — тогда она решение владельца поиска, и мы её не меняем. */
+    static boolean hasOwnOrder(String url) {
+        return url != null && ORDER_BY_PARAM.matcher(url).find();
+    }
+
+    /** Ссылка с сортировкой order (в ссылке без своей сортировки). */
+    static String withOrder(String url, String order) {
+        if (url == null || url.isBlank()) return url;
         int hash = url.indexOf('#');
         String base = hash < 0 ? url : url.substring(0, hash);
         String fragment = hash < 0 ? "" : url.substring(hash);
-        return base + (base.contains("?") ? "&" : "?") + "order_by=publication_time" + fragment;
+        return base + (base.contains("?") ? "&" : "?") + "order_by=" + order + fragment;
     }
 
     static boolean isByPublicationTime(String url) {

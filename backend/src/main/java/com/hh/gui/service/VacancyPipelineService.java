@@ -349,6 +349,11 @@ public class VacancyPipelineService {
         java.util.concurrent.locks.ReentrantLock lock = lockFor(job);
         if (!lock.tryLock()) return 0;
         try {
+            int resolved = vacancyRepo.resolvePublishedDuplicates(job.personName, job.searchName);
+            if (resolved > 0) {
+                log.info("Подпитка очереди канала ({} · {}): закрыто {} дублей уже опубликованных вакансий",
+                    job.personName, job.searchName, resolved);
+            }
             int backlog = vacancyRepo.countApprovedBacklog(job.personName, job.searchName, runtimeConfig.getChannelMinScore());
             int limit = adaptiveTopUpLimit(backlog);
             List<Vacancy> approved = vacancyRepo.findUnnotifiedApproved(
