@@ -62,7 +62,8 @@ public class ArticleGenerator {
                 articles.update(a);
                 continue;
             }
-            String text = analyzer.generateText(prompt(topic), MAX_TOKENS);
+            String facts = topic.dataBacked() ? facts(topic.key()) : null;
+            String text = analyzer.generateText(prompt(topic, facts), MAX_TOKENS);
             if (text == null || text.length() < 200) {
                 // Не failed: следующий тик попробует снова, а провал модели на одной статье не
                 // должен вычёркивать тему из плана
@@ -76,6 +77,11 @@ public class ArticleGenerator {
                 log.warn("Статья id={} «{}»: модель вернула испорченный текст, попробуем позже", a.getId(), topic.title());
                 continue;
             }
+            List<Long> wrong = facts == null ? List.of() : unsupportedNumbers(text, facts);
+            if (!wrong.isEmpty()) {
+                log.warn("Статья id={} «{}»: в тексте суммы, которых нет в фактах ({}), попробуем позже", a.getId(), topic.title(), wrong);
+                continue;
+            }
             a.setBody(articlePost(text));
             a.setStatus("generated");
             a.setGeneratedAt(Instant.now().toString());
@@ -87,15 +93,21 @@ public class ArticleGenerator {
     }
 
     String prompt(ContentTopics.Topic topic) {
+        return prompt(topic, topic.dataBacked() ? facts(topic.key()) : null);
+    }
+
+    /** @param facts материал из базы для темы на данных; null — тема общая, фактов нет */
+    String prompt(ContentTopics.Topic topic, String facts) {
         StringBuilder sb = new StringBuilder();
         sb.append("Ты ведёшь сообщество ВКонтакте «Интересная удалёнка» — подборку удалённых вакансий без сложных ")
           .append("технических требований (ассистенты, поддержка, контент, координация). Напиши пост для сообщества.\n\n");
         sb.append("ТЕМА: ").append(topic.title()).append("\n");
         sb.append("О ЧЁМ: ").append(topic.brief()).append("\n\n");
         sb.append(ABOUT_US).append("\n");
-        if (topic.dataBacked()) {
-            sb.append("ФАКТЫ ИЗ НАШЕЙ БАЗЫ (используй только их, ничего не выдумывай, цифры не округляй в большую сторону):\n")
-              .append(facts(topic.key())).append("\n\n");
+        if (facts != null) {
+            sb.append("ФАКТЫ ИЗ НАШЕЙ БАЗЫ (используй только их, ничего не выдумывай; суммы и количества пиши ровно ")
+              .append("как здесь, не пересчитывай и не округляй):\n")
+              .append(facts).append("\n\n");
         }
         sb.append("ТРЕБОВАНИЯ К ТЕКСТУ:\n")
           .append("- 700–1100 символов, обычный текст без разметки.\n")
@@ -161,12 +173,12 @@ public class ArticleGenerator {
                 case "salary_snapshot" -> {
                     Map<String, Integer> med = vacancies.medianSalaryByKind(daysAgo(30));
                     StringBuilder sb = new StringBuilder("медианная зарплата «от» по типам работ за 30 дней, рубли:\n");
-                    med.forEach((k, v) -> sb.append("- ").append(k).append(": ").append(v).append("\n"));
+                    med.forEach((k, v) -> sb.append("- ").append(k).append(": ").append(num(v)).append("\n"));
                     return sb.toString();
                 }
                 case "week_digest", "rejected_reasons", "how_we_select" -> {
                     StringBuilder sb = new StringBuilder("за последние 7 дней (что: сколько):\n");
-                    vacancies.weekFacts(daysAgo(7)).forEach((k, v) -> sb.append("- ").append(k).append(": ").append(v).append("\n"));
+                    vacancies.weekFacts(daysAgo(7)).forEach((k, v) -> sb.append("- ").append(k).append(": ").append(num(v)).append("\n"));
                     sb.append("опубликовано меньше, чем одобрено: в канал идут лучшие по оценке и только с контактом для отклика\n");
                     List<String> reasons = vacancies.recentRejectReasons(15).stream()
                         .map(r -> r.startsWith(PRESCREEN_PREFIX) ? r.substring(PRESCREEN_PREFIX.length()) : r)
@@ -214,7 +226,8 @@ public class ArticleGenerator {
             articles.update(a);
             return false;
         }
-        String text = analyzer.generateText(seoPrompt(topic, seoFacts(matched)), MAX_TOKENS);
+        String facts = seoFacts(matched);
+        String text = analyzer.generateText(seoPrompt(topic, facts), MAX_TOKENS);
         if (text == null || text.length() < 300) {
             log.warn("Обзор id={} «{}»: модель не вернула текст, попробуем позже", a.getId(), topic.key());
             return false;
@@ -223,6 +236,11 @@ public class ArticleGenerator {
         if (text == null) {
             // Испорченный ответ: не публикуем, следующий тик попросит модель заново
             log.warn("Обзор id={} «{}»: модель вернула испорченный текст, попробуем позже", a.getId(), topic.key());
+            return false;
+        }
+        List<Long> wrong = unsupportedNumbers(text, facts);
+        if (!wrong.isEmpty()) {
+            log.warn("Обзор id={} «{}»: в тексте суммы, которых нет в фактах ({}), попробуем позже", a.getId(), topic.key(), wrong);
             return false;
         }
         a.setBody(seoPost(text, topic));
@@ -239,7 +257,8 @@ public class ArticleGenerator {
             + "ПЕРВАЯ СТРОКА ПОСТА (дословно): " + topic.headline() + "\n"
             + "ПОИСКОВЫЕ ФРАЗЫ (употреби 2–3 из них естественно, в разных абзацах, без перечисления подряд): "
             + topic.keywords() + "\n\n"
-            + "ФАКТЫ ИЗ НАШЕЙ БАЗЫ ЗА " + SEO_WINDOW_DAYS + " ДНЕЙ (используй только их, ничего не выдумывай):\n"
+            + "ФАКТЫ ИЗ НАШЕЙ БАЗЫ ЗА " + SEO_WINDOW_DAYS + " ДНЕЙ (используй только их, ничего не выдумывай; суммы пиши "
+            + "ровно как здесь, не пересчитывай и не округляй):\n"
             + facts + "\n\n"
             + "ТРЕБОВАНИЯ:\n"
             + "- 900–1400 символов, обычный текст без разметки, короткие абзацы.\n"
@@ -248,6 +267,41 @@ public class ArticleGenerator {
             + "- Без внешних ссылок, без эмодзи-списков (максимум один эмодзи), без хэштегов.\n"
             + "- Последний абзац — один вопрос читателю для комментариев.\n"
             + "- Только текст поста, без пояснений от себя.\n";
+    }
+
+    /**
+     * Число с пробелами между разрядами. Голое «12000» модель прочла как «120 000»: в обзоре дизайнеров
+     * 12.10.2026 вышло «от 120 000 до 250 000 рублей, медианная — 80 000» — минимум выше медианы.
+     */
+    static String num(long n) {
+        return String.format(java.util.Locale.ROOT, "%,d", n).replace(',', ' ');
+    }
+
+    /** Число в тексте: «12 000» (обычный, неразрывный или узкий пробел между разрядами) или «12000». */
+    private static final java.util.regex.Pattern NUMBER =
+        java.util.regex.Pattern.compile("\\d{1,3}(?:[ \\u00A0\\u202F]\\d{3})+(?!\\d)|\\d+");
+
+    static java.util.Set<Long> numbersIn(String text) {
+        java.util.Set<Long> out = new java.util.HashSet<>();
+        java.util.regex.Matcher m = NUMBER.matcher(text == null ? "" : text);
+        while (m.find()) {
+            String digits = m.group().replaceAll("\\D", "");
+            if (digits.length() <= 15) out.add(Long.parseLong(digits));
+        }
+        return out;
+    }
+
+    /**
+     * Суммы из текста модели, которых нет в фактах. Проверяются числа от 1000 — зарплаты и счётчики;
+     * мелкие («14 дней», «5 вакансий») и годы (1990–2100) не проверяются: их в фактах может не быть,
+     * а ошибка в них читателю не вредит так, как неверная зарплата.
+     */
+    static List<Long> unsupportedNumbers(String text, String facts) {
+        java.util.Set<Long> known = numbersIn(facts);
+        return numbersIn(text).stream()
+            .filter(n -> n >= 1000 && !(n >= 1990 && n <= 2100))
+            .filter(n -> !known.contains(n))
+            .sorted().toList();
     }
 
     /** Материал для обзора: сколько вакансий, зарплаты, задачи, примеры работодателей. */
@@ -259,9 +313,9 @@ public class ArticleGenerator {
             .filter(v -> v.getCurrency() == null || v.getCurrency().equals("RUR") || v.getCurrency().equals("RUB"))
             .map(com.hh.gui.model.Vacancy::getSalaryFrom).sorted().toList();
         if (salaries.size() >= 3) {
-            sb.append("зарплата «от», рубли: минимум ").append(salaries.get(0))
-              .append(", медиана ").append(salaries.get(salaries.size() / 2))
-              .append(", максимум ").append(salaries.get(salaries.size() - 1))
+            sb.append("зарплата «от», рубли: минимум ").append(num(salaries.get(0)))
+              .append(", медиана ").append(num(salaries.get(salaries.size() / 2)))
+              .append(", максимум ").append(num(salaries.get(salaries.size() - 1)))
               .append(" (по ").append(salaries.size()).append(" вакансиям с указанной зарплатой)\n");
         }
         sb.append("примеры вакансий (название — работодатель — зарплата):\n");

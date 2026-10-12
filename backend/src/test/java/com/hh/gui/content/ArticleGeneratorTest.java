@@ -118,7 +118,7 @@ class ArticleGeneratorTest {
         arts.toGenerate.add(planned("week_digest", "article"));
         new ArticleGenerator(arts, new FakeVacancies(), ai).generateDue("2026-09-22");
 
-        assertTrue(ai.lastPrompt.contains("- собрано вакансий: 1938"), ai.lastPrompt);
+        assertTrue(ai.lastPrompt.contains("- собрано вакансий: 1 938"), ai.lastPrompt);
         assertTrue(ai.lastPrompt.contains("- опубликовано в Telegram-канале: 412"), ai.lastPrompt);
         assertTrue(!ai.lastPrompt.contains("published"), "английский ключ воронки дошёл до поста как «Оpublished»");
         assertTrue(!ai.lastPrompt.contains("Прескрининг:"), ai.lastPrompt);
@@ -133,6 +133,55 @@ class ArticleGeneratorTest {
 
         assertTrue(ai.lastPrompt.contains("ФАКТЫ ИЗ НАШЕЙ БАЗЫ"), ai.lastPrompt);
         assertTrue(!ContentTopics.byKey("how_we_select").brief().contains("ручн"), "ручной проверки нет — бриф её не обещает");
+    }
+
+    // ── суммы в тексте — только из фактов (12.10.2026) ──
+
+    @Test
+    void num_groupsThousands() {
+        assertEquals("12 000", ArticleGenerator.num(12000));
+        assertEquals("250 000", ArticleGenerator.num(250000));
+        assertEquals("1 938", ArticleGenerator.num(1938));
+        assertEquals("412", ArticleGenerator.num(412));
+    }
+
+    @Test
+    void unsupportedNumbers_catchesTheMisreadMinimum_ignoresYearsAndSmallCounts() {
+        // Живой случай: в фактах «минимум 12000», в обзоре — «от 120 000 … медианная — 80 000»
+        String facts = "зарплата «от», рубли: минимум 12 000, медиана 80 000, максимум 250 000 (по 65 вакансиям)";
+        assertEquals(List.of(120000L), ArticleGenerator.unsupportedNumbers(
+            "Зарплаты варьируются от 120 000 до 250 000 рублей, медианная — 80 000 рублей.", facts));
+        assertEquals(List.of(), ArticleGenerator.unsupportedNumbers(
+            "От 12 000 до 250000 рублей, медиана 80\u00A0000. В 2026 году за 14 дней — 105 вакансий.", facts));
+    }
+
+    @Test
+    void dataArticle_withSumsNotInFacts_notSaved_retriedLater() {
+        FakeAnalyzer ai = new FakeAnalyzer();
+        ai.reply = "За неделю мы прошли через 1566 вакансий. " + "х".repeat(400);
+        FakeArticles arts = new FakeArticles(); arts.toGenerate.add(planned("week_digest", "article"));
+
+        assertEquals(0, new ArticleGenerator(arts, new FakeVacancies(), ai).generateDue("2026-09-22"));
+        assertTrue(arts.updated.isEmpty(), "1566 в фактах нет — текст не сохраняем, следующий тик попросит заново");
+    }
+
+    @Test
+    void dataArticle_withSumsFromFacts_saved() {
+        FakeAnalyzer ai = new FakeAnalyzer();
+        ai.reply = "За неделю собрали 1 938 вакансий, одобрили 279. " + "х".repeat(400);
+        FakeArticles arts = new FakeArticles(); arts.toGenerate.add(planned("week_digest", "article"));
+
+        assertEquals(1, new ArticleGenerator(arts, new FakeVacancies(), ai).generateDue("2026-09-22"));
+    }
+
+    @Test
+    void generalArticle_numbersNotChecked() {
+        // У общих тем фактов нет — сверять не с чем; цифры там — примеры, а не статистика базы
+        FakeAnalyzer ai = new FakeAnalyzer();
+        ai.reply = "Средняя вилка на рынке — около 70 000 рублей. " + "х".repeat(400);
+        FakeArticles arts = new FakeArticles(); arts.toGenerate.add(planned("resume_remote", "article"));
+
+        assertEquals(1, new ArticleGenerator(arts, new FakeVacancies(), ai).generateDue("2026-09-22"));
     }
 
     // ── обзоры по профессиям ──
@@ -163,6 +212,7 @@ class ArticleGeneratorTest {
         assertTrue(ai.lastPrompt.contains("удаленная работа ассистентом"), ai.lastPrompt);
         assertTrue(ai.lastPrompt.contains("вакансий по этой профессии: 6"), ai.lastPrompt);
         assertTrue(ai.lastPrompt.contains("медиана"), ai.lastPrompt);
+        assertTrue(ai.lastPrompt.matches("(?s).*минимум \\d{1,3} 000.*"), "суммы с пробелами между разрядами: " + ai.lastPrompt);
         assertTrue(!ai.lastPrompt.contains("Бухгалтер"), "чужая профессия в факты не попадает");
         assertTrue(!ai.lastPrompt.contains("Медведева"), "ФИО частного работодателя в промпт не несём");
 
@@ -181,6 +231,17 @@ class ArticleGeneratorTest {
         assertEquals(0, new ArticleGenerator(arts, vac, ai).generateDue("2026-09-28"));
         assertEquals("failed", arts.updated.get(0).getStatus());
         assertEquals(null, ai.lastPrompt);
+    }
+
+    @Test
+    void seo_sumNotInFacts_notSaved_retriedLater() {
+        FakeAnalyzer ai = new FakeAnalyzer(); ai.reply = "Зарплаты от 120 000 рублей. " + "х".repeat(400);
+        FakeArticles arts = new FakeArticles(); FakeVacancies vac = new FakeVacancies();
+        for (int i = 0; i < 5; i++) vac.approved.add(vacancy("Ассистент руководителя " + i, "Ромашка", 12000 + i * 10000, "календарь"));
+        arts.toGenerate.add(plannedSeo("seo_assistant"));
+
+        assertEquals(0, new ArticleGenerator(arts, vac, ai).generateDue("2026-09-28"));
+        assertTrue(arts.updated.isEmpty());
     }
 
     @Test

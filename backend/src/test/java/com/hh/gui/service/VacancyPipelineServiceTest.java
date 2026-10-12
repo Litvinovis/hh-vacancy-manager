@@ -749,6 +749,9 @@ class VacancyPipelineServiceTest {
         public int countQueued(Long searchId) { return queued; }
         @Override
         public int countApprovedBacklog(String person, String searchName, int minScore) { return backlog; }
+        int resolveCalls = 0;
+        @Override
+        public int resolvePublishedDuplicates(String person, String searchName) { resolveCalls++; return 0; }
         @Override
         public List<Vacancy> findUnnotifiedApproved(String person, String searchName, int minScore, int limit) {
             requestedLimits.add(limit);
@@ -808,6 +811,7 @@ class VacancyPipelineServiceTest {
 
         assertEquals(20, svc.topUpChannelQueue(channelJob()));
         assertEquals(List.of(20), repo.requestedLimits);
+        assertEquals(1, repo.resolveCalls, "дубли уже вышедших закрываются до подсчёта хвоста — иначе он завышен");
     }
 
     @Test

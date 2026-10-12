@@ -560,7 +560,8 @@ class VacancyDiscoveryTest {
         @Override
         public SearchPageResult searchByUrl(String url, int pageNum) {
             urls.add(url);
-            SearchPageResult result = pages.get(calls);
+            // Страницы кончились — как у hh за последней страницей выдачи: пустая страница
+            SearchPageResult result = calls < pages.size() ? pages.get(calls) : new SearchPageResult(true, null, List.of(), null);
             calls++;
             return result;
         }
@@ -638,20 +639,22 @@ class VacancyDiscoveryTest {
     }
 
     @Test
-    void freshFirst_addsPublicationTimeOrder_onlyWhenTheUrlHasNoOrderOfItsOwn() {
+    void urlOrder_addedOnlyWhenTheUrlHasNoOrderOfItsOwn() {
         assertEquals("https://hh.ru/search/vacancy?area=113&order_by=publication_time",
-            VacancyDiscovery.freshFirst("https://hh.ru/search/vacancy?area=113"));
-        assertEquals("https://hh.ru/search/vacancy?order_by=publication_time",
-            VacancyDiscovery.freshFirst("https://hh.ru/search/vacancy"));
-        assertEquals("https://hh.ru/search/vacancy?area=1&order_by=relevance",
-            VacancyDiscovery.freshFirst("https://hh.ru/search/vacancy?area=1&order_by=relevance"),
+            VacancyDiscovery.withOrder("https://hh.ru/search/vacancy?area=113", "publication_time"));
+        assertEquals("https://hh.ru/search/vacancy?order_by=relevance",
+            VacancyDiscovery.withOrder("https://hh.ru/search/vacancy", "relevance"));
+        assertFalse(VacancyDiscovery.hasOwnOrder("https://hh.ru/search/vacancy?area=1"));
+        assertTrue(VacancyDiscovery.hasOwnOrder("https://hh.ru/search/vacancy?area=1&order_by=relevance"),
             "своя сортировка в ссылке — решение владельца, её не трогаем");
         assertTrue(VacancyDiscovery.isByPublicationTime("https://hh.ru/search/vacancy?order_by=publication_time&area=1"));
         assertFalse(VacancyDiscovery.isByPublicationTime("https://hh.ru/search/vacancy?order_by=relevance"));
     }
 
     @Test
-    void fromUrl_byDate_stopsAfterTwoPagesWithNothingNew() {
+    void fromUrl_freshPassStopsOnSeenPages_andRelevanceTakesTheRemainingPages() {
+        // Проход по дате: новое на первой странице, две известные подряд — стоп. Оставшиеся страницы
+        // из 10 достаются релевантности: там прескрин пропускает в разы больше карточек (12.10.2026).
         RuntimeConfig config = new RuntimeConfig();
         FakeScraper scraper = new FakeScraper(config,
             page("401", "901"), page("902", "903"), page("904"), page("402"));
@@ -660,9 +663,26 @@ class VacancyDiscoveryTest {
 
         int saved = discovery.fromUrl(urlJob(), "https://hh.ru/search/vacancy?area=113", 10);
 
-        assertEquals(1, saved);
-        assertEquals(3, scraper.calls, "две страницы подряд без нового — дальше уже виденное, четвёртую не грузим");
-        assertTrue(scraper.urls.get(0).endsWith("&order_by=publication_time"), scraper.urls.get(0));
+        assertEquals(2, saved, "401 — свежая по дате, 402 — по релевантности");
+        assertEquals(List.of("401", "402"), repo.saved.stream().map(Vacancy::getHhId).toList());
+        assertTrue(scraper.urls.subList(0, 3).stream().allMatch(u -> u.endsWith("&order_by=publication_time")), scraper.urls.toString());
+        assertTrue(scraper.urls.get(3).endsWith("&order_by=relevance"), scraper.urls.get(3));
+        assertEquals(5, scraper.calls, "3 по дате + 2 по релевантности (вторая пустая — выдача кончилась)");
+    }
+
+    @Test
+    void fromUrl_freshPassTakesAtMostHalfThePages() {
+        RuntimeConfig config = new RuntimeConfig();
+        FakeScraper scraper = new FakeScraper(config,
+            page("701"), page("702"), page("703"), page("704"), page("705"), page("706"));
+        FakeRepo repo = new FakeRepo(Set.of());
+        VacancyDiscovery discovery = discovery().scraper(scraper).analyzer(new FakeAnalyzer(config)).repo(repo).build();
+
+        discovery.fromUrl(urlJob(), "https://hh.ru/search/vacancy?area=113", 4);
+
+        assertEquals(4, scraper.calls, "страниц не больше, чем просили");
+        assertEquals(2, scraper.urls.stream().filter(u -> u.endsWith("publication_time")).count());
+        assertEquals(2, scraper.urls.stream().filter(u -> u.endsWith("relevance")).count());
     }
 
     @Test
