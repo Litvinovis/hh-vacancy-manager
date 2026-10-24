@@ -96,7 +96,7 @@ class VacancyPipelineServiceTest {
             ChannelPublisher publisher = new ChannelPublisher(repo, searchRepo, notifier, tgMetrics, config, new VkPublishQueue(null, null, config, null, (com.hh.gui.repository.VkArticleRepository) null));
             ChannelEngagementTracker engagement =
                 new ChannelEngagementTracker(searchRepo, telegram, notifier, tgMetrics);
-            VacancyDiscovery discovery = new VacancyDiscovery(null, scraper, telegram, analyzer, repo,
+            VacancyDiscovery discovery = new VacancyDiscovery(scraper, telegram, analyzer, repo,
                 tgMetrics, engagement, cooldown, resolvedAiMetrics);
             ModerationService moderationService = new ModerationService(repo, profileFactory, publisher, notifier, config);
             return new VacancyPipelineService(scraper, analyzer, repo, notifier,

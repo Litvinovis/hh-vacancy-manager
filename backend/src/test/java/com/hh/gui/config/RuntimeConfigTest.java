@@ -21,10 +21,8 @@ class RuntimeConfigTest {
     @Test
     void defaultValues() {
         assertEquals(30, config.getMaxPerRun());
-        assertEquals(600000, config.getPipelineIntervalMs());
         assertEquals("0 0 12 * * *", config.getDailyCron());
         assertEquals(3, config.getMaxRetries());
-        assertEquals(1500, config.getRequestDelayMs());
         assertEquals(3000, config.getScrapeDelayMs());
         // 0 и 24 — «окна нет», поведение по умолчанию не меняется
         assertEquals(0, config.getScrapeWindowStartHour());
@@ -52,10 +50,8 @@ class RuntimeConfigTest {
         Map<String, Object> m = config.toMap();
         assertTrue(m.containsKey("aiProviders"));
         assertTrue(m.containsKey("maxPerRun"));
-        assertTrue(m.containsKey("pipelineIntervalMs"));
         assertTrue(m.containsKey("dailyCron"));
         assertTrue(m.containsKey("maxRetries"));
-        assertTrue(m.containsKey("requestDelayMs"));
         assertTrue(m.containsKey("scrapeDelayMs"));
         assertTrue(m.containsKey("scrapeWindowStartHour"));
         assertTrue(m.containsKey("scrapeWindowEndHour"));
@@ -81,9 +77,8 @@ class RuntimeConfigTest {
         assertTrue(m.containsKey("channelMinScore"));
         assertTrue(m.containsKey("vkDigestMaxSize"));
         assertTrue(m.containsKey("vkQueueMaxAgeHours"));
-        assertTrue(m.containsKey("rssEnabled"));
         assertTrue(m.containsKey("vkSeoTime"));
-        assertEquals(45, m.size());
+        assertEquals(42, m.size());
     }
 
     // ═══════ Descriptors ═══════
@@ -91,7 +86,7 @@ class RuntimeConfigTest {
     @Test
     void descriptorsCoversAllKeys() {
         List<RuntimeConfig.SettingDescriptor> descs = config.getDescriptors();
-        assertEquals(44, descs.size());
+        assertEquals(41, descs.size());
         Set<String> keys = new HashSet<>();
         for (var d : descs) {
             assertNotNull(d.key);
@@ -136,7 +131,6 @@ class RuntimeConfigTest {
         Map<String, Object> updates = Map.of(
             "maxPerRun", 50,
             "maxRetries", 5,
-            "requestDelayMs", 2000,
             "scrapeDelayMs", 5000,
             "scrapeWindowStartHour", 22,
             "scrapeWindowEndHour", 6,
@@ -148,7 +142,6 @@ class RuntimeConfigTest {
         assertTrue(errors.isEmpty());
         assertEquals(50, config.getMaxPerRun());
         assertEquals(5, config.getMaxRetries());
-        assertEquals(2000, config.getRequestDelayMs());
         assertEquals(5000, config.getScrapeDelayMs());
         assertEquals(22, config.getScrapeWindowStartHour());
         assertEquals(6, config.getScrapeWindowEndHour());

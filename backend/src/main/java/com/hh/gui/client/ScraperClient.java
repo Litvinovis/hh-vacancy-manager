@@ -134,11 +134,11 @@ public class ScraperClient {
     }
 
     /**
-     * EXPERIMENTAL, manual-trigger only (see VacancyDiscovery.fromUrl) —
-     * drives a real hh.ru search-results page (a URL the caller built themselves using
-     * hh.ru's own filter UI) through the same headless-browser session used for
-     * /scrape, instead of the 20-results-no-pagination RSS feed HhApiClient uses for
-     * the normal automated discovery.
+     * The discovery path (see VacancyDiscovery.fromUrl) — drives a real hh.ru
+     * search-results page (a URL the caller built themselves using hh.ru's own filter
+     * UI) through the same headless-browser session used for /scrape. Real pagination
+     * (~50 cards per page) and full filter flexibility; the RSS path that used to
+     * complement it was removed 2026-10-24.
      */
     public SearchPageResult searchByUrl(String searchUrl, int page) {
         try {

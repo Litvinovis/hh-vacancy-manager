@@ -48,7 +48,7 @@ class VacancyDiscoveryTest {
             TelegramMetrics tgMetrics = new TelegramMetrics(registry);
             ChannelEngagementTracker engagement = new ChannelEngagementTracker(null, telegram, null, tgMetrics);
             com.hh.gui.ai.AiMetrics aiMetrics = new com.hh.gui.ai.AiMetrics(registry, new RuntimeConfig());
-            return new VacancyDiscovery(null, scraper, telegram, analyzer, repo, tgMetrics, engagement, new ScrapeCooldown(), aiMetrics);
+            return new VacancyDiscovery(scraper, telegram, analyzer, repo, tgMetrics, engagement, new ScrapeCooldown(), aiMetrics);
         }
     }
 

@@ -142,23 +142,18 @@ public class RuntimeConfig {
      * упирается в сайдкар и защиту hh, анализ — в квоту модели, поэтому и крутить их надо врозь.
      */
     private volatile int scrapeMaxPerRun = 30;
-    private volatile int pipelineIntervalMs = 600000; // 10 мин — интервал RSS-цикла
-    /**
-     * Сбор по RSS (24.09.2026 выключен по умолчанию). RSS отдаёт 20 результатов без
-     * пагинации и без текста вакансии; поиски собирают по ссылке hh.ru и из Telegram.
-     * Код RSS сохранён — включается этой настройкой без деплоя.
-     */
-    private volatile boolean rssEnabled = false;
+    // RSS-сбор и его настройки (rssEnabled/requestDelayMs/pipelineIntervalMs) удалены
+    // 24.10.2026 вместе с HhApiClient и RSS-циклом шедулера: узкий проход из 20 карточек
+    // без текста, полностью покрываемый поиском по ссылке. Старые ключи в существующем
+    // runtime-config.json вычищаются при загрузке (см. loadFromFile).
     private volatile String dailyCron = "0 0 12 * * *"; // ежедневно 12:00
     private volatile int maxRetries = 3;
-    private volatile int requestDelayMs = 1500; // HH RSS задержка
     // Пауза между обращениями к сайдкару-скрейперу внутри одного прогона (см.
     // VacancyPipelineService.scrapePending). Раньше страницы грузились вплотную друг к
     // другу, и почти каждый прогон обрывался по MAX_HTTP_403_PER_RUN: DDoS-Guard на hh.ru
     // отдавал 403 на восьмой запрос, после чего ScrapeCooldown замораживал скрейпинг на
     // полчаса. Замер за 30.08-02.09: 12 прогонов из 14 обрывались именно так, из ~800
-    // найденных за сутки вакансий обрабатывалось 150-290. Тот же смысл, что у
-    // requestDelayMs выше, только для браузерного скрейпинга, а не для RSS.
+    // найденных за сутки вакансий обрабатывалось 150-290.
     private volatile int scrapeDelayMs = 3000;
     // Часы (по локальному времени сервера), в которые разрешён автозапуск поисков по
     // ссылке — самой тяжёлой для hh.ru работы (обход страниц выдачи + скрейпинг сотен
@@ -280,6 +275,11 @@ public class RuntimeConfig {
                     log.warn("Не удалось разобрать aiProviders: {}", e.getMessage());
                 }
             }
+            // Ключи удалённого 24.10.2026 RSS-сбора: строгий default в apply() честно
+            // ругнулся бы «неизвестный параметр» на каждый файл, созданный до удаления.
+            saved.remove("rssEnabled");
+            saved.remove("requestDelayMs");
+            saved.remove("pipelineIntervalMs");
             apply(saved, true); // silent = true — не пишем лог и не триггерим save
             log.info("Runtime config загружен из {} ({} параметров, {} провайдеров)", file.getAbsolutePath(), saved.size(), aiProviders.size());
 
@@ -324,18 +324,6 @@ public class RuntimeConfig {
                 "Слишком большое значение расходует квоту API и создаёт нагрузку на БД.",
                 "number", 1, 500, maxPerRun),
 
-            SettingDescriptor.of("rssEnabled", "Поиск по RSS",
-                "Собирать вакансии по поисковым запросам через RSS hh.ru — по расписанию «Интервал пайплайна» " +
-                "и при ручном запуске поиска. Выключено: сбор идёт только по ссылке hh.ru и из Telegram-каналов, " +
-                "запросы в поисках сохраняются, но не используются.",
-                "boolean", null, null, rssEnabled),
-
-            SettingDescriptor.of("pipelineIntervalMs", "Интервал пайплайна",
-                "Интервал (в миллисекундах) между запусками RSS-цикла (действует, только если включён поиск по RSS). " +
-                "600000 = 10 минут, 3600000 = 1 час. " +
-                "Изменение вступает в силу при следующем запуске.",
-                "number", 60000, 86400000, pipelineIntervalMs),
-
             SettingDescriptor.of("dailyCron", "Расписание дневного анализа",
                 "Расписание полного AI-анализа всех необработанных вакансий. " +
                 "Формат: cron-выражение (секунды минуты часы день месяц день_недели). " +
@@ -346,12 +334,6 @@ public class RuntimeConfig {
                 "Количество повторных попыток при ошибке AI-запроса (таймаут, 5xx). " +
                 "Каждая попытка ждёт дольше предыдущей (экспоненциальная задержка).",
                 "number", 1, 10, maxRetries),
-
-            SettingDescriptor.of("requestDelayMs", "Задержка RSS-запросов",
-                "Задержка в миллисекундах между запросами к HH.ru RSS. " +
-                "Слишком частые запросы могут привести к блокировке IP. " +
-                "1500 = 1.5 секунды.",
-                "number", 500, 10000, requestDelayMs),
 
             SettingDescriptor.of("scrapeDelayMs", "Задержка скрейпинга",
                 "Пауза в миллисекундах между загрузками страниц вакансий через сайдкар-скрейпер. " +
@@ -564,11 +546,8 @@ public class RuntimeConfig {
                 switch (key) {
                     case "maxPerRun" -> setMaxPerRun(toInt(value, errors, key, 1, 500));
                     case "scrapeMaxPerRun" -> setScrapeMaxPerRun(toInt(value, errors, key, 1, 500));
-                    case "pipelineIntervalMs" -> setPipelineIntervalMs(toInt(value, errors, key, 60000, 86400000));
-                    case "rssEnabled" -> setRssEnabled(toBool(value, errors, key));
                     case "dailyCron" -> setDailyCron(toCron(value, errors, key));
                     case "maxRetries" -> setMaxRetries(toInt(value, errors, key, 1, 10));
-                    case "requestDelayMs" -> setRequestDelayMs(toInt(value, errors, key, 500, 10000));
                     case "scrapeDelayMs" -> setScrapeDelayMs(toInt(value, errors, key, 0, 60000));
                     case "scrapeWindowStartHour" -> setScrapeWindowStartHour(toInt(value, errors, key, 0, 23));
                     case "scrapeWindowEndHour" -> setScrapeWindowEndHour(toInt(value, errors, key, 0, 24));
@@ -643,11 +622,8 @@ public class RuntimeConfig {
         m.put("aiProviders", aiProviders); // сохраняем как список, не строку
         m.put("maxPerRun", maxPerRun);
         m.put("scrapeMaxPerRun", scrapeMaxPerRun);
-        m.put("pipelineIntervalMs", pipelineIntervalMs);
-        m.put("rssEnabled", rssEnabled);
         m.put("dailyCron", dailyCron);
         m.put("maxRetries", maxRetries);
-        m.put("requestDelayMs", requestDelayMs);
         m.put("scrapeDelayMs", scrapeDelayMs);
         m.put("scrapeWindowStartHour", scrapeWindowStartHour);
         m.put("scrapeWindowEndHour", scrapeWindowEndHour);
@@ -776,19 +752,11 @@ public class RuntimeConfig {
     public int getScrapeMaxPerRun() { return scrapeMaxPerRun; }
     public void setScrapeMaxPerRun(int v) { this.scrapeMaxPerRun = v; }
 
-    public int getPipelineIntervalMs() { return pipelineIntervalMs; }
-    public void setPipelineIntervalMs(int v) { this.pipelineIntervalMs = v; }
-    public boolean isRssEnabled() { return rssEnabled; }
-    public void setRssEnabled(boolean v) { this.rssEnabled = v; }
-
     public String getDailyCron() { return dailyCron; }
     public void setDailyCron(String v) { this.dailyCron = v; }
 
     public int getMaxRetries() { return maxRetries; }
     public void setMaxRetries(int v) { this.maxRetries = v; }
-
-    public int getRequestDelayMs() { return requestDelayMs; }
-    public void setRequestDelayMs(int v) { this.requestDelayMs = v; }
 
     public int getScrapeDelayMs() { return scrapeDelayMs; }
     public void setScrapeDelayMs(int v) { this.scrapeDelayMs = v; }
