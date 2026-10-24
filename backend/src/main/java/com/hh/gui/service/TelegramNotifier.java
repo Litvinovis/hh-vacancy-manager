@@ -254,6 +254,11 @@ public class TelegramNotifier {
      * но id разобрать не удалось, и null — если отправка не состоялась. Id нужен вызывающим,
      * которые публикуют в канал: по нему пост потом можно найти, удалить или дополнить
      * (см. VacancyRepository.markPublishedToChannel).
+     *
+     * Один повтор на транзиентные сбои: 429 (Telegram сам говорит, сколько ждать, в
+     * parameters.retry_after) и сетевые исключения (живой случай 24.10.2026: Connection
+     * reset by peer). Повтор только один и только по этим двум причинам — ошибки параметров
+     * ретраить бессмысленно.
      */
     private String doSendReturningId(String token, String missingTokenMessage, String message, String resolvedChatId) {
         if (token == null || token.isEmpty()) {
@@ -265,47 +270,94 @@ public class TelegramNotifier {
             return null;
         }
 
-        try {
-            String url = apiBaseUrl + "/bot" + token + "/sendMessage";
-            HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
-            conn.setRequestMethod("POST");
-            conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
-            conn.setConnectTimeout(15000);
-            conn.setReadTimeout(30000);
-            conn.setDoOutput(true);
+        for (int attempt = 1; attempt <= 2; attempt++) {
+            boolean lastAttempt = attempt == 2;
+            try {
+                String url = apiBaseUrl + "/bot" + token + "/sendMessage";
+                HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
+                conn.setRequestMethod("POST");
+                conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
+                conn.setConnectTimeout(15000);
+                conn.setReadTimeout(30000);
+                conn.setDoOutput(true);
 
-            String body = "chat_id=" + URLEncoder.encode(resolvedChatId, StandardCharsets.UTF_8)
-                + "&text=" + URLEncoder.encode(message, StandardCharsets.UTF_8)
-                + "&parse_mode=HTML&disable_web_page_preview=true";
+                String body = "chat_id=" + URLEncoder.encode(resolvedChatId, StandardCharsets.UTF_8)
+                    + "&text=" + URLEncoder.encode(message, StandardCharsets.UTF_8)
+                    + "&parse_mode=HTML&disable_web_page_preview=true";
 
-            try (OutputStream os = conn.getOutputStream()) {
-                os.write(body.getBytes(StandardCharsets.UTF_8));
-            }
-
-            int code = conn.getResponseCode();
-            String respBody = HttpUtil.readBody(conn, code);
-            if (code == 200) {
-                String messageId = "";
-                try {
-                    var json = new tools.jackson.databind.ObjectMapper().readTree(respBody);
-                    if (json.path("ok").asBoolean(false)) {
-                        messageId = json.path("result").path("message_id").asString("");
-                    }
-                } catch (Exception parseFailure) {
-                    // Отправка состоялась — это главное; неразобранный id только лишает нас
-                    // возможности адресовать пост потом, поэтому не превращаем в ошибку.
-                    log.warn("Telegram принял сообщение, но ответ не разобран: {}", parseFailure.getMessage());
+                try (OutputStream os = conn.getOutputStream()) {
+                    os.write(body.getBytes(StandardCharsets.UTF_8));
                 }
-                log.info("Сообщение Telegram успешно отправлено (chat={}, message_id={})",
-                    resolvedChatId, messageId.isEmpty() ? "?" : messageId);
-                return messageId;
-            } else {
-                log.error("Ошибка Telegram API {}: {}", code, respBody);
+
+                int code = conn.getResponseCode();
+                String respBody = HttpUtil.readBody(conn, code);
+                if (code == 429 && !lastAttempt) {
+                    long waitMs = retryAfterMs(respBody);
+                    log.warn("Telegram 429 (chat={}): flood limit, повтор через {} мс", resolvedChatId, waitMs);
+                    if (!sleepInterruptible(waitMs)) return null;
+                    continue;
+                }
+                if (code == 200) {
+                    try {
+                        var json = new tools.jackson.databind.ObjectMapper().readTree(respBody);
+                        // Провал — только ЯВНОЕ ok=false (неверный chat_id, плохой parse_mode;
+                        // Bot API отвечает HTTP 200 и с ним): пустое/неразобранное тело —
+                        // по-прежнему «принято, id не разобран» (см. catch ниже).
+                        if (json != null && json.has("ok") && !json.path("ok").asBoolean(false)) {
+                            log.error("Telegram API ответил ok=false (chat={}): {}", resolvedChatId, respBody);
+                            return null;
+                        }
+                        String messageId = json == null ? ""
+                            : json.path("result").path("message_id").asString("");
+                        log.info("Сообщение Telegram успешно отправлено (chat={}, message_id={})",
+                            resolvedChatId, messageId.isEmpty() ? "?" : messageId);
+                        return messageId;
+                    } catch (Exception parseFailure) {
+                        // Отправка состоялась — это главное; неразобранный id только лишает нас
+                        // возможности адресовать пост потом, поэтому не превращаем в ошибку.
+                        log.warn("Telegram принял сообщение, но ответ не разобран: {}", parseFailure.getMessage());
+                        return "";
+                    }
+                } else {
+                    log.error("Ошибка Telegram API {}: {}", code, respBody);
+                    return null;
+                }
+            } catch (Exception e) {
+                if (!lastAttempt) {
+                    log.warn("Сбой отправки Telegram (chat={}): {} — повторяем один раз",
+                        resolvedChatId, e.getMessage());
+                    if (!sleepInterruptible(NETWORK_RETRY_MS)) return null;
+                    continue;
+                }
+                log.error("Не удалось отправить сообщение Telegram: {}", e.getMessage());
                 return null;
             }
+        }
+        return null;
+    }
+
+    /** Задержка перед повтором сетевого сбоя. Пакетно-приватная, в тестах подменяется. */
+    private static final long NETWORK_RETRY_MS = 2000;
+
+    /** retry_after из тела 429 (секунды): 1–30 с, по умолчанию 3. Лимиты длиннее означают,
+     *  что повтор имеет смысл оставить следующему тику пайплайна, а не спать в этом вызове. */
+    static long retryAfterMs(String body) {
+        try {
+            long seconds = new tools.jackson.databind.ObjectMapper().readTree(body)
+                .path("parameters").path("retry_after").asLong(3);
+            return Math.min(Math.max(seconds, 1), 30) * 1000;
         } catch (Exception e) {
-            log.error("Не удалось отправить сообщение Telegram: {}", e.getMessage());
-            return null;
+            return 3000;
+        }
+    }
+
+    private static boolean sleepInterruptible(long ms) {
+        try {
+            Thread.sleep(ms);
+            return true;
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            return false;
         }
     }
 

@@ -1,7 +1,6 @@
 package com.hh.gui.service;
 
 import com.hh.gui.ai.VacancyAiAnalyzer;
-import com.hh.gui.client.HhApiClient;
 import com.hh.gui.client.ScraperClient;
 import com.hh.gui.client.TelegramClient;
 import com.hh.gui.model.SearchJob;
@@ -17,27 +16,27 @@ import org.springframework.stereotype.Service;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 
 /**
- * Finds vacancy candidates and saves them as unprocessed rows. Three sources, one
- * job each: hh.ru RSS queries, a saved hh.ru search URL, and public Telegram
- * channels. What happens to a candidate afterwards — scraping, AI analysis,
- * deduplication, publishing — is nobody's business here.
+ * Finds vacancy candidates and saves them as unprocessed rows. Two sources, one
+ * job each: a saved hh.ru search URL and public Telegram channels. What happens
+ * to a candidate afterwards — scraping, AI analysis, deduplication, publishing —
+ * is nobody's business here.
  *
  * Split out of VacancyPipelineService as the third of the audit's three seams, and
- * the largest: three sources' worth of collection logic, previously interleaved with
- * the pipeline orchestration that calls it.
+ * the largest: the sources' collection logic, previously interleaved with
+ * the pipeline orchestration that calls it. (RSS-сбор удалён 24.10.2026: узкий
+ * проход из 20 карточек без текста, полностью покрываемый поиском по ссылке —
+ * вместе с HhApiClient и RSS-циклом шедулера.)
  *
- * The seven collaborators are inherent rather than accidental — discovery is the one
- * part of the system that genuinely talks to every external source: two HTTP clients,
- * a browser sidecar, the LLM prescreen that decides which listings are worth scraping
- * at all, plus persistence and metrics.
+ * The six collaborators are inherent rather than accidental — discovery is the one
+ * part of the system that genuinely talks to every external source: a browser
+ * sidecar, a Telegram web-client, the LLM prescreen that decides which listings
+ * are worth scraping at all, plus persistence and metrics.
  */
 @Service
 public class VacancyDiscovery {
@@ -48,7 +47,6 @@ public class VacancyDiscovery {
      *  visited rather than stopping early on already-seen results. */
     public static final int MAX_URL_SEARCH_PAGES = 10;
 
-    private final HhApiClient hhApiClient;
     private final ScraperClient scraperClient;
     private final TelegramClient telegramClient;
     private final VacancyAiAnalyzer aiAnalyzer;
@@ -68,11 +66,10 @@ public class VacancyDiscovery {
     private final Map<String, Integer> consecutiveChannelFailures = new java.util.concurrent.ConcurrentHashMap<>();
     private static final int CHANNEL_FAILURE_ESCALATION_THRESHOLD = 5;
 
-    public VacancyDiscovery(HhApiClient hhApiClient, ScraperClient scraperClient, TelegramClient telegramClient,
+    public VacancyDiscovery(ScraperClient scraperClient, TelegramClient telegramClient,
                             VacancyAiAnalyzer aiAnalyzer, VacancyRepository vacancyRepo,
                             TelegramMetrics telegramMetrics, ChannelEngagementTracker engagementTracker,
                             ScrapeCooldown scrapeCooldown, com.hh.gui.ai.AiMetrics metrics) {
-        this.hhApiClient = hhApiClient;
         this.scraperClient = scraperClient;
         this.telegramClient = telegramClient;
         this.aiAnalyzer = aiAnalyzer;
@@ -81,73 +78,6 @@ public class VacancyDiscovery {
         this.engagementTracker = engagementTracker;
         this.scrapeCooldown = scrapeCooldown;
         this.metrics = metrics;
-    }
-
-    /**
-     * RSS-discover new hh_ids for this job's queries, drop obviously-excluded
-     * titles before ever scraping them, and save the rest as scrape-pending stubs.
-     *
-     * Genuinely new hits go through the same cheap AI prescreen the URL-discovery
-     * path uses (title-only here — RSS carries no employer/salary/address) so a
-     * title the exclude-words filter can't catch still skips the full browser
-     * scrape + real AI analysis. Fails OPEN like the URL path: any prescreen
-     * problem means everything passes through unfiltered.
-     */
-    // No @Transactional — see discoverFromUrl above for why it was a no-op here.
-    public int fromRss(SearchJob job) {
-        if (job.queries == null || job.queries.isEmpty()) {
-            log.warn("Поисковые запросы не настроены для {} · {}", job.personName, job.searchName);
-            return 0;
-        }
-
-        Map<String, Vacancy> seen = new LinkedHashMap<>();
-        for (String query : job.queries) {
-            for (Vacancy v : hhApiClient.fetchRss(query, job.area, job.schedule, job.salaryMin)) {
-                seen.putIfAbsent(v.getHhId(), v);
-            }
-        }
-
-        List<Vacancy> filtered = filterExcluded(new ArrayList<>(seen.values()), job.excludeWords);
-        Set<String> knownHhIds = vacancyRepo.findExistingHhIds(
-            filtered.stream().map(Vacancy::getHhId).toList(), job.personName, job.searchName);
-        List<Vacancy> fresh = filtered.stream().filter(v -> !knownHhIds.contains(v.getHhId())).toList();
-        if (fresh.isEmpty()) return 0;
-
-        Map<String, VacancyAiAnalyzer.AiResult> prescreen = aiAnalyzer.prescreenHits(
-            fresh.stream()
-                .map(v -> new ScraperClient.SearchHit(v.getHhId(), v.getTitle(), null, null, null, null, v.getUrl()))
-                .toList(), job).stream()
-            .collect(Collectors.toMap(VacancyAiAnalyzer.AiResult::hhId, r -> r, (a, b) -> a));
-
-        int saved = 0;
-        for (Vacancy v : fresh) {
-            VacancyAiAnalyzer.AiResult verdict = prescreen.get(v.getHhId());
-            boolean passed = verdict == null || !"no".equals(verdict.verdict());
-            v.setPerson(job.personName);
-            v.setSearchName(job.searchName);
-            v.setUserId(job.isGlobal ? null : job.userId);
-            v.setSearchId(job.searchId);
-            v.setRemote(job.isRemote());
-            v.setSourceQuery(job.searchName);
-            if (passed) {
-                v.setScrapeStatus("pending");
-            } else {
-                // Saved anyway so it counts as "already seen" on future runs — just
-                // never scraped or fully analyzed (mirrors discoverFromUrl).
-                v.setAiVerdict("no");
-                v.setAiScore(0);
-                v.setAiReason("Прескрининг: " + verdict.reason());
-                v.setScrapeStatus("skipped");
-            }
-            try {
-                vacancyRepo.save(v);
-                saved++;
-            } catch (Exception e) {
-                log.warn("Не удалось сохранить {} ({} · {}): {}", v.getHhId(), job.personName, job.searchName, e.getMessage());
-            }
-        }
-        metrics.recordVacanciesCollected("hh.ru", saved);
-        return saved;
     }
 
     /**
@@ -473,13 +403,13 @@ public class VacancyDiscovery {
             try {
                 vacancyRepo.save(v);
                 saved++;
-                // Path A (source="hh") has a real hh.ru numeric hh_id, which
-                // channelFromHhId never matches (it only recognizes the Path B
-                // "tg_<channel>_<id>" format) — recordCollected no-ops on the null it
-                // returns, so without this branch Path A candidates found via Telegram
-                // were invisible to every collection metric: not counted here (wrong
-                // format) AND not counted by fromRss/fromUrl's recordVacanciesCollected
-                // either (this save happens here, not there).
+                    // Path A (source="hh") has a real hh.ru numeric hh_id, which
+                    // channelFromHhId never matches (it only recognizes the Path B
+                    // "tg_<channel>_<id>" format) — recordCollected no-ops on the null it
+                    // returns, so without this branch Path A candidates found via Telegram
+                    // were invisible to every collection metric: not counted here (wrong
+                    // format) AND not counted by fromUrl's recordVacanciesCollected
+                    // either (this save happens here, not there).
                 if ("hh".equals(v.getSource())) {
                     metrics.recordVacanciesCollected("hh.ru", 1);
                 } else {

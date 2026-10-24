@@ -33,8 +33,8 @@ import java.util.Optional;
  * 10-minute interval and hardcoded search profile, one with a 2-hour cron and
  * YAML-based profile) that ran concurrently against different configs.
  *
- * Both triggers re-read RuntimeConfig on every firing, so pipelineIntervalMs and
- * dailyCron settings from the runtime settings API actually take effect.
+ * Triggers re-read RuntimeConfig on every firing, so the dailyCron setting
+ * from the runtime settings API actually takes effect.
  */
 @Configuration
 public class PipelineScheduler implements SchedulingConfigurer {
@@ -180,7 +180,6 @@ public class PipelineScheduler implements SchedulingConfigurer {
 
     @Override
     public void configureTasks(ScheduledTaskRegistrar registrar) {
-        registrar.addTriggerTask(this::runPipeline, this::nextPipelineExecution);
         registrar.addTriggerTask(this::runDailyAnalysis, this::nextDailyExecution);
         registrar.addTriggerTask(this::runDueUrlSearches, new PeriodicTrigger(Duration.ofMillis(URL_SEARCH_CHECK_INTERVAL_MS)));
         registrar.addTriggerTask(this::runDueTelegramSearches, new PeriodicTrigger(Duration.ofMillis(URL_SEARCH_CHECK_INTERVAL_MS)));
@@ -431,52 +430,9 @@ public class PipelineScheduler implements SchedulingConfigurer {
         }
     }
 
-    private Instant nextPipelineExecution(TriggerContext context) {
-        Instant last = context.lastCompletion();
-        Instant base = last != null ? last : Instant.now();
-        return base.plusMillis(runtimeConfig.getPipelineIntervalMs());
-    }
-
     private Instant nextDailyExecution(TriggerContext context) {
         Trigger trigger = new CronTrigger(runtimeConfig.getDailyCron());
         return trigger.nextExecution(context);
-    }
-
-    private void runPipeline() {
-        if (schemaNotReady()) return;
-        // RSS выключен настройкой (по умолчанию с 24.09.2026) — цикл молчит, без записей в лог
-        // каждые 10 минут; поиски по ссылке и Telegram идут своими триггерами.
-        if (!runtimeConfig.isRssEnabled()) return;
-        if (!runtimeConfig.isPipelineEnabled()) {
-            log.debug("Автозапуск пайплайна отключён в настройках");
-            return;
-        }
-        if (aiAnalyzer.isRateLimited()) {
-            log.info("Запланированный пайплайн пропущен — активен период охлаждения");
-            return;
-        }
-        log.info("=== Начало запланированного пайплайна ===");
-        // URL-only searches (sourceUrl set, no RSS queries) are driven by runDueUrlSearches
-        // on their own run_interval_hours instead — running them here too on every RSS-cycle
-        // interval would just repeat discoverNew's "no queries configured" no-op.
-        List<SearchJob> jobs = profileFactory.build().stream()
-            .filter(j -> j.queries != null && !j.queries.isEmpty())
-            .toList();
-        if (jobs.isEmpty()) {
-            log.info("Поисков по запросам нет — RSS-цикл пропущен (поиски по ссылке идут своим расписанием, "
-                + "см. runDueUrlSearches)");
-        }
-        for (SearchJob job : jobs) {
-            try {
-                // true = let small fresh AI backlogs accumulate across ticks (see shouldDeferAnalysis)
-                VacancyPipelineService.PipelineResult result = pipelineService.runFullPipeline(job, true);
-                log.info("Пайплайн {} · {} завершён: собрано={}, проанализировано={}, одобрено={}",
-                    job.personName, job.searchName, result.collected, result.analyzed, result.approved);
-            } catch (Exception e) {
-                log.error("Пайплайн {} · {} завершился ошибкой: {}", job.personName, job.searchName, e.getMessage(), e);
-            }
-        }
-        log.info("=== Конец запланированного пайплайна ===");
     }
 
     private void runDailyAnalysis() {
@@ -503,8 +459,8 @@ public class PipelineScheduler implements SchedulingConfigurer {
 
     /**
      * Checks every search (personal or global) with a saved source_url + run_interval_hours
-     * and runs the ones whose interval has elapsed since last_run_at. Independent of the
-     * RSS pipeline's single global pipelineIntervalMs — each such search picks its own cadence.
+     * and runs the ones whose interval has elapsed since last_run_at — each search picks
+     * its own cadence.
      *
      * Additionally confined to the configured scrape window (see withinWindow): this is by
      * far the heaviest hh.ru traffic the app generates — a walk over the search-result pages

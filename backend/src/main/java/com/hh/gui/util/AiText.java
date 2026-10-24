@@ -55,8 +55,29 @@ public final class AiText {
     }
 
     private static String fixHomoglyphs(String word) {
-        StringBuilder sb = new StringBuilder(word.length());
-        for (char ch : word.toCharArray()) sb.append(HOMOGLYPHS.getOrDefault(ch, ch));
+        return foldToCyrillic(word);
+    }
+
+    /** Обратное направление: кириллические двойники — в латиницу (у→y, е→e, о→o, ...).
+     *  Нужно enum-полям ответа модели (verdict/noveltyColor), чьи допустимые значения
+     *  латинские: «yеs» с кириллической «е» чинится только так. */
+    private static final Map<Character, Character> CYRILLIC_TO_LATIN = Map.ofEntries(
+        Map.entry('а', 'a'), Map.entry('е', 'e'), Map.entry('о', 'o'), Map.entry('р', 'p'),
+        Map.entry('с', 'c'), Map.entry('х', 'x'), Map.entry('у', 'y'), Map.entry('к', 'k'));
+
+    /** Все латинские двойники — в кириллицу. Публично: нормализация verdict/noveltyColor в
+     *  VacancyAiAnalyzer прогоняет значение через это и таблицу синонимов («да»→yes), а у
+     *  синонимов ключи кириллические. */
+    public static String foldToCyrillic(String s) {
+        StringBuilder sb = new StringBuilder(s.length());
+        for (char ch : s.toCharArray()) sb.append(HOMOGLYPHS.getOrDefault(ch, ch));
+        return sb.toString();
+    }
+
+    /** Все кириллические двойники — в латиницу (см. CYRILLIC_TO_LATIN). */
+    public static String foldToLatin(String s) {
+        StringBuilder sb = new StringBuilder(s.length());
+        for (char ch : s.toCharArray()) sb.append(CYRILLIC_TO_LATIN.getOrDefault(ch, ch));
         return sb.toString();
     }
 }

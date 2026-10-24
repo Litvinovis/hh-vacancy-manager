@@ -2,7 +2,6 @@ package com.hh.gui.service;
 
 import com.hh.gui.ai.AiMetrics;
 import com.hh.gui.ai.VacancyAiAnalyzer;
-import com.hh.gui.client.HhApiClient;
 import com.hh.gui.client.ScraperClient;
 import com.hh.gui.client.ScraperClient.ScrapeResult;
 import com.hh.gui.client.TelegramClient;
@@ -198,32 +197,27 @@ public class VacancyPipelineService {
     protected PipelineResult runFullPipelineLocked(SearchJob job, boolean deferSmallAiBatches) {
         log.info("=== Пайплайн: {} · {} ===", job.personName, job.searchName);
 
-        // URL-only search (sourceUrl set, no RSS queries): the only way to discover
-        // anything is the saved URL. Without this, a manual "run" of such a search
-        // logged "queries not configured" and silently collected nothing — discovery
-        // happened only on the runDueUrlSearches schedule.
+        // Discovery — только сохранённая ссылка hh.ru (и Telegram-каналы, отдельным
+        // расписанием): RSS-сбор удалён 24.10.2026 — узкий проход из 20 карточек без
+        // текста, всё, что от него было нужно, давно покрывает поиск по ссылке. Без
+        // ссылки manual "run" раньше молча не собирал ничего — оставляем явный лог.
         int discovered;
-        boolean urlOnly = (job.queries == null || job.queries.isEmpty())
-            && job.sourceUrl != null && !job.sourceUrl.isBlank();
-        if (urlOnly) {
+        if (job.sourceUrl != null && !job.sourceUrl.isBlank()) {
             discovered = timed("url", "discover", () -> discovery.fromUrl(job, job.sourceUrl, VacancyDiscovery.MAX_URL_SEARCH_PAGES, urlScrapeBacklogCap()));
             log.info("Шаг 1 по ссылке ({} · {}): {} новых вакансий", job.personName, job.searchName, discovered);
-        } else if (runtimeConfig.isRssEnabled()) {
-            discovered = timed("rss", "discover", () -> discovery.fromRss(job));
-            log.info("Шаг 1 ({} · {}): {} новых вакансий", job.personName, job.searchName, discovered);
         } else {
             discovered = 0;
-            log.info("Шаг 1 ({} · {}): поиск по RSS выключен в настройках — сбор пропущен", job.personName, job.searchName);
+            log.info("Шаг 1 ({} · {}): нет сохранённой ссылки hh.ru — сбор пропущен", job.personName, job.searchName);
         }
 
-        int scraped = timed(urlOnly ? "url" : "rss", "scrape", () -> scrapePending(job));
+        int scraped = timed("url", "scrape", () -> scrapePending(job));
         log.info("Шаг 2 ({} · {}): скрейпинг обработал {} записей", job.personName, job.searchName, scraped);
 
         int analyzed;
         if (deferSmallAiBatches && shouldDeferAnalysis(job)) {
             analyzed = 0;
         } else {
-            analyzed = timed(urlOnly ? "url" : "rss", "analyze", () -> analyzePending(job, runtimeConfig.getMaxPerRun()));
+            analyzed = timed("url", "analyze", () -> analyzePending(job, runtimeConfig.getMaxPerRun()));
             log.info("Шаг 3 ({} · {}): {} вакансий проанализировано AI", job.personName, job.searchName, analyzed);
         }
 
@@ -854,32 +848,50 @@ public class VacancyPipelineService {
         return totalAnalyzed;
     }
 
-    /** Analyze ALL scraped-but-pending vacancies for this job (no cap). */
+    /**
+     * Analyze ALL scraped-but-pending vacancies for this job (no cap).
+     *
+     * Берёт тот же per-job лок, что и runFullPipeline: дневной cron (PipelineScheduler)
+     * вызывает это напрямую, и его пересечение с очередным 10-минутным тиком по тому же
+     * поиску заставляло оба гонять один и тот же findPending-батч до апдейта — двойной
+     * расход токенов LLM и лишние 429 из free-пула. ReentrantLock, поэтому вызов из
+     * reanalyzeJob (уже под локом) проходит как раньше.
+     */
     public int analyzeAllPending(SearchJob job) {
-        int totalAnalyzed = 0;
-        int batchNum = 0;
-        while (true) {
-            if (aiAnalyzer.isRateLimited()) {
-                log.info("analyzeAllPending остановлен ({} · {}) — cooldown после {} пакетов",
-                    job.personName, job.searchName, batchNum);
-                break;
-            }
-            List<Vacancy> batch = vacancyRepo.findPending(job.personName, job.searchName, analysisFetchSize());
-            if (batch.isEmpty()) break;
-
-            int batchAnalyzed = analyzeBatchWithDedup(batch, job);
-            if (batchAnalyzed == 0) {
-                // Zero progress on a non-empty batch (provider down, or every response
-                // unusable) — findPending would return the exact same rows again, so
-                // looping on would just re-send the same batch until rate-limited.
-                log.warn("analyzeAllPending остановлен ({} · {}) — пакет из {} вакансий не дал прогресса",
-                    job.personName, job.searchName, batch.size());
-                break;
-            }
-            totalAnalyzed += batchAnalyzed;
-            batchNum++;
+        java.util.concurrent.locks.ReentrantLock lock = lockFor(job);
+        if (!lock.tryLock()) {
+            log.info("analyzeAllPending ({} · {}) пропущен — пайплайн этого поиска уже выполняется",
+                job.personName, job.searchName);
+            return 0;
         }
-        return totalAnalyzed;
+        try {
+            int totalAnalyzed = 0;
+            int batchNum = 0;
+            while (true) {
+                if (aiAnalyzer.isRateLimited()) {
+                    log.info("analyzeAllPending остановлен ({} · {}) — cooldown после {} пакетов",
+                        job.personName, job.searchName, batchNum);
+                    break;
+                }
+                List<Vacancy> batch = vacancyRepo.findPending(job.personName, job.searchName, analysisFetchSize());
+                if (batch.isEmpty()) break;
+
+                int batchAnalyzed = analyzeBatchWithDedup(batch, job);
+                if (batchAnalyzed == 0) {
+                    // Zero progress on a non-empty batch (provider down, or every response
+                    // unusable) — findPending would return the exact same rows again, so
+                    // looping on would just re-send the same batch until rate-limited.
+                    log.warn("analyzeAllPending остановлен ({} · {}) — пакет из {} вакансий не дал прогресса",
+                        job.personName, job.searchName, batch.size());
+                    break;
+                }
+                totalAnalyzed += batchAnalyzed;
+                batchNum++;
+            }
+            return totalAnalyzed;
+        } finally {
+            lock.unlock();
+        }
     }
 
     /**

@@ -300,8 +300,8 @@ class PipelineSchedulerTest {
     void configureTasks_registersEveryTrigger() {
         // 20.09.2026: очередь VK и контент-план были смержены без своих триггеров (правка
         // планировщика не записалась), и этот тест их не поймал — число не менялось.
-        // Теперь 18: +runVkQueue, +runContentPlan.
-        assertEquals(19, tasks().size(),
+        // 24.10.2026: 19 → 18 — RSS-цикл (runPipeline) удалён вместе с RSS-сбором.
+        assertEquals(18, tasks().size(),
             "все триггеры должны быть зарегистрированы — молча пропавший = молча не работающая функция");
     }
 
@@ -531,19 +531,8 @@ class PipelineSchedulerTest {
     }
 
     // ── какие поиски попадают в основной прогон ──
-
-    @Test
-    void mainPipeline_skipsUrlOnlySearches_theyRunOnTheirOwnInterval() {
-        config.setRssEnabled(true);
-        SearchJob rss = job("С запросами", 1L, "оператор");
-        SearchJob urlOnly = job("Только ссылка", 2L);
-        profiles.jobs = List.of(rss, urlOnly);
-
-        runAllTasks();
-
-        assertEquals(List.of("С запросами"), pipeline.fullRuns,
-            "поиск без RSS-запросов в основном цикле — это гарантированный no-op, он идёт своим расписанием");
-    }
+    // (RSS-цикл удалён 24.10.2026 вместе с fromRss — поиски идут только по ссылке и из
+    //  Telegram, каждое своим расписанием; отдельные тесты больше не нужны.)
 
     // ── isDue ──
 
@@ -592,30 +581,8 @@ class PipelineSchedulerTest {
     }
 
     // ── изоляция ошибок ──
-
-    @Test
-    void rssDisabledByDefault_cycleRunsNothing() {
-        // С 24.09.2026 RSS выключен настройкой по умолчанию: поиск с запросами в базе
-        // остаётся, но цикл его не запускает, пока rssEnabled не включат.
-        profiles.jobs = List.of(job("С запросами", 1L, "оператор"));
-
-        runAllTasks();
-
-        assertTrue(pipeline.fullRuns.isEmpty(), "RSS выключен — цикл молчит");
-    }
-
-    @Test
-    void oneFailingSearch_doesNotStopTheRest() {
-        config.setRssEnabled(true);
-        pipeline.failOn.add("Сломанный");
-        profiles.jobs = List.of(
-            job("Первый", 1L, "оператор"), job("Сломанный", 2L, "оператор"), job("Третий", 3L, "оператор"));
-
-        runAllTasks();
-
-        assertEquals(List.of("Первый", "Сломанный", "Третий"), pipeline.fullRuns,
-            "падение одного поиска не должно отменять остальные");
-    }
+    // (Тесты изоляции ошибок RSS-цикла удалены вместе с самим циклом 24.10.2026;
+    //  изоляция ошибок поиска по ссылке покрывается failingUrlSearch_stillStampsLastRunAt.)
 
     @Test
     void failingUrlSearch_stillStampsLastRunAt() {
@@ -677,27 +644,8 @@ class PipelineSchedulerTest {
     // ── триггеры читают настройки на каждом срабатывании ──
 
     @Test
-    void pipelineTrigger_rereadsIntervalFromSettings_notFrozenAtStartup() {
-        // Ради этого триггеры и заданы функциями вместо @Scheduled: смена интервала
-        // в настройках должна действовать без перезапуска приложения.
-        Trigger trigger = tasks().get(0).getTrigger();
-        Instant completed = Instant.parse("2026-08-16T10:00:00Z");
-        SimpleTriggerContext context = new SimpleTriggerContext();
-        context.update(completed, completed, completed);
-
-        config.setPipelineIntervalMs(600_000);
-        Instant afterTenMinutes = trigger.nextExecution(context);
-        config.setPipelineIntervalMs(1_800_000);
-        Instant afterThirtyMinutes = trigger.nextExecution(context);
-
-        assertEquals(completed.plusMillis(600_000), afterTenMinutes);
-        assertEquals(completed.plusMillis(1_800_000), afterThirtyMinutes,
-            "новый интервал должен применяться сразу, а не после рестарта");
-    }
-
-    @Test
     void dailyTrigger_usesCronFromSettings() {
-        Trigger trigger = tasks().get(1).getTrigger();
+        Trigger trigger = tasks().get(0).getTrigger();
         config.setDailyCron("0 0 6 * * *");
         SimpleTriggerContext context = new SimpleTriggerContext();
         Instant completed = Instant.parse("2026-08-16T10:00:00Z");
@@ -720,7 +668,7 @@ class PipelineSchedulerTest {
         // от него, а не скоро — на каждом рестарте (а деплоев в день много) подписчики/
         // просмотры/реакции в Grafana показывали "No data" до 6 часов. Проверяем, что
         // первое срабатывание сдвинуто на initialDelay (~5 мин), а не на "сейчас".
-        Trigger trigger = tasks().get(9).getTrigger();
+        Trigger trigger = tasks().get(8).getTrigger();
         Instant now = Instant.now();
         SimpleTriggerContext freshContext = new SimpleTriggerContext(); // как сразу после регистрации, ничего ещё не выполнялось
 

@@ -956,4 +956,102 @@ class VacancyAiAnalyzerTest {
         assertEquals("b:free", results.get(0).model(), "вердикт помечен моделью, которая реально ответила");
         assertEquals("0", health.snapshot().get("b:free").outcomes, "вторая вакансия пропущена — ответ засчитан как сбой");
     }
+
+    // ── нормализация enum-полей: регистр, смешанные алфавиты, русские синонимы ──
+
+    private String normalizeVerdict(String raw) throws Exception {
+        var method = VacancyAiAnalyzer.class.getDeclaredMethod("normalizeVerdict", String.class);
+        method.setAccessible(true);
+        return (String) method.invoke(null, raw);
+    }
+
+    private String normalizeNoveltyColor(String raw) throws Exception {
+        var method = VacancyAiAnalyzer.class.getDeclaredMethod("normalizeNoveltyColor", String.class);
+        method.setAccessible(true);
+        return (String) method.invoke(null, raw);
+    }
+
+    @Test
+    void normalizeVerdict_validPassesThrough() throws Exception {
+        assertEquals("yes", normalizeVerdict("yes"));
+        assertEquals("no", normalizeVerdict("no"));
+        assertEquals("fraud", normalizeVerdict("fraud"));
+    }
+
+    @Test
+    void normalizeVerdict_caseAndWhitespace() throws Exception {
+        assertEquals("yes", normalizeVerdict("Yes"));
+        assertEquals("yes", normalizeVerdict(" YES "));
+        assertEquals("no", normalizeVerdict("No"));
+    }
+
+    @Test
+    void normalizeVerdict_russianSynonyms() throws Exception {
+        assertEquals("yes", normalizeVerdict("да"));
+        assertEquals("no", normalizeVerdict("нет"));
+        assertEquals("fraud", normalizeVerdict("обман"));
+    }
+
+    @Test
+    void normalizeVerdict_mixedScriptFoldsToCyrillicThenSynonym() throws Exception {
+        // Живой случай 24.10.2026: кириллическая «д» + латинская «a» молча давали 'no'.
+        assertEquals("yes", normalizeVerdict("дa"));
+    }
+
+    @Test
+    void normalizeVerdict_mixedScriptFoldsToLatin() throws Exception {
+        // Латинская «y» и «s» вокруг кириллической «е» — чинится обратным фолдингом.
+        assertEquals("yes", normalizeVerdict("yеs"));
+    }
+
+    @Test
+    void normalizeVerdict_unrecognized_returnsNull() throws Exception {
+        assertNull(normalizeVerdict("может быть"));
+        assertNull(normalizeVerdict(""));
+    }
+
+    @Test
+    void normalizeNoveltyColor_validAndEmpty() throws Exception {
+        assertEquals("red", normalizeNoveltyColor("red"));
+        assertEquals("yellow", normalizeNoveltyColor("YELLOW"));
+        assertEquals("", normalizeNoveltyColor(""));
+        assertEquals("", normalizeNoveltyColor(null));
+    }
+
+    @Test
+    void normalizeNoveltyColor_russianSynonyms() throws Exception {
+        assertEquals("red", normalizeNoveltyColor("красный"));
+        assertEquals("yellow", normalizeNoveltyColor("жёлтый"));
+        assertEquals("yellow", normalizeNoveltyColor("желтый"));
+        assertEquals("green", normalizeNoveltyColor("зелёный"));
+    }
+
+    @Test
+    void normalizeNoveltyColor_mixedScript() throws Exception {
+        // «Жeлтый» — заглавная Ж, латинская e, кириллица дальше: живой случай из лога 21.10.
+        assertEquals("yellow", normalizeNoveltyColor("Жeлтый"));
+        assertEquals("green", normalizeNoveltyColor("зелeный"));
+    }
+
+    @Test
+    void normalizeNoveltyColor_unrecognized_returnsNull() throws Exception {
+        assertNull(normalizeNoveltyColor("синий"));
+        assertNull(normalizeNoveltyColor("orange"));
+    }
+
+    @Test
+    void parseResponse_mixedScriptVerdicts_normalizedInsteadOfRejected() throws Exception {
+        var method = VacancyAiAnalyzer.class.getDeclaredMethod("parseResponse", String.class, List.class);
+        method.setAccessible(true);
+        String content = "[{\"id\":\"1\",\"score\":80,\"verdict\":\"дa\",\"reason\":\"ок\","
+            + "\"noveltyColor\":\"Жeлтый\",\"noveltyNote\":\"стандартная работа\"}]";
+        String envelope = "{\"choices\":[{\"message\":{\"content\":"
+            + "\"" + content.replace("\"", "\\\"") + "\"}}]}";
+        @SuppressWarnings("unchecked")
+        var results = (List<com.hh.gui.ai.VacancyAiAnalyzer.AiResult>) method.invoke(analyzer, envelope, List.of());
+        assertEquals(1, results.size());
+        assertEquals("yes", results.get(0).verdict(), "«дa» — это yes, а не молчаливый reject");
+        assertEquals("yellow", results.get(0).noveltyColor(), "«Жeлтый» сохраняется как yellow, поле не теряется");
+        assertEquals("стандартная работа", results.get(0).noveltyNote());
+    }
 }

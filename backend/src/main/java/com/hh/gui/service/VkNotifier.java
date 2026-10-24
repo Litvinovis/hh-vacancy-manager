@@ -34,6 +34,21 @@ public class VkNotifier {
 
     void setSleeper(Sleeper sleeper) { this.sleeper = sleeper; }
 
+    /** Транзиентные коды ошибок VK API, при которых один повтор имеет смысл:
+     *  6 — слишком много запросов в секунду, 9 — flood control, 10 — внутренняя ошибка VK. */
+    private static final java.util.Set<Integer> TRANSIENT_VK_ERRORS = java.util.Set.of(6, 9, 10);
+    private static final long CALL_RETRY_MS = 1500;
+
+    /** Метрики вызовов VK; required=false — тесты создают notifier через new без контекста. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private io.micrometer.core.instrument.MeterRegistry registry;
+
+    private void count(String method, String outcome) {
+        if (registry != null) {
+            registry.counter("vk_api_requests_total", "method", method, "outcome", outcome).increment();
+        }
+    }
+
     @Value("${app.vk.api-base-url:https://api.vk.com}")
     private String apiBaseUrl;
 
@@ -291,45 +306,88 @@ public class VkNotifier {
 
     void setVkIdTokens(VkIdTokenService vkIdTokens) { this.vkIdTokens = vkIdTokens; }
 
-    /** POST к методу VK API; null при любой ошибке (сетевой, HTTP или в теле ответа). */
+    /** POST к методу VK API; null при любой ошибке (сетевой, HTTP или в теле ответа).
+     *  Один повтор на транзиентные сбои: сетевые исключения и коды ошибок 6/9/10 —
+     *  живой случай 19–21.10.2026: Connect timed out и VK 500 при загрузке картинок. */
     private Map<?, ?> call(String method, Map<String, String> params) {
         return callWithToken(method, params, accessToken);
     }
 
     private Map<?, ?> callWithToken(String method, Map<String, String> params, String token) {
+        for (int attempt = 1; attempt <= 2; attempt++) {
+            boolean lastAttempt = attempt == 2;
+            try {
+                StringBuilder body = new StringBuilder();
+                for (var e : params.entrySet()) {
+                    if (body.length() > 0) body.append('&');
+                    body.append(URLEncoder.encode(e.getKey(), StandardCharsets.UTF_8)).append('=')
+                        .append(URLEncoder.encode(e.getValue(), StandardCharsets.UTF_8));
+                }
+                body.append("&access_token=").append(URLEncoder.encode(token, StandardCharsets.UTF_8))
+                    .append("&v=").append(URLEncoder.encode(apiVersion, StandardCharsets.UTF_8));
+                HttpURLConnection conn = (HttpURLConnection) new URL(apiBaseUrl + "/method/" + method).openConnection();
+                conn.setRequestMethod("POST");
+                conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
+                conn.setConnectTimeout(15000);
+                conn.setReadTimeout(30000);
+                conn.setDoOutput(true);
+                try (OutputStream os = conn.getOutputStream()) {
+                    os.write(body.toString().getBytes(StandardCharsets.UTF_8));
+                }
+                int code = conn.getResponseCode();
+                String respBody = HttpUtil.readBody(conn, code);
+                if (code != 200) {
+                    count(method, "http_" + code);
+                    log.error("Ошибка VK API {} ({}): {}", code, method, respBody);
+                    return null;
+                }
+                Map<?, ?> parsed = mapper.readValue(respBody, Map.class);
+                if (parsed.containsKey("error")) {
+                    Integer errorCode = errorCode(parsed);
+                    if (!lastAttempt && errorCode != null && TRANSIENT_VK_ERRORS.contains(errorCode)) {
+                        count(method, "retry");
+                        log.warn("VK API {} вернул транзиентную ошибку {} — повторяем через {} мс", method, errorCode, CALL_RETRY_MS);
+                        if (!sleepInterruptible(CALL_RETRY_MS)) return null;
+                        continue;
+                    }
+                    count(method, "error");
+                    log.error("VK API {} вернул ошибку: {}", method, respBody);
+                    return null;
+                }
+                count(method, "ok");
+                return parsed;
+            } catch (Exception e) {
+                if (!lastAttempt) {
+                    count(method, "retry");
+                    log.warn("Сбой вызова VK API {}: {} — повторяем через {} мс", method, e.getMessage(), CALL_RETRY_MS);
+                    if (!sleepInterruptible(CALL_RETRY_MS)) return null;
+                    continue;
+                }
+                count(method, "error");
+                log.error("Не удалось вызвать VK API {}: {}", method, e.getMessage());
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private static Integer errorCode(Map<?, ?> parsed) {
         try {
-            StringBuilder body = new StringBuilder();
-            for (var e : params.entrySet()) {
-                if (body.length() > 0) body.append('&');
-                body.append(URLEncoder.encode(e.getKey(), StandardCharsets.UTF_8)).append('=')
-                    .append(URLEncoder.encode(e.getValue(), StandardCharsets.UTF_8));
-            }
-            body.append("&access_token=").append(URLEncoder.encode(token, StandardCharsets.UTF_8))
-                .append("&v=").append(URLEncoder.encode(apiVersion, StandardCharsets.UTF_8));
-            HttpURLConnection conn = (HttpURLConnection) new URL(apiBaseUrl + "/method/" + method).openConnection();
-            conn.setRequestMethod("POST");
-            conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
-            conn.setConnectTimeout(15000);
-            conn.setReadTimeout(30000);
-            conn.setDoOutput(true);
-            try (OutputStream os = conn.getOutputStream()) {
-                os.write(body.toString().getBytes(StandardCharsets.UTF_8));
-            }
-            int code = conn.getResponseCode();
-            String respBody = HttpUtil.readBody(conn, code);
-            if (code != 200) {
-                log.error("Ошибка VK API {} ({}): {}", code, method, respBody);
-                return null;
-            }
-            Map<?, ?> parsed = mapper.readValue(respBody, Map.class);
-            if (parsed.containsKey("error")) {
-                log.error("VK API {} вернул ошибку: {}", method, respBody);
-                return null;
-            }
-            return parsed;
+            Object error = parsed.get("error");
+            Object code = error instanceof Map<?, ?> m ? m.get("error_code") : null;
+            return code instanceof Number n ? n.intValue() : null;
         } catch (Exception e) {
-            log.error("Не удалось вызвать VK API {}: {}", method, e.getMessage());
             return null;
+        }
+    }
+
+    private boolean sleepInterruptible(long ms) {
+        try {
+            sleeper.sleep(ms);
+            return true;
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            return false;
         }
     }
 
