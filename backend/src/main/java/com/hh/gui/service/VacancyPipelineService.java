@@ -854,32 +854,50 @@ public class VacancyPipelineService {
         return totalAnalyzed;
     }
 
-    /** Analyze ALL scraped-but-pending vacancies for this job (no cap). */
+    /**
+     * Analyze ALL scraped-but-pending vacancies for this job (no cap).
+     *
+     * Берёт тот же per-job лок, что и runFullPipeline: дневной cron (PipelineScheduler)
+     * вызывает это напрямую, и его пересечение с очередным 10-минутным тиком по тому же
+     * поиску заставляло оба гонять один и тот же findPending-батч до апдейта — двойной
+     * расход токенов LLM и лишние 429 из free-пула. ReentrantLock, поэтому вызов из
+     * reanalyzeJob (уже под локом) проходит как раньше.
+     */
     public int analyzeAllPending(SearchJob job) {
-        int totalAnalyzed = 0;
-        int batchNum = 0;
-        while (true) {
-            if (aiAnalyzer.isRateLimited()) {
-                log.info("analyzeAllPending остановлен ({} · {}) — cooldown после {} пакетов",
-                    job.personName, job.searchName, batchNum);
-                break;
-            }
-            List<Vacancy> batch = vacancyRepo.findPending(job.personName, job.searchName, analysisFetchSize());
-            if (batch.isEmpty()) break;
-
-            int batchAnalyzed = analyzeBatchWithDedup(batch, job);
-            if (batchAnalyzed == 0) {
-                // Zero progress on a non-empty batch (provider down, or every response
-                // unusable) — findPending would return the exact same rows again, so
-                // looping on would just re-send the same batch until rate-limited.
-                log.warn("analyzeAllPending остановлен ({} · {}) — пакет из {} вакансий не дал прогресса",
-                    job.personName, job.searchName, batch.size());
-                break;
-            }
-            totalAnalyzed += batchAnalyzed;
-            batchNum++;
+        java.util.concurrent.locks.ReentrantLock lock = lockFor(job);
+        if (!lock.tryLock()) {
+            log.info("analyzeAllPending ({} · {}) пропущен — пайплайн этого поиска уже выполняется",
+                job.personName, job.searchName);
+            return 0;
         }
-        return totalAnalyzed;
+        try {
+            int totalAnalyzed = 0;
+            int batchNum = 0;
+            while (true) {
+                if (aiAnalyzer.isRateLimited()) {
+                    log.info("analyzeAllPending остановлен ({} · {}) — cooldown после {} пакетов",
+                        job.personName, job.searchName, batchNum);
+                    break;
+                }
+                List<Vacancy> batch = vacancyRepo.findPending(job.personName, job.searchName, analysisFetchSize());
+                if (batch.isEmpty()) break;
+
+                int batchAnalyzed = analyzeBatchWithDedup(batch, job);
+                if (batchAnalyzed == 0) {
+                    // Zero progress on a non-empty batch (provider down, or every response
+                    // unusable) — findPending would return the exact same rows again, so
+                    // looping on would just re-send the same batch until rate-limited.
+                    log.warn("analyzeAllPending остановлен ({} · {}) — пакет из {} вакансий не дал прогресса",
+                        job.personName, job.searchName, batch.size());
+                    break;
+                }
+                totalAnalyzed += batchAnalyzed;
+                batchNum++;
+            }
+            return totalAnalyzed;
+        } finally {
+            lock.unlock();
+        }
     }
 
     /**
