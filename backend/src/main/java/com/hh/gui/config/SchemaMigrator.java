@@ -140,6 +140,7 @@ public class SchemaMigrator implements ApplicationRunner {
 
         backfillDedupKeys();
         backfillSearchKind();
+        cleanupOrphans();
         // The database shipped with no sqlite_stat1 at all, so every plan was chosen from
         // SQLite's built-in guesses. With stats the dedup_key subquery in
         // findUnnotifiedApproved switches from idx_vac_notified to idx_vac_dedup_key —
@@ -175,6 +176,32 @@ public class SchemaMigrator implements ApplicationRunner {
             log.error("Миграция данных: бэкфилл search_kind не удался: {}", e.getMessage());
         }
     }
+
+    /**
+     * Разовая чистка строк, оставшихся без родителя: пока foreign_keys был выключен
+     * (см. application.yml), ON DELETE CASCADE в schema.sql не выполнялся, и ежедневный
+     * retention-свип deleteOlderThan годами удалял только vacancies, копя осиротевшие
+     * tags/history/vacancy_clicks/user_vacancy_status. С включённым pragma новые сироты
+     * не образуются; это убирает накопленное. EXISTS-проверка делает каждый бут после
+     * первого дешёвым — DELETE не запускается вовсе, пока сирот нет.
+     */
+    private void cleanupOrphans() {
+        for (String table : new String[]{"tags", "history", "vacancy_clicks", "user_vacancy_status"}) {
+            try {
+                Boolean hasOrphans = jdbc.queryForObject(
+                    "SELECT EXISTS(SELECT 1 FROM " + table + " c WHERE NOT EXISTS "
+                        + "(SELECT 1 FROM vacancies v WHERE v.id = c.vacancy_id))",
+                    Boolean.class);
+                if (!Boolean.TRUE.equals(hasOrphans)) continue;
+                int deleted = jdbc.update(
+                    "DELETE FROM " + table + " WHERE vacancy_id NOT IN (SELECT id FROM vacancies)");
+                log.info("Миграция данных: удалено {} осиротевших строк из {} (без родительской вакансии)", deleted, table);
+            } catch (Exception e) {
+                log.error("Миграция данных: чистка сирот в {} не удалась: {}", table, e.getMessage());
+            }
+        }
+    }
+
 
     private void backfillDedupKeys() {
         try {
