@@ -39,6 +39,42 @@ public class VacancyAiAnalyzer {
     private static final Logger log = LoggerFactory.getLogger(VacancyAiAnalyzer.class);
     private static final java.util.Set<String> VALID_VERDICTS = java.util.Set.of("yes", "no", "fraud");
     private static final java.util.Set<String> VALID_NOVELTY_COLORS = java.util.Set.of("red", "yellow", "green");
+    /** Русские синонимы enum-значений с кириллическими ключами (после фолдинга латинских
+     *  двойников в кириллицу — см. normalizeVerdict). */
+    private static final java.util.Map<String, String> VERDICT_SYNONYMS = java.util.Map.of(
+        "да", "yes", "нет", "no", "обман", "fraud", "мошенничество", "fraud");
+    private static final java.util.Map<String, String> COLOR_SYNONYMS = java.util.Map.of(
+        "красный", "red", "жёлтый", "yellow", "желтый", "yellow", "зелёный", "green", "зеленый", "green");
+
+    /**
+     * Нормализация enum-поля ответа модели: «Yes», «да», «дa» (кириллическая д + латинская a),
+     * «Жeлтый» — это валидные ответы в другой форме, а не мусор. Живые случаи 21–24.10.2026
+     * (dots-3-note): «дa» молча становилось 'no' (ложный reject вакансии), «Жeлтый» теряло
+     * noveltyColor вместе с noveltyNote. Чиним регистр, гомоглифов и синонимы; null — значение
+     * не распознано вовсе. Свободные текстовые поля (reason/noveltyNote) чистит AiText.clean —
+     * это только про перечисления.
+     */
+    static String normalizeVerdict(String raw) {
+        if (raw == null) return null;
+        String s = raw.trim().toLowerCase(java.util.Locale.ROOT);
+        if (VALID_VERDICTS.contains(s)) return s;
+        String synonym = VERDICT_SYNONYMS.get(com.hh.gui.util.AiText.foldToCyrillic(s));
+        if (synonym != null) return synonym;
+        String latin = com.hh.gui.util.AiText.foldToLatin(s);
+        return VALID_VERDICTS.contains(latin) ? latin : null;
+    }
+
+    /** То же для noveltyColor; «» (пусто) — валидное «модель не оценила», проходит как есть. */
+    static String normalizeNoveltyColor(String raw) {
+        if (raw == null || raw.isBlank()) return "";
+        String s = raw.trim().toLowerCase(java.util.Locale.ROOT);
+        if (VALID_NOVELTY_COLORS.contains(s)) return s;
+        String synonym = COLOR_SYNONYMS.get(com.hh.gui.util.AiText.foldToCyrillic(s));
+        if (synonym != null) return synonym;
+        String latin = com.hh.gui.util.AiText.foldToLatin(s);
+        return VALID_NOVELTY_COLORS.contains(latin) ? latin : null;
+    }
+
     /**
      * Bump this whenever buildPrompt()'s output schema changes (fields added/removed/reworded).
      * It's folded into computeCriteriaHash() so the AI-reuse cache (findAnalyzedByHhIdAndCriteriaHash /
@@ -46,7 +82,7 @@ public class VacancyAiAnalyzer {
      * older schema — otherwise a vacancy first analyzed before a field existed would carry that field
      * empty forever, since the criteria hash used to depend only on search settings.
      */
-    private static final String PROMPT_SCHEMA_VERSION = "v6-work-format";
+    private static final String PROMPT_SCHEMA_VERSION = "v7-strict-enums";
     private static final int MAX_DESCRIPTION_CHARS = 600;
     private static final int FALLBACK_DESCRIPTION_CHARS = 500;
 
@@ -656,7 +692,8 @@ public class VacancyAiAnalyzer {
         }
 
         sb.append("\nОтвет — только JSON-массив, по элементу на каждую вакансию, без текста до и после и без переносов строк внутри строк. ")
-          .append("Обязательные поля: id, score (0-100), verdict (yes/no/fraud), reason, noveltyColor, noveltyNote.");
+          .append("Обязательные поля: id, score (0-100), verdict (yes/no/fraud), reason, noveltyColor, noveltyNote. ")
+          .append("verdict и noveltyColor пиши строго латиницей в нижнем регистре: yes/no/fraud и red/yellow/green — не «да» и не «жёлтый».");
         if (!optional.isEmpty()) {
             sb.append(" Поля ").append(String.join(", ", optional))
               .append(" — только если нашёл по правилам выше, иначе не пиши их вовсе.");
@@ -1147,7 +1184,13 @@ public class VacancyAiAnalyzer {
             Object scoreVal = item.get("score");
             int score = scoreVal instanceof Number n ? n.intValue() : 0;
             Object verdictVal = item.get("verdict");
-            String verdict = verdictVal instanceof String s ? s : "no";
+            String verdict = normalizeVerdict(verdictVal instanceof String vs ? vs : null);
+            if (verdict == null) {
+                if (verdictVal instanceof String vs && !vs.isBlank()) {
+                    log.warn("AI вернул неожиданный verdict '{}' для вакансии {}, приводим к 'no'", vs, id);
+                }
+                verdict = "no";
+            }
             Object reasonVal = item.get("reason");
             String reason = reasonVal instanceof String s ? s : "";
             // Absent for prescreen responses (different schema, doesn't ask for this) —
@@ -1171,10 +1214,15 @@ public class VacancyAiAnalyzer {
                 log.warn("AI вернул неожиданный verdict '{}' для вакансии {}, приводим к 'no'", verdict, id);
                 verdict = "no";
             }
-            if (!noveltyColor.isEmpty() && !VALID_NOVELTY_COLORS.contains(noveltyColor)) {
-                log.warn("AI вернул неожиданный noveltyColor '{}' для вакансии {}, отбрасываем", noveltyColor, id);
-                noveltyColor = "";
-                noveltyNote = "";
+            if (!noveltyColor.isEmpty()) {
+                String normalizedColor = normalizeNoveltyColor(noveltyColor);
+                if (normalizedColor == null) {
+                    log.warn("AI вернул неожиданный noveltyColor '{}' для вакансии {}, отбрасываем", noveltyColor, id);
+                    noveltyColor = "";
+                    noveltyNote = "";
+                } else {
+                    noveltyColor = normalizedColor;
+                }
             }
 
             // Absent for prescreen responses (different schema, doesn't ask for this) —
