@@ -34,6 +34,7 @@ class VkNotifierTest {
     private final AtomicReference<String> lastSaveWallPhotoBody = new AtomicReference<>();
     /** Сколько первых загрузок PNG сервер VK «примет», но вернёт пустое photo. */
     private volatile int emptyPhotoUploads;
+    private int[] uploadHttpStatuses = {};
     private final java.util.List<Long> sleeps = new java.util.ArrayList<>();
     private final java.util.concurrent.atomic.AtomicInteger uploadServerRequests = new java.util.concurrent.atomic.AtomicInteger();
     private final AtomicReference<String> lastPollsCreateBody = new AtomicReference<>();
@@ -74,7 +75,13 @@ class VkNotifierTest {
         });
         server.createContext("/upload", ex -> {
             ex.getRequestBody().readAllBytes();
-            boolean empty = uploads.incrementAndGet() <= emptyPhotoUploads;
+            int attempt = uploads.incrementAndGet();
+            if (attempt <= uploadHttpStatuses.length && uploadHttpStatuses[attempt - 1] != 200) {
+                ex.sendResponseHeaders(uploadHttpStatuses[attempt - 1], -1);
+                ex.close();
+                return;
+            }
+            boolean empty = attempt <= emptyPhotoUploads;
             byte[] body = ("{\"server\":906618,\"photo\":" + (empty ? "\"\"" : "\"[{\\\"photo\\\":\\\"abc\\\"}]\"")
                 + ",\"hash\":\"h\"}").getBytes(StandardCharsets.UTF_8);
             ex.sendResponseHeaders(200, body.length);
@@ -251,6 +258,43 @@ class VkNotifierTest {
         assertNull(notifier.uploadWallPhoto(new byte[]{1, 2, 3}, "card.png"));
         assertEquals(4, uploads.get(), "четыре попытки — и хватит, пост уйдёт текстом");
         assertNull(lastSaveWallPhotoBody.get(), "с пустым photo в saveWallPhoto ходить бессмысленно");
+    }
+
+    @Test
+    void uploadWallPhoto_transientHttpErrors_retryWithFreshUploadUrl() {
+        ReflectionTestUtils.setField(notifier, "photoUploadToken", "STATIC_USER_TOKEN");
+        uploadHttpStatuses = new int[]{405, 500, 429, 200};
+
+        assertEquals("photo-123456789_42", notifier.uploadWallPhoto(new byte[]{1}, "card.png"));
+        assertEquals(4, uploads.get());
+        assertEquals(4, uploadServerRequests.get());
+        assertEquals(java.util.List.of(1500L, 3000L, 6000L), sleeps);
+        assertNotNull(lastSaveWallPhotoBody.get());
+        assertNull(lastRequestBody.get(), "загрузка картинки не должна публиковать пост");
+    }
+
+    @Test
+    void uploadWallPhoto_persistentHttpError_stopsAfterFourAttempts() {
+        ReflectionTestUtils.setField(notifier, "photoUploadToken", "STATIC_USER_TOKEN");
+        uploadHttpStatuses = new int[]{503, 503, 503, 503};
+
+        assertNull(notifier.uploadWallPhoto(new byte[]{1}, "card.png"));
+        assertEquals(4, uploads.get());
+        assertEquals(4, uploadServerRequests.get());
+        assertEquals(java.util.List.of(1500L, 3000L, 6000L), sleeps);
+        assertNull(lastSaveWallPhotoBody.get());
+    }
+
+    @Test
+    void uploadWallPhoto_permanentHttpError_doesNotRetry() {
+        ReflectionTestUtils.setField(notifier, "photoUploadToken", "STATIC_USER_TOKEN");
+        uploadHttpStatuses = new int[]{403};
+
+        assertNull(notifier.uploadWallPhoto(new byte[]{1}, "card.png"));
+        assertEquals(1, uploads.get());
+        assertEquals(1, uploadServerRequests.get());
+        assertTrue(sleeps.isEmpty());
+        assertNull(lastSaveWallPhotoBody.get());
     }
 
     // ── опросы ──
