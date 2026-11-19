@@ -81,7 +81,9 @@ jobs:
         if: steps.changes.outputs.scraper == 'true' || github.event_name == 'workflow_dispatch'
         run: |
           DEPLOY_DIR=/opt/hh-gui/scraper
-          NPM_BIN=/home/rover/.nvm/versions/node/v24.18.0/bin/npm
+          NODE_BIN_DIR=/home/rover/.nvm/versions/node/v24.22.3/bin
+          export PATH="${NODE_BIN_DIR}:${PATH}"
+          NPM_BIN="${NODE_BIN_DIR}/npm"
 
           sudo mkdir -p ${DEPLOY_DIR}
           sudo cp scraper/package.json scraper/package-lock.json scraper/server.js ${DEPLOY_DIR}/
@@ -131,7 +133,9 @@ jobs:
         if: steps.changes.outputs.tg_scraper == 'true' || github.event_name == 'workflow_dispatch'
         run: |
           DEPLOY_DIR=/opt/hh-gui/tg-scraper
-          NPM_BIN=/home/rover/.nvm/versions/node/v24.18.0/bin/npm
+          NODE_BIN_DIR=/home/rover/.nvm/versions/node/v24.22.3/bin
+          export PATH="${NODE_BIN_DIR}:${PATH}"
+          NPM_BIN="${NODE_BIN_DIR}/npm"
 
           sudo mkdir -p ${DEPLOY_DIR}
           # Same reasoning as the hh-scraper step above: only the files just copied,
