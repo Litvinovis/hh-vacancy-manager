@@ -35,10 +35,22 @@ public class ScraperSidecarMetrics {
     private String scraperBaseUrl;
 
     private final ObjectMapper mapper = new ObjectMapper();
+    private final MeterRegistry registry;
     private volatile Map<?, ?> last = Map.of();
     private volatile boolean up;
 
     public ScraperSidecarMetrics(MeterRegistry registry) {
+        this.registry = registry;
+        Gauge.builder("scraper_sidecar_queue_depth", this, m -> m.number("queueDepth"))
+            .tag("application", "hh-gui").description("Запросов в очереди сайдкара").register(registry);
+        Gauge.builder("scraper_sidecar_up", this, m -> m.up ? 1 : 0)
+            .tag("application", "hh-gui").description("1 — /health сайдкара отвечает").register(registry);
+        Gauge.builder("scraper_sidecar_last_ok_age_seconds", this, ScraperSidecarMetrics::lastOkAgeSeconds)
+            .tag("application", "hh-gui")
+            .description("Секунд с последней успешной загрузки (с момента старта, если успешных не было)").register(registry);
+    }
+
+    private void registerCounters() {
         FunctionCounter.builder("scraper_sidecar_loads_total", this, m -> m.number("okCount"))
             .tag("application", "hh-gui").tag("result", "ok")
             .description("Успешные загрузки страниц hh.ru сайдкаром с его старта").register(registry);
@@ -48,13 +60,6 @@ public class ScraperSidecarMetrics {
         FunctionCounter.builder("scraper_sidecar_blocked_total", this, m -> m.number("blockedCount"))
             .tag("application", "hh-gui")
             .description("Загрузки, остановленные DDoS-Guard, с старта сайдкара").register(registry);
-        Gauge.builder("scraper_sidecar_queue_depth", this, m -> m.number("queueDepth"))
-            .tag("application", "hh-gui").description("Запросов в очереди сайдкара").register(registry);
-        Gauge.builder("scraper_sidecar_up", this, m -> m.up ? 1 : 0)
-            .tag("application", "hh-gui").description("1 — /health сайдкара отвечает").register(registry);
-        Gauge.builder("scraper_sidecar_last_ok_age_seconds", this, ScraperSidecarMetrics::lastOkAgeSeconds)
-            .tag("application", "hh-gui")
-            .description("Секунд с последней успешной загрузки (с момента старта, если успешных не было)").register(registry);
     }
 
     @Scheduled(initialDelayString = "PT30S", fixedDelayString = "PT1M")
@@ -68,9 +73,8 @@ public class ScraperSidecarMetrics {
                 return;
             }
             try (var in = conn.getInputStream()) {
-                last = mapper.readValue(in, Map.class);
+                accept(mapper.readValue(in, Map.class));
             }
-            up = true;
         } catch (Exception e) {
             if (up) log.warn("Сайдкар скрейпа не ответил на /health: {}", e.getMessage());
             up = false;
@@ -91,9 +95,23 @@ public class ScraperSidecarMetrics {
         }
     }
 
-    /** Для тестов: подставить ответ /health без HTTP. */
-    void accept(Map<?, ?> health) {
-        this.last = health;
-        this.up = true;
+    synchronized void accept(Map<?, ?> health) {
+        if (health == null || !validCounter(health.get("okCount")) || !validCounter(health.get("failedCount"))
+                || !validCounter(health.get("blockedCount"))) {
+            throw new IllegalArgumentException("В /health нет корректных счётчиков загрузки");
+        }
+
+        boolean firstSample = last.isEmpty();
+        last = health;
+        // Рестарт бэкенда не сбрасывает счётчики сайдкара. Ноль до первого
+        // опроса заставил бы increase() принять прежнее значение за прирост.
+        if (firstSample) {
+            registerCounters();
+        }
+        up = true;
+    }
+
+    private static boolean validCounter(Object value) {
+        return value instanceof Number number && Double.isFinite(number.doubleValue()) && number.doubleValue() >= 0;
     }
 }
