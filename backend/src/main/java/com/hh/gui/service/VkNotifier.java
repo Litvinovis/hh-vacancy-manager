@@ -23,7 +23,7 @@ import java.util.Map;
 public class VkNotifier {
 
     private static final Logger log = LoggerFactory.getLogger(VkNotifier.class);
-    /** Сколько раз грузить PNG, если VK отвечает пустым photo (каждый раз — на свежий upload_url). */
+    /** Сколько раз грузить PNG при временном сбое VK (каждый раз — на свежий upload_url). */
     private static final int UPLOAD_ATTEMPTS = 4;
     /** Пауза перед повторной загрузкой; удваивается с каждой попыткой. */
     private static final long UPLOAD_RETRY_BASE_MS = 1500;
@@ -197,7 +197,8 @@ public class VkNotifier {
      * не картинка, а сбой конкретного узла загрузки в конкретный момент. Поэтому
      * на каждую попытку берём свежий upload_url (getWallUploadServer каждый раз выдаёт
      * другой узел) и ждём перед повтором — мгновенный повтор на тот же узел, как
-     * показали логи 21.09, упирается в тот же отказ.
+     * показали логи 21.09, упирается в тот же отказ. Временные HTTP-отказы узла
+     * (405, 429, 5xx) проходят через тот же ограниченный цикл повторов.
      */
     private Map<?, ?> uploadPngWithRetry(byte[] png, String fileName, String uploadToken) throws Exception {
         for (int attempt = 1; attempt <= UPLOAD_ATTEMPTS; attempt++) {
@@ -209,10 +210,10 @@ public class VkNotifier {
             String uploadUrl = String.valueOf(((Map<?, ?>) server.get("response")).get("upload_url"));
 
             String body = uploadPng(uploadUrl, png, fileName);
-            if (body == null) return null;
+            if (body == null) continue;
             Map<?, ?> uploaded = mapper.readValue(body, Map.class);
             if (hasPhoto(uploaded)) return uploaded;
-            log.warn("VK upload вернул пустое photo (попытка {}/{}): {}", attempt, UPLOAD_ATTEMPTS, body);
+            log.warn("VK upload вернул пустое photo (попытка {}/{})", attempt, UPLOAD_ATTEMPTS);
         }
         return null;
     }
@@ -224,28 +225,36 @@ public class VkNotifier {
         return !s.isEmpty() && !s.equals("[]") && !s.equals("null");
     }
 
-    /** multipart POST на upload_url; тело ответа VK или null, если HTTP-статус не 200. */
+    /** multipart POST на upload_url; null при временном HTTP-сбое, исключение при постоянном. */
     private String uploadPng(String uploadUrl, byte[] png, String fileName) throws Exception {
         String boundary = "----hhgui" + System.nanoTime();
         HttpURLConnection conn = (HttpURLConnection) new URL(uploadUrl).openConnection();
-        conn.setRequestMethod("POST");
-        conn.setDoOutput(true);
-        conn.setConnectTimeout(15000);
-        conn.setReadTimeout(60000);
-        conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
-        try (OutputStream os = conn.getOutputStream()) {
-            os.write(("--" + boundary + "\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"" + fileName
-                + "\"\r\nContent-Type: image/png\r\n\r\n").getBytes(StandardCharsets.UTF_8));
-            os.write(png);
-            os.write(("\r\n--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
+        try {
+            conn.setRequestMethod("POST");
+            conn.setDoOutput(true);
+            conn.setConnectTimeout(15000);
+            conn.setReadTimeout(60000);
+            conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
+            try (OutputStream os = conn.getOutputStream()) {
+                os.write(("--" + boundary + "\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"" + fileName
+                    + "\"\r\nContent-Type: image/png\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+                os.write(png);
+                os.write(("\r\n--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
+            }
+            int code = conn.getResponseCode();
+            if (code != 200) {
+                // В логах узлы загрузки возвращали 405/500: новый upload_url может выбрать
+                // рабочий узел. Повторяем только загрузку PNG, чтобы не дублировать посты.
+                if (code == 405 || code == 429 || (code >= 500 && code <= 599)) {
+                    log.warn("Временный сбой VK upload: HTTP {}", code);
+                    return null;
+                }
+                throw new java.io.IOException("VK upload отклонён: HTTP " + code);
+            }
+            return HttpUtil.readBody(conn, code);
+        } finally {
+            conn.disconnect();
         }
-        int code = conn.getResponseCode();
-        String body = HttpUtil.readBody(conn, code);
-        if (code != 200) {
-            log.error("VK upload вернул {}: {}", code, body);
-            return null;
-        }
-        return body;
     }
 
     /** wall.post с вложениями (attachments через запятую); null — не отправлено. */
@@ -338,7 +347,7 @@ public class VkNotifier {
                 String respBody = HttpUtil.readBody(conn, code);
                 if (code != 200) {
                     count(method, "http_" + code);
-                    log.error("Ошибка VK API {} ({}): {}", code, method, respBody);
+                    log.error("VK API {} вернул HTTP {}", method, code);
                     return null;
                 }
                 Map<?, ?> parsed = mapper.readValue(respBody, Map.class);
@@ -351,7 +360,8 @@ public class VkNotifier {
                         continue;
                     }
                     count(method, "error");
-                    log.error("VK API {} вернул ошибку: {}", method, respBody);
+                    // Ответ VK может повторять исходные параметры, включая текст комментария.
+                    log.error("VK API {} вернул ошибку (код {})", method, errorCode);
                     return null;
                 }
                 count(method, "ok");
@@ -359,12 +369,13 @@ public class VkNotifier {
             } catch (Exception e) {
                 if (!lastAttempt) {
                     count(method, "retry");
-                    log.warn("Сбой вызова VK API {}: {} — повторяем через {} мс", method, e.getMessage(), CALL_RETRY_MS);
+                    log.warn("Сбой вызова VK API {}: {} — повторяем через {} мс",
+                        method, e.getClass().getSimpleName(), CALL_RETRY_MS);
                     if (!sleepInterruptible(CALL_RETRY_MS)) return null;
                     continue;
                 }
                 count(method, "error");
-                log.error("Не удалось вызвать VK API {}: {}", method, e.getMessage());
+                log.error("Не удалось вызвать VK API {}: {}", method, e.getClass().getSimpleName());
                 return null;
             }
         }

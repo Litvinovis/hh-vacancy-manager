@@ -178,24 +178,26 @@ jobs:
         run: |
           DEPLOY_DIR=/opt/hh-gui
           JAR_NAME=hh-gui.jar
-          SERVICE=hh-gui
 
-          sudo mkdir -p ${DEPLOY_DIR}
+          sudo mkdir -p "$DEPLOY_DIR"
 
-          # Backup the currently-deployed jar (this is the rollback target below)
-          sudo cp ${DEPLOY_DIR}/${JAR_NAME} ${DEPLOY_DIR}/${JAR_NAME}.backup.$(date +%Y%m%d_%H%M) 2>/dev/null || true
-
-          # Keep only the newest few. Each jar is ~40 MB and nothing ever removed them:
-          # 19 backups had piled up to 702 MB, and rollback only ever needs the latest.
-          ls -t ${DEPLOY_DIR}/${JAR_NAME}.backup.* 2>/dev/null | tail -n +6 | sudo xargs -r rm -f
-
-          # Deploy
-          sudo cp backend/target/hh-gui-*.jar ${DEPLOY_DIR}/${JAR_NAME}
-
-          # Copy config if not exists
-          if [ ! -f "${DEPLOY_DIR}/config/profiles/default.yaml" ]; then
-            sudo cp -r config ${DEPLOY_DIR}/
+          if [ ! -f "$DEPLOY_DIR/config/profiles/default.yaml" ]; then
+            sudo cp -r config "$DEPLOY_DIR/"
           fi
+
+          JAR_PATH="$DEPLOY_DIR/$JAR_NAME"
+          if [ -f "$JAR_PATH" ]; then
+            sudo cp "$JAR_PATH" "$JAR_PATH.backup.$(date +%Y%m%d_%H%M%S)"
+            # Храним пять копий: каждая занимает около 40 МБ.
+            ls -t "$JAR_PATH".backup.* | tail -n +6 | sudo xargs -r rm -f
+          fi
+
+          # Работающая JVM держит старый JAR открытым до завершения. Замена через
+          # rename сохраняет его содержимое и даёт новому процессу целый архив.
+          STAGED_JAR=$(sudo mktemp "$JAR_PATH.XXXXXX")
+          trap 'sudo rm -f -- "$STAGED_JAR"' EXIT
+          sudo install -m 644 backend/target/hh-gui-*.jar "$STAGED_JAR"
+          sudo mv -fT -- "$STAGED_JAR" "$JAR_PATH"
 
           # NB: no schema migration here. SchemaMigrator (@PostConstruct, see its javadoc)
           # owns that now — it checks each column before adding it and covers every column
@@ -204,32 +206,34 @@ jobs:
           # It also wrote to the live WAL database from a second process while the old app
           # was still running, for no benefit.
 
-          # Restart
-          sudo systemctl restart ${SERVICE}
-
       - name: Smoke test
         run: |
           echo "Waiting for services to start..."
-          for i in $(seq 1 10); do
-            STATUS=$(sudo systemctl is-active hh-gui)
-            if [ "$STATUS" = "active" ] && curl -sf -o /dev/null http://localhost:8080/actuator/health; then
-              echo "✅ hh-gui ready after $((i*3))s"
-              break
-            fi
-            echo "  попытка $i/10 — ждём hh-gui..."
-            sleep 3
-          done
+          READY=false
+          if sudo systemctl restart hh-gui; then
+            for i in $(seq 1 10); do
+              if sudo systemctl is-active --quiet hh-gui \
+                && HTTP_CODE=$(curl -s --max-time 3 -o /dev/null -w "%{http_code}" http://localhost:8080/actuator/health) \
+                && [ "$HTTP_CODE" = 200 ]; then
+                echo "✅ hh-gui ready on attempt $i"
+                READY=true
+                break
+              fi
+              echo "  попытка $i/10 — ждём hh-gui..."
+              sleep 3
+            done
+          fi
 
-          STATUS=$(sudo systemctl is-active hh-gui)
-          if [ "$STATUS" != "active" ]; then
+          if [ "$READY" != true ]; then
             echo "❌ App failed to start, rolling back..."
-            # Newest backup == the jar that was running before this deploy, since the
-            # backup is taken BEFORE the new jar is copied over. This used to read '2p',
-            # which rolled back to the version before that one — skipping a perfectly
-            # good release and reverting two versions on every failed deploy.
-            LATEST_BACKUP=$(ls -t /opt/hh-gui/hh-gui.jar.backup.* 2>/dev/null | sed -n '1p')
+            JAR_PATH=/opt/hh-gui/hh-gui.jar
+            LATEST_BACKUP=$({ ls -t "$JAR_PATH".backup.* 2>/dev/null || true; } | sed -n '1p')
             if [ -n "$LATEST_BACKUP" ]; then
-              sudo cp "$LATEST_BACKUP" /opt/hh-gui/hh-gui.jar
+              # При откате процесс тоже может ещё держать текущий JAR открытым.
+              STAGED_JAR=$(sudo mktemp "$JAR_PATH.XXXXXX")
+              trap 'sudo rm -f -- "$STAGED_JAR"' EXIT
+              sudo install -m 644 "$LATEST_BACKUP" "$STAGED_JAR"
+              sudo mv -fT -- "$STAGED_JAR" "$JAR_PATH"
               sudo systemctl restart hh-gui
             fi
             exit 1
@@ -242,16 +246,6 @@ jobs:
             exit 1
           fi
           echo "✅ Scraper sidecar is running"
-
-          # HTTP checks
-          # /api/** now requires a logged-in session (see AuthInterceptor), so the
-          # smoke test hits Actuator's health endpoint instead, which bypasses it.
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/actuator/health)
-          if [ "$HTTP_CODE" != "200" ]; then
-            echo "❌ HTTP check failed (code: $HTTP_CODE)"
-            exit 1
-          fi
-          echo "✅ HH Vacancy Manager HTTP check passed (code: $HTTP_CODE)"
 
           SCRAPER_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8095/health)
           if [ "$SCRAPER_HTTP_CODE" != "200" ]; then
