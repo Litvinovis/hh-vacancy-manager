@@ -213,7 +213,7 @@ public class VkNotifier {
             if (body == null) continue;
             Map<?, ?> uploaded = mapper.readValue(body, Map.class);
             if (hasPhoto(uploaded)) return uploaded;
-            log.warn("VK upload вернул пустое photo (попытка {}/{}): {}", attempt, UPLOAD_ATTEMPTS, body);
+            log.warn("VK upload вернул пустое photo (попытка {}/{})", attempt, UPLOAD_ATTEMPTS);
         }
         return null;
     }
@@ -347,7 +347,7 @@ public class VkNotifier {
                 String respBody = HttpUtil.readBody(conn, code);
                 if (code != 200) {
                     count(method, "http_" + code);
-                    log.error("Ошибка VK API {} ({}): {}", code, method, respBody);
+                    log.error("VK API {} вернул HTTP {}", method, code);
                     return null;
                 }
                 Map<?, ?> parsed = mapper.readValue(respBody, Map.class);
@@ -360,7 +360,8 @@ public class VkNotifier {
                         continue;
                     }
                     count(method, "error");
-                    log.error("VK API {} вернул ошибку: {}", method, respBody);
+                    // Ответ VK может повторять исходные параметры, включая текст комментария.
+                    log.error("VK API {} вернул ошибку (код {})", method, errorCode);
                     return null;
                 }
                 count(method, "ok");
@@ -368,12 +369,13 @@ public class VkNotifier {
             } catch (Exception e) {
                 if (!lastAttempt) {
                     count(method, "retry");
-                    log.warn("Сбой вызова VK API {}: {} — повторяем через {} мс", method, e.getMessage(), CALL_RETRY_MS);
+                    log.warn("Сбой вызова VK API {}: {} — повторяем через {} мс",
+                        method, e.getClass().getSimpleName(), CALL_RETRY_MS);
                     if (!sleepInterruptible(CALL_RETRY_MS)) return null;
                     continue;
                 }
                 count(method, "error");
-                log.error("Не удалось вызвать VK API {}: {}", method, e.getMessage());
+                log.error("Не удалось вызвать VK API {}: {}", method, e.getClass().getSimpleName());
                 return null;
             }
         }

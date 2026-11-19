@@ -1,10 +1,14 @@
 package com.hh.gui.service;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.slf4j.LoggerFactory;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.net.InetSocketAddress;
@@ -104,6 +108,15 @@ class VkNotifierTest {
             ex.getResponseBody().write(body);
             ex.close();
         });
+        server.createContext("/method/wall.createComment", ex -> {
+            ex.getRequestBody().readAllBytes();
+            byte[] body = """
+                {"error":{"error_code":40,"request_params":[{"key":"message","value":"comment-marker"}]}}
+                """.getBytes(StandardCharsets.UTF_8);
+            ex.sendResponseHeaders(200, body.length);
+            ex.getResponseBody().write(body);
+            ex.close();
+        });
         server.start();
 
         notifier = new VkNotifier();
@@ -117,6 +130,28 @@ class VkNotifierTest {
     @AfterEach
     void tearDown() {
         if (server != null) server.stop(0);
+    }
+
+    @Test
+    void comment_rejected_logsCodeWithoutEchoedRequestParameters() {
+        Logger logger = (Logger) LoggerFactory.getLogger(VkNotifier.class);
+        ListAppender<ILoggingEvent> captured = new ListAppender<>();
+        captured.start();
+        logger.addAppender(captured);
+
+        try {
+            assertFalse(notifier.comment(123L, "comment-marker"));
+
+            assertEquals(1, captured.list.size());
+            String message = captured.list.getFirst().getFormattedMessage();
+            assertTrue(message.contains("wall.createComment"));
+            assertTrue(message.contains("код 40"));
+            assertFalse(message.contains("comment-marker"));
+            assertFalse(message.contains("request_params"));
+        } finally {
+            logger.detachAppender(captured);
+            captured.stop();
+        }
     }
 
     @Test
