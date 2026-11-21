@@ -246,7 +246,7 @@ async function collectMessages(page, channel) {
     // emoticon), and Telegram Web K exposes its own internal managers on
     // window.appImManager for exactly this kind of read — undocumented and private
     // to this client build, so this is inherently more fragile than the public DOM
-    // text scraping above and needs to fail soft (null views / empty reactions),
+    // text scraping above and needs to fail soft (null views / unknown reactions),
     // never break message collection over it.
     const chat = window.appImManager && window.appImManager.chat;
     const managers = chat && chat.managers;
@@ -296,17 +296,23 @@ async function collectMessages(page, channel) {
       const uniqueHrefs = [...new Set(hrefs)];
 
       let views = null;
-      let reactions = {};
+      let reactions = null;
       if (managers && peerId != null) {
         try {
           const msg = await managers.appMessagesManager.getMessageByPeer(peerId, Number(n.getAttribute('data-mid')));
           if (msg) {
             if (typeof msg.views === 'number') views = msg.views;
             const results = msg.reactions && msg.reactions.results;
+            // Пустая карта означает известный ноль. При промахе кэша или
+            // неизвестной структуре оставляем null, чтобы не потерять это различие.
+            if (Array.isArray(results) || (!msg.reactions && (msg._ === 'message' || views !== null))) {
+              reactions = {};
+            }
             if (Array.isArray(results)) {
               for (const r of results) {
-                if (r.reaction && r.reaction.emoticon && typeof r.count === 'number') {
-                  reactions[r.reaction.emoticon] = r.count;
+                if (r.reaction && typeof r.count === 'number') {
+                  const kind = r.reaction.emoticon || 'другие';
+                  reactions[kind] = (reactions[kind] ?? 0) + r.count;
                 }
               }
             }

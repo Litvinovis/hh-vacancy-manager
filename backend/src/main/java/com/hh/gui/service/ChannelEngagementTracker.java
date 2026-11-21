@@ -127,18 +127,24 @@ public class ChannelEngagementTracker {
      */
     public void recordFrom(String channel, List<TelegramClient.TelegramMessage> messages) {
         int totalViews = 0;
+        int postsWithReactions = 0;
         Map<String, Integer> totalReactions = new HashMap<>();
         for (TelegramClient.TelegramMessage msg : messages) {
             if (msg.views() != null) totalViews += msg.views();
             if (msg.reactions() != null) {
+                postsWithReactions++;
                 msg.reactions().forEach((emoji, count) -> totalReactions.merge(emoji, count, Integer::sum));
             }
         }
         telegramMetrics.recordViews(channel, totalViews);
-        telegramMetrics.recordReactions(channel, totalReactions);
+        if (postsWithReactions > 0 && postsWithReactions == messages.size()) {
+            telegramMetrics.recordReactions(channel, totalReactions);
+        }
         // Число постов в выборке — чтобы на дашборде считать просмотры и реакции на пост:
         // сумма по «последним N постам» растёт или падает просто от того, сколько постов попало.
         telegramMetrics.recordPostsSampled(channel, messages.size());
+        telegramMetrics.recordReactionCoverage(channel, postsWithReactions);
+        telegramMetrics.recordChannelRead(channel);
     }
 
     /** Distinct chat_ids currently configured as SOME enabled search's public-post

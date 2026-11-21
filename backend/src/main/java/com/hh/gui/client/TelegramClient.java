@@ -42,7 +42,7 @@ public class TelegramClient {
     /** @param views total view count at scrape time, null if unavailable (see collectMessages
      *                in tg-scraper/server.js — read via Telegram Web K's own internal message
      *                cache, best-effort and can legitimately be absent).
-     *  @param reactions emoji -> count, empty map if none; same best-effort caveat as views. */
+     *  @param reactions подсчёт по эмодзи, пустая карта при нуле, null если данные недоступны. */
     public record TelegramMessage(
         String id, String text, String hhPublishedAt, String link, String channel, String source,
         Integer views, java.util.Map<String, Integer> reactions) {}
@@ -148,7 +148,7 @@ public class TelegramClient {
 
     @SuppressWarnings("unchecked")
     private static java.util.Map<String, Integer> reactions(Object o) {
-        if (!(o instanceof Map)) return java.util.Map.of();
+        if (!(o instanceof Map)) return null;
         java.util.Map<String, Integer> result = new java.util.LinkedHashMap<>();
         for (var e : ((Map<String, Object>) o).entrySet()) {
             if (e.getValue() instanceof Number n) result.put(e.getKey(), n.intValue());
