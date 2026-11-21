@@ -3,8 +3,10 @@ package com.hh.gui.util;
 import com.hh.gui.model.Vacancy;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 /**
  * Пост вакансии для стены ВКонтакте — plain text, у обычного wall.post разметки нет.
@@ -136,8 +138,16 @@ public final class VkPostFormatter {
      */
     public static String digestPost(List<Vacancy> vacancies, String communityScreenName, int localHour) {
         List<Vacancy> items = vacancies.size() > MAX_DIGEST_ITEMS ? vacancies.subList(0, MAX_DIGEST_ITEMS) : vacancies;
+        Map<String, Integer> kinds = countKinds(items);
         StringBuilder sb = new StringBuilder();
-        sb.append(digestHook(items.size(), localHour)).append("\n\n");
+        sb.append(digestHook(items.size(), localHour));
+        List<String> topics = kinds.entrySet().stream()
+            .sorted(Map.Entry.<String, Integer>comparingByValue().reversed())
+            .limit(2)
+            .map(entry -> topicLabel(entry.getKey()))
+            .toList();
+        if (!topics.isEmpty()) sb.append(" · ").append(String.join(", ", topics));
+        sb.append("\n\n");
         for (int i = 0; i < items.size(); i++) {
             Vacancy v = items.get(i);
             VacancyPostFormatter.Fields f = VacancyPostFormatter.fields(v);
@@ -151,7 +161,7 @@ public final class VkPostFormatter {
             sb.append("\n");
         }
         sb.append("Как откликнуться — в первом комментарии, по номеру вакансии 👇\n\n");
-        sb.append(String.join(" ", digestHashtags(items, communityScreenName)));
+        sb.append(String.join(" ", digestHashtags(kinds, communityScreenName)));
         return sb.toString();
     }
 
@@ -207,22 +217,36 @@ public final class VkPostFormatter {
     }
 
     /** Для подборки — общий тег, самый частый тег типа работы (если есть) и сообщественный. */
-    static List<String> digestHashtags(List<Vacancy> vacancies, String communityScreenName) {
+    private static List<String> digestHashtags(Map<String, Integer> kinds, String communityScreenName) {
         List<String> tags = new ArrayList<>();
         // Без «ё»: в поиске пишут «удаленная», а не «удалённая»
         tags.add("#удаленнаяработа");
-        java.util.Map<String, Integer> kinds = new java.util.LinkedHashMap<>();
-        for (Vacancy v : vacancies) {
-            String kind = kindTag(v.getTitle());
-            if (kind != null) kinds.merge(kind, 1, Integer::sum);
-        }
-        kinds.entrySet().stream().max(java.util.Map.Entry.comparingByValue())
+        kinds.entrySet().stream().max(Map.Entry.comparingByValue())
             .filter(e -> e.getValue() >= 2)
             .ifPresent(e -> tags.add(e.getKey()));
         if (communityScreenName != null && !communityScreenName.isBlank()) {
             tags.add("#вакансии@" + communityScreenName);
         }
         return tags;
+    }
+
+    private static Map<String, Integer> countKinds(List<Vacancy> vacancies) {
+        Map<String, Integer> kinds = new LinkedHashMap<>();
+        for (Vacancy vacancy : vacancies) {
+            String kind = kindTag(vacancy.getTitle());
+            if (kind != null) kinds.merge(kind, 1, Integer::sum);
+        }
+        return kinds;
+    }
+
+    private static String topicLabel(String kind) {
+        return switch (kind) {
+            case "#ассистент" -> "ассистенты";
+            case "#обучение" -> "преподавание";
+            case "#юрист" -> "юристы";
+            case "#hr" -> "HR";
+            default -> kind.substring(1);
+        };
     }
 
     static String plural(int n, String one, String few, String many) {

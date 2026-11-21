@@ -3,6 +3,8 @@ package com.hh.gui.util;
 import com.hh.gui.model.Vacancy;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 class VkPostFormatterTest {
@@ -201,5 +203,35 @@ class VkPostFormatterTest {
         assertEquals("Утренняя подборка: 3 удалённые вакансии", VkPostFormatter.digestHook(3, 9));
         assertEquals("Вечерняя подборка: 5 удалённых вакансий", VkPostFormatter.digestHook(5, 18));
         assertEquals("Дневная подборка: 21 удалённая вакансия", VkPostFormatter.digestHook(21, 13));
+    }
+
+    @Test
+    void digestPost_previewsTwoMostCommonTopicsWithoutChangingNumbering() {
+        Vacancy designer = hhLinked();
+        designer.setTitle("Графический дизайнер");
+        Vacancy assistant = hhLinked();
+        assistant.setTitle("Ассистент руководителя");
+        Vacancy support = hhLinked();
+        support.setTitle("Специалист поддержки");
+        Vacancy operator = hhLinked();
+        operator.setTitle("Оператор чата");
+
+        String post = VkPostFormatter.digestPost(List.of(designer, assistant, support, operator), "remotevibe", 18);
+
+        assertEquals("Вечерняя подборка: 4 удалённые вакансии · поддержка, дизайн",
+            post.lines().findFirst().orElseThrow());
+        assertTrue(post.contains("\n\n1) Графический дизайнер"), post);
+        assertTrue(post.contains("\n4) Оператор чата"), post);
+        assertTrue(post.endsWith("#удаленнаяработа #поддержка #вакансии@remotevibe"), post);
+    }
+
+    @Test
+    void digestPost_usesPlainHeadlineWhenNoTopicMatches() {
+        Vacancy vacancy = hhLinked();
+        vacancy.setTitle("Космонавт");
+
+        String post = VkPostFormatter.digestPost(List.of(vacancy), null, 9);
+
+        assertEquals("Утренняя подборка: 1 удалённая вакансия", post.lines().findFirst().orElseThrow());
     }
 }
