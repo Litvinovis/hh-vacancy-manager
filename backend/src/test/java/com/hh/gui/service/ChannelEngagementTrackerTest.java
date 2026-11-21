@@ -206,5 +206,22 @@ class ChannelEngagementTrackerTest {
         tracker.recordFrom("testchan", List.of(msg("1", null, null), msg("2", 5, Map.of())));
 
         assertEquals(5.0, registry.find("telegram_channel_views_recent").tag("channel", "testchan").gauge().value());
+        assertEquals(1.0, registry.find("telegram_channel_posts_with_reaction_data_recent").gauge().value());
+        assertNull(registry.find("telegram_channel_reaction_count_recent").gauge());
+        assertTrue(registry.find("telegram_channel_last_read_timestamp_seconds").gauge().value() > 0);
+    }
+
+    @Test
+    void completeSampleWithNoReactionsRecordsZeroAndClearsOldEmoji() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        ChannelEngagementTracker tracker = new ChannelEngagementTracker(new FakeSearchRepo(),
+            new FakeTelegramClient(Map.of()), new FakeNotifier(Map.of()), new TelegramMetrics(registry));
+
+        tracker.recordFrom("testchan", List.of(msg("1", 5, Map.of("❤", 3))));
+        tracker.recordFrom("testchan", List.of(msg("2", 8, Map.of())));
+
+        assertEquals(0.0, registry.find("telegram_channel_reaction_count_recent").gauge().value());
+        assertEquals(0.0, registry.find("telegram_channel_reactions_recent").tag("emoji", "❤").gauge().value());
+        assertEquals(1.0, registry.find("telegram_channel_posts_with_reaction_data_recent").gauge().value());
     }
 }

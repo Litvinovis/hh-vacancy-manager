@@ -5,6 +5,7 @@ import io.micrometer.prometheusmetrics.PrometheusConfig;
 import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
 import org.junit.jupiter.api.Test;
 
+import java.lang.ref.Reference;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -35,7 +36,8 @@ class ScraperSidecarMetricsTest {
 
         var before = new PrometheusMeterRegistry(PrometheusConfig.DEFAULT);
         var after = new PrometheusMeterRegistry(PrometheusConfig.DEFAULT);
-        new ScraperSidecarMetrics(before).accept(health);
+        ScraperSidecarMetrics originalBackend = new ScraperSidecarMetrics(before);
+        originalBackend.accept(health);
         ScraperSidecarMetrics restartedBackend = new ScraperSidecarMetrics(after);
 
         assertFalse(after.scrape().contains("scraper_sidecar_loads_total"));
@@ -43,6 +45,9 @@ class ScraperSidecarMetricsTest {
 
         restartedBackend.accept(health);
         assertEquals(counterLines(before), counterLines(after));
+        // Micrometer хранит только слабую ссылку на объект счётчиков, в приложении его держит Spring.
+        Reference.reachabilityFence(originalBackend);
+        Reference.reachabilityFence(restartedBackend);
     }
 
     @Test

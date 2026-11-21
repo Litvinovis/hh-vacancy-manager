@@ -4,10 +4,13 @@ import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.stereotype.Component;
 
+import java.time.Instant;
 import java.util.Collection;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Per-channel Micrometer metrics for the Telegram vacancy source (Path B of
@@ -33,6 +36,9 @@ public class TelegramMetrics {
     // updated in place on every subsequent call for the same key.
     private final Map<String, AtomicInteger> viewGauges = new ConcurrentHashMap<>();
     private final Map<String, AtomicInteger> reactionGauges = new ConcurrentHashMap<>();
+    private final Map<String, AtomicInteger> reactionTotals = new ConcurrentHashMap<>();
+    private final Map<String, AtomicInteger> reactionCoverage = new ConcurrentHashMap<>();
+    private final Map<String, AtomicLong> channelLastReads = new ConcurrentHashMap<>();
     private final Map<String, AtomicInteger> subscriberGauges = new ConcurrentHashMap<>();
     private final Map<String, AtomicInteger> publishedRollingGauges = new ConcurrentHashMap<>();
     private final Map<String, AtomicInteger> collectedRollingGauges = new ConcurrentHashMap<>();
@@ -132,6 +138,11 @@ public class TelegramMetrics {
     /** Reaction counts summed across the posts just re-scraped from this channel, tagged by emoji. */
     public void recordReactions(String channel, Map<String, Integer> reactionCounts) {
         if (channel == null || reactionCounts == null) return;
+        String prefix = channel + "|";
+        // В новой полной выборке некоторые эмодзи могут исчезнуть.
+        reactionGauges.forEach((key, value) -> {
+            if (key.startsWith(prefix)) value.set(reactionCounts.getOrDefault(key.substring(prefix.length()), 0));
+        });
         for (var entry : reactionCounts.entrySet()) {
             String key = channel + "|" + entry.getKey();
             reactionGauges.computeIfAbsent(key, k -> {
@@ -142,6 +153,35 @@ public class TelegramMetrics {
                 return value;
             }).set(entry.getValue());
         }
+        reactionTotals.computeIfAbsent(channel, ch -> {
+            AtomicInteger value = new AtomicInteger();
+            Gauge.builder("telegram_channel_reaction_count_recent", value, AtomicInteger::get)
+                .description("Реакции на всех постах в последней полной выборке")
+                .tag("application", "hh-gui").tag("channel", ch).register(registry);
+            return value;
+        }).set(reactionCounts.values().stream().mapToInt(Integer::intValue).sum());
+    }
+
+    public void recordReactionCoverage(String channel, int posts) {
+        if (channel == null) return;
+        reactionCoverage.computeIfAbsent(channel, ch -> {
+            AtomicInteger value = new AtomicInteger();
+            Gauge.builder("telegram_channel_posts_with_reaction_data_recent", value, AtomicInteger::get)
+                .description("Посты с доступными данными о реакциях в последней выборке")
+                .tag("application", "hh-gui").tag("channel", ch).register(registry);
+            return value;
+        }).set(posts);
+    }
+
+    public void recordChannelRead(String channel) {
+        if (channel == null) return;
+        channelLastReads.computeIfAbsent(channel.toLowerCase(Locale.ROOT), ch -> {
+            AtomicLong value = new AtomicLong();
+            Gauge.builder("telegram_channel_last_read_timestamp_seconds", value, AtomicLong::get)
+                .description("Время последнего успешного чтения Telegram-канала")
+                .tag("application", "hh-gui").tag("channel", ch).register(registry);
+            return value;
+        }).set(Instant.now().getEpochSecond());
     }
 
     /** Current subscriber count of a channel this app publishes to (Bot API getChatMemberCount) —
