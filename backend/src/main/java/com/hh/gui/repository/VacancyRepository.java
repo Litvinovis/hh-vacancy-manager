@@ -913,10 +913,8 @@ public class VacancyRepository {
     static final String FRESHNESS_403_ACTION = "freshness_403";
 
     /**
-     * Актуализация получила 403: отмечаем проверку и запоминаем исход в истории вакансии —
-     * по нему следующая проверка отличит закрытую вакансию от разового сбоя (см.
-     * VacancyPipelineService.checkVacancyFreshness). История, а не новая колонка: метка
-     * заодно объясняет в карточке вакансии, почему её скрыли.
+     * Актуализация получила 403: отмечаем проверку и запоминаем, что статус
+     * вакансии не удалось подтвердить. Успешная проверка удалит эту отметку.
      */
     public void recordFreshness403(Long id) {
         jdbc.update("INSERT INTO history (vacancy_id, action, details, created_at) VALUES (?, ?, ?, ?)",

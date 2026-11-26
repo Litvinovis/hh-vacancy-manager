@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import java.net.ConnectException;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
@@ -26,6 +27,8 @@ import java.util.Map;
  */
 @Component
 public class ScraperClient {
+
+    public static final String CONNECTION_REFUSED = "client_error: connection refused";
 
     private static final Logger log = LoggerFactory.getLogger(ScraperClient.class);
 
@@ -100,6 +103,10 @@ public class ScraperClient {
                 str(json.get("experience")), str(json.get("employment")), keySkills,
                 Boolean.TRUE.equals(json.get("trustedEmployer")),
                 str(json.get("datePosted")), str(json.get("validThrough")));
+        } catch (ConnectException e) {
+            log.warn("Не удалось подключиться к scraper-сервису для hh_id={}: {}", hhId, e.getMessage());
+            metrics.recordFailure("scrape", "client_error");
+            return ScrapeResult.failure(CONNECTION_REFUSED);
         } catch (Exception e) {
             log.error("Ошибка обращения к scraper-сервису для hh_id={}: {}", hhId, e.getMessage());
             metrics.recordFailure("scrape", "client_error");

@@ -23,6 +23,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -602,9 +603,7 @@ public class VacancyPipelineService {
     // goes through the sidecar's human-paced queue. No bursts an anti-bot could latch onto.
     static final int FRESHNESS_RECHECK_DAYS = 7;
     public static final int FRESHNESS_BATCH_PER_TICK = 5;
-    // Минимальный разрыв между двумя 403, после которого вакансия считается закрытой:
-    // повтор в пределах суток мог бы поймать тот же кратковременный сбой hh.ru.
-    static final java.time.Duration FRESHNESS_403_CONFIRM_GAP = java.time.Duration.ofDays(1);
+    private static final int FRESHNESS_CONNECTION_RETRIES = 2;
 
     /**
      * Re-verifies that approved ('yes') postings are still live on hh.ru — they get
@@ -631,7 +630,7 @@ public class VacancyPipelineService {
         List<Vacancy> due = vacancyRepo.findDueFreshnessCheck(FRESHNESS_RECHECK_DAYS, limit);
         for (Vacancy v : due) {
             if (scrapeCooldown.isCoolingDown()) break; // a parallel run may have hit a block mid-loop
-            ScrapeResult r = scraperClient.scrape(v.getHhId());
+            ScrapeResult r = scrapeFreshness(v.getHhId());
             if (r.ok()) {
                 // Alive — refresh the content too: salary/description edits are common.
                 applyScrapeResult(v, r);
@@ -642,20 +641,14 @@ public class VacancyPipelineService {
                 result.alive++;
                 scrapeCooldown.onSuccess();
             } else if ("http_403".equals(r.reason())) {
-                // Закрытую вакансию hh.ru отдаёт как 403, а не 404/архив: за всё время
-                // актуализация закрыла 3 вакансии из ~2700, а 403 каждую неделю получали
-                // десятки (замер 03–10.10.2026), и все они так и висели живыми. Один 403 —
-                // ещё не доказательство, а второй подряд через сутки и больше — уже да.
-                if (vacancyRepo.hadFreshness403Before(v.getId(),
-                        java.time.Instant.now().minus(FRESHNESS_403_CONFIRM_GAP))) {
-                    vacancyRepo.markClosed(v.getId());
-                    result.closed++;
-                    log.info("Актуализация: вакансия {} ({} · {}) недоступна на hh.ru (403 повторно) — скрыта",
-                        v.getHhId(), v.getPerson(), v.getSearchName());
+                // Даже повторный 403 не подтверждает закрытие: hh.ru может отказать и для живой вакансии.
+                // Сохраняем один такой исход до успешной проверки, чтобы не раздувать историю.
+                if (vacancyRepo.hadFreshness403Before(v.getId(), Instant.now())) {
+                    vacancyRepo.markFreshnessChecked(v.getId());
                 } else {
                     vacancyRepo.recordFreshness403(v.getId());
-                    result.inconclusive++;
                 }
+                result.inconclusive++;
             } else if ("archived".equals(r.reason()) || "not_found".equals(r.reason())) {
                 vacancyRepo.markClosed(v.getId());
                 result.closed++;
@@ -677,6 +670,23 @@ public class VacancyPipelineService {
         if (result.alive + result.closed + result.inconclusive > 0) {
             log.info("Актуализация вакансий: живых {}, закрытых {}, неясных {}",
                 result.alive, result.closed, result.inconclusive);
+        }
+        return result;
+    }
+
+    private ScrapeResult scrapeFreshness(String hhId) {
+        ScrapeResult result = scraperClient.scrape(hhId);
+        for (int attempt = 1; attempt <= FRESHNESS_CONNECTION_RETRIES
+                && ScraperClient.CONNECTION_REFUSED.equals(result.reason()); attempt++) {
+            // При отказе подключения запрос не дошёл до браузера. Повтор не дублирует загрузку страницы.
+            try {
+                Thread.sleep(Duration.ofSeconds(attempt));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+            if (scrapeCooldown.isCoolingDown()) break;
+            result = scraperClient.scrape(hhId);
         }
         return result;
     }
