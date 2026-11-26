@@ -458,7 +458,7 @@ class VacancyPipelineServiceTest {
         public void markClosed(Long id) { closed.add(id); }
         @Override
         public void updateScraped(Vacancy v) {}
-        /** id вакансий, у которых уже был 403 при прошлой актуализации больше суток назад. */
+        /** id вакансий, у которых уже был 403 при прошлой актуализации. */
         final java.util.Set<Long> earlier403 = new java.util.HashSet<>();
         final List<Long> recorded403 = new ArrayList<>();
         final List<Long> cleared403 = new ArrayList<>();
@@ -642,9 +642,48 @@ class VacancyPipelineServiceTest {
     }
 
     @Test
-    void checkVacancyFreshness_second403InARow_closesVacancy() {
-        // Закрытую вакансию hh.ru отдаёт как 403, а не 404/архив: за всё время актуализация
-        // закрыла 3 вакансии из ~2700, а 403 получали десятки в неделю (03–10.10.2026).
+    void checkVacancyFreshness_retriesRefusedConnectionAndContinuesBatch() {
+        RuntimeConfig config = new RuntimeConfig();
+        FakeFreshnessRepo repo = new FakeFreshnessRepo();
+        repo.due = List.of(pendingVacancy("11", null), pendingVacancy("12", null));
+        FreshnessScraper scraper = new FreshnessScraper(config) {
+            @Override
+            public ScrapeResult scrape(String hhId) {
+                ScrapeResult result = super.scrape(hhId);
+                return calls == 1 ? failResult(CONNECTION_REFUSED) : result;
+            }
+        };
+        scraper.byId.put("11", okResult());
+        scraper.byId.put("12", okResult());
+        VacancyPipelineService svc = service().scraper(scraper).repo(repo).config(config).build();
+
+        VacancyPipelineService.FreshnessResult result = svc.checkVacancyFreshness(5);
+
+        assertEquals(3, scraper.calls);
+        assertEquals(2, result.alive);
+        assertEquals(List.of(11L, 12L), repo.checked);
+    }
+
+    @Test
+    void checkVacancyFreshness_stopsAfterTwoRefusedConnectionRetries() {
+        RuntimeConfig config = new RuntimeConfig();
+        FakeFreshnessRepo repo = new FakeFreshnessRepo();
+        repo.due = List.of(pendingVacancy("11", null), pendingVacancy("12", null));
+        FreshnessScraper scraper = new FreshnessScraper(config);
+        scraper.byId.put("11", failResult(ScraperClient.CONNECTION_REFUSED));
+        scraper.byId.put("12", okResult());
+        VacancyPipelineService svc = service().scraper(scraper).repo(repo).config(config).build();
+
+        VacancyPipelineService.FreshnessResult result = svc.checkVacancyFreshness(5);
+
+        assertEquals(3, scraper.calls);
+        assertEquals(0, result.alive);
+        assertTrue(repo.checked.isEmpty());
+        assertTrue(repo.closed.isEmpty());
+    }
+
+    @Test
+    void checkVacancyFreshness_second403InARow_keepsVacancyOpen() {
         RuntimeConfig config = new RuntimeConfig();
         FakeFreshnessRepo repo = new FakeFreshnessRepo();
         repo.due = List.of(pendingVacancy("21", null), pendingVacancy("22", null));
@@ -656,10 +695,11 @@ class VacancyPipelineServiceTest {
 
         VacancyPipelineService.FreshnessResult r = svc.checkVacancyFreshness(5);
 
-        assertEquals(List.of(22L), repo.closed, "второй 403 подряд — вакансия закрыта");
-        assertEquals(List.of(21L), repo.recorded403, "первый 403 только запоминается");
-        assertEquals(1, r.closed);
-        assertEquals(1, r.inconclusive);
+        assertTrue(repo.closed.isEmpty(), "даже повторный 403 не подтверждает закрытие");
+        assertEquals(List.of(21L), repo.recorded403, "повторный 403 не дублирует запись в истории");
+        assertEquals(List.of(21L, 22L), repo.checked);
+        assertEquals(0, r.closed);
+        assertEquals(2, r.inconclusive);
     }
 
     @Test

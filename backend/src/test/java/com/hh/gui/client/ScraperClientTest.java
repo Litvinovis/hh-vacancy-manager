@@ -68,6 +68,14 @@ class ScraperClientTest {
     }
 
     @Test
+    void scrape_sidecarNotListening_reportsConnectionRefused() {
+        server.stop(0);
+
+        assertEquals(ScraperClient.CONNECTION_REFUSED, client.scrape("123").reason());
+        assertEquals(List.of("scrape:client_error"), recordedFailures);
+    }
+
+    @Test
     void searchByUrl_malformedJsonFromSidecar_recordsClientError() {
         // Hits the catch(Exception) branch (mapper.readValue throws on "not json at
         // all"), not the "!ok" branch — a different code path, must still record.
